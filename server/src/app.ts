@@ -267,6 +267,39 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
   });
 
+  // ---- Odwołane na Bookingu: do przejrzenia / zamiany na bezpośrednią ----
+  api.get('/booking-cancellations', (c) => c.json(all(`SELECT * FROM reservations
+    WHERE external_uid IS NOT NULL AND status = 'cancelled' AND cancelled_at IS NOT NULL AND cancel_reviewed = 0
+    ORDER BY check_in`)));
+
+  const cancelledImport = (id: number) => {
+    const row = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown> | undefined;
+    if (!row) throw new HTTPException(404, { message: 'Nie znaleziono' });
+    if (!row.external_uid || row.status !== 'cancelled') bad('To nie jest odwołana rezerwacja z Bookingu');
+    return row;
+  };
+
+  api.post('/reservations/:id/convert-direct', async (c) => {
+    const id = int(c.req.param('id'));
+    const row = cancelledImport(id);
+    const b = await c.req.json().catch(() => ({}));
+    const found = conflicts({ unit_id: row.unit_id as number, check_in: row.check_in as string, check_out: row.check_out as string, status: 'confirmed' }, id);
+    if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
+    const note = `Przeniesiona z ${row.source === 'booking' ? 'Booking.com' : row.source} po odwołaniu (${new Date().toLocaleDateString('pl-PL', { timeZone: 'Europe/Warsaw' })}).`;
+    // Odłączenie od kalendarza Bookingu: synchronizacja już jej nie dotknie.
+    run(`UPDATE reservations SET feed_id = NULL, external_uid = NULL, source = 'direct', status = 'confirmed',
+      cancelled_at = NULL, cancel_reviewed = 0, notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END,
+      updated_at = datetime('now') WHERE id = ?`, note, note, id);
+    return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
+  });
+
+  api.post('/reservations/:id/review-cancellation', (c) => {
+    const id = int(c.req.param('id'));
+    cancelledImport(id);
+    run('UPDATE reservations SET cancel_reviewed = 1 WHERE id = ?', id);
+    return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
+  });
+
   api.delete('/reservations/:id', (c) => {
     run('DELETE FROM reservations WHERE id = ?', c.req.param('id'));
     return c.json({ ok: true });

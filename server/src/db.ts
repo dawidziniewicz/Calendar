@@ -17,6 +17,18 @@ function migrate(db: DatabaseSync) {
   const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
   if (user_version < 1) migrateV1(db);
   if (user_version < 2) migrateV2(db);
+  if (user_version < 3) migrateV3(db);
+}
+
+// Odwołania z Bookingu: kiedy synchronizacja anulowała rezerwację i czy już ją przejrzano.
+function migrateV3(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE reservations ADD COLUMN cancelled_at TEXT;
+    ALTER TABLE reservations ADD COLUMN cancel_reviewed INTEGER NOT NULL DEFAULT 0;
+    PRAGMA user_version = 3;
+    COMMIT;
+  `);
 }
 
 function migrateV2(db: DatabaseSync) {

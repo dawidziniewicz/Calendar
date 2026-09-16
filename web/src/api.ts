@@ -58,5 +58,8 @@ export const api = {
   saveReservation: (r: Draft, force = false) =>
     r.id ? request<Reservation>('PUT', `/reservations/${r.id}`, { ...r, force }) : request<Reservation>('POST', '/reservations', { ...r, force }),
   deleteReservation: (id: number) => request('DELETE', `/reservations/${id}`),
+  bookingCancellations: () => request<Reservation[]>('GET', '/booking-cancellations'),
+  convertToDirect: (id: number, force = false) => request<Reservation>('POST', `/reservations/${id}/convert-direct`, { force }),
+  reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
   guests: (q: string) => request<Guest[]>('GET', `/guests?q=${encodeURIComponent(q)}`),
 };

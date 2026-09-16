@@ -15,22 +15,24 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
     if (!body.includes('BEGIN:VCALENDAR')) throw new Error('Odpowiedź nie jest plikiem iCal');
     const events = parseIcal(body);
 
-    const find = db.prepare('SELECT id, check_in, check_out, status FROM reservations WHERE feed_id = ? AND external_uid = ?');
+    const find = db.prepare('SELECT id, check_in, check_out, status, cancelled_at FROM reservations WHERE feed_id = ? AND external_uid = ?');
     const insert = db.prepare(`INSERT INTO reservations (unit_id, check_in, check_out, source, feed_id, external_uid, external_summary)
       VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    // Rezerwacja wróciła do kalendarza Bookingu → przywracamy tylko, jeśli to synchronizacja ją anulowała.
     const update = db.prepare(`UPDATE reservations SET check_in = ?, check_out = ?, external_summary = ?,
-      status = CASE WHEN status = 'cancelled' THEN 'confirmed' ELSE status END, updated_at = datetime('now') WHERE id = ?`);
+      status = CASE WHEN cancelled_at IS NOT NULL THEN 'confirmed' ELSE status END,
+      cancelled_at = NULL, cancel_reviewed = 0, updated_at = datetime('now') WHERE id = ?`);
 
     db.exec('BEGIN');
     try {
       const seen = new Set<string>();
       for (const e of events) {
         seen.add(e.uid);
-        const row = find.get(feed.id, e.uid) as { id: number; check_in: string; check_out: string; status: string } | undefined;
+        const row = find.get(feed.id, e.uid) as { id: number; check_in: string; check_out: string; status: string; cancelled_at: string | null } | undefined;
         if (!row) {
           insert.run(feed.unit_id, e.start, e.end, feed.source, feed.id, e.uid, e.summary);
           result.added++;
-        } else if (row.check_in !== e.start || row.check_out !== e.end || row.status === 'cancelled') {
+        } else if (row.check_in !== e.start || row.check_out !== e.end || row.cancelled_at) {
           update.run(e.start, e.end, e.summary, row.id);
           result.updated++;
         }
@@ -38,7 +40,8 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
       // Przyszłe rezerwacje, które zniknęły z kalendarza = anulowane. Nie kasujemy — zostają dane gościa.
       const active = db.prepare(`SELECT id, external_uid FROM reservations
         WHERE feed_id = ? AND status != 'cancelled' AND check_in >= ?`).all(feed.id, today()) as { id: number; external_uid: string }[];
-      const cancel = db.prepare(`UPDATE reservations SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?`);
+      const cancel = db.prepare(`UPDATE reservations SET status = 'cancelled', cancelled_at = datetime('now'), cancel_reviewed = 0,
+        updated_at = datetime('now') WHERE id = ?`);
       for (const r of active) {
         if (!seen.has(r.external_uid)) { cancel.run(r.id); result.cancelled++; }
       }

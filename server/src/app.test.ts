@@ -118,3 +118,62 @@ test('synchronizacja dodaje, aktualizuje i anuluje, zachowując dane gościa', a
     globalThis.fetch = realFetch;
   }
 });
+
+test('odwołana na Bookingu → zamiana na rezerwację bezpośrednią', async () => {
+  const { db, call, login } = setup();
+  await login();
+  let body = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:x1\nDTSTART;VALUE=DATE:20300901\nDTEND;VALUE=DATE:20300904\nEND:VEVENT\nEND:VCALENDAR';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch;
+  try {
+    await call('POST', '/api/feeds', { unit_id: 3, url: 'https://example.com/y.ics' });
+    const feed = { id: 1, unit_id: 3, source: 'booking', url: 'https://example.com/y.ics' };
+    await syncFeed(db, feed);
+    const [r] = await (await call('GET', '/api/reservations?from=2030-09-01&to=2030-09-02')).json();
+    await call('PUT', `/api/reservations/${r.id}`, { ...r, guest_name: 'Ewa Gość', guest_phone: '600' });
+
+    // nie da się zamienić aktywnej rezerwacji z Bookingu
+    assert.equal((await call('POST', `/api/reservations/${r.id}/convert-direct`)).status, 400);
+
+    body = 'BEGIN:VCALENDAR\nEND:VCALENDAR';
+    await syncFeed(db, feed);
+    const list = await (await call('GET', '/api/booking-cancellations')).json();
+    assert.equal(list.length, 1);
+    assert.equal(list[0].guest_name, 'Ewa Gość');
+
+    const converted = await (await call('POST', `/api/reservations/${r.id}/convert-direct`)).json();
+    assert.equal(converted.source, 'direct');
+    assert.equal(converted.status, 'confirmed');
+    assert.equal(converted.feed_id, null);
+    assert.match(converted.notes, /Przeniesiona z Booking.com/);
+    assert.equal((await (await call('GET', '/api/booking-cancellations')).json()).length, 0);
+
+    // kolejna synchronizacja nie rusza już tej rezerwacji
+    await syncFeed(db, feed);
+    const after = (await (await call('GET', '/api/reservations?from=2030-09-01&to=2030-09-02')).json())[0];
+    assert.equal(after.status, 'confirmed');
+    assert.equal(after.guest_name, 'Ewa Gość');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('odwołanie można oznaczyć jako przejrzane', async () => {
+  const { db, call, login } = setup();
+  await login();
+  let body = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:z\nDTSTART;VALUE=DATE:20301001\nDTEND;VALUE=DATE:20301003\nEND:VEVENT\nEND:VCALENDAR';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch;
+  try {
+    await call('POST', '/api/feeds', { unit_id: 4, url: 'https://example.com/z.ics' });
+    const feed = { id: 1, unit_id: 4, source: 'booking', url: 'https://example.com/z.ics' };
+    await syncFeed(db, feed);
+    body = 'BEGIN:VCALENDAR\nEND:VCALENDAR';
+    await syncFeed(db, feed);
+    const [c] = await (await call('GET', '/api/booking-cancellations')).json();
+    assert.equal((await call('POST', `/api/reservations/${c.id}/review-cancellation`)).status, 200);
+    assert.equal((await (await call('GET', '/api/booking-cancellations')).json()).length, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

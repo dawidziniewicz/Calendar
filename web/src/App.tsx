@@ -54,6 +54,7 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Draft | null>(null);
   const [viewing, setViewing] = useState<Reservation | null>(null);
+  const [cancellations, setCancellations] = useState<Reservation[]>([]);
   const [version, setVersion] = useState(0); // podbijane po zapisie — widoki przeładowują rezerwacje
 
   const loadProperties = useCallback(() => {
@@ -61,6 +62,11 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
   }, []);
 
   useEffect(loadProperties, [loadProperties]);
+
+  // Rezerwacje odwołane na Bookingu, na które trzeba zareagować (plakietka na zakładce Przyjazdy)
+  useEffect(() => {
+    api.bookingCancellations().then(setCancellations).catch(() => {});
+  }, [version]);
 
   // Po powrocie do aplikacji na telefonie odśwież dane.
   useEffect(() => {
@@ -90,7 +96,10 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
         </div>
         <nav className="tabs-desktop">
           {TABS.map((t) => (
-            <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>{t.label}</button>
+            <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
+              {t.label}
+              {t.id === 'agenda' && cancellations.length > 0 && <span className="tab-badge">{cancellations.length}</span>}
+            </button>
           ))}
         </nav>
         <button className="btn primary add-btn" onClick={() => openNew()} disabled={!units.length}>
@@ -106,7 +115,7 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
 
       <main className={`content content-${tab}`}>
         {tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={openNew} />}
-        {tab === 'agenda' && <Agenda properties={properties} version={version} onSelect={openExisting} />}
+        {tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {tab === 'settings' && <Settings user={user} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
@@ -114,6 +123,7 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
         {TABS.map((t) => (
           <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={t.icon} /></svg>
+            {t.id === 'agenda' && cancellations.length > 0 && <span className="tab-badge">{cancellations.length}</span>}
             <span>{t.label}</span>
           </button>
         ))}
@@ -126,6 +136,7 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
           properties={properties}
           onClose={() => setViewing(null)}
           onEdit={() => setEditing({ ...viewing })}
+          onChanged={(updated) => { setViewing(updated); setVersion((v) => v + 1); }}
         />
       )}
 

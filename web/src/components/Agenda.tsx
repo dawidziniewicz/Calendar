@@ -4,12 +4,12 @@ import type { Property, Reservation, Unit } from '../types';
 import { SOURCES } from '../types';
 import { addDays, diffDays, formatLong, formatShort, nightsLabel, today } from '../dates';
 
-type Props = { properties: Property[]; version: number; onSelect: (r: Reservation) => void };
+type Props = { properties: Property[]; version: number; cancellations: Reservation[]; onSelect: (r: Reservation) => void };
 
 const RANGE = 14;
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-export default function Agenda({ properties, version, onSelect }: Props) {
+export default function Agenda({ properties, version, cancellations, onSelect }: Props) {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -38,7 +38,7 @@ export default function Agenda({ properties, version, onSelect }: Props) {
     departures: filtered.filter((r) => r.check_out === d),
   }));
 
-  const card = (r: Reservation, kind: 'in' | 'out' | 'stay') => {
+  const card = (r: Reservation, kind: 'in' | 'out' | 'stay' | 'cancel') => {
     const info = units.get(r.unit_id);
     const nights = diffDays(r.check_in, r.check_out);
     const guests = r.adults + r.children;
@@ -74,6 +74,14 @@ export default function Agenda({ properties, version, onSelect }: Props) {
     <section className="agenda">
       <input className="search" type="search" placeholder="Szukaj gościa, telefonu, domku…" value={query} onChange={(e) => setQuery(e.target.value)} />
       {error && <div className="banner error">{error}</div>}
+
+      {cancellations.length > 0 && (
+        <div className="agenda-day cancellations">
+          <h2>Odwołane na Bookingu <span className="count danger">{cancellations.length}</span></h2>
+          <p className="muted small">Stuknij, aby zamienić na rezerwację bezpośrednią albo oznaczyć jako przejrzaną.</p>
+          {cancellations.map((r) => card(r, 'cancel'))}
+        </div>
+      )}
 
       {staying.length > 0 && (
         <div className="agenda-day">

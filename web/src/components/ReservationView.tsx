@@ -1,14 +1,52 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { api, ApiError } from '../api';
 import type { Property, Reservation } from '../types';
 import { SOURCES, STATUS_LABELS } from '../types';
-import { diffDays, formatLong, nightsLabel } from '../dates';
+import { diffDays, formatLong, formatShort, nightsLabel } from '../dates';
 
-type Props = { reservation: Reservation; properties: Property[]; onClose: () => void; onEdit: () => void };
+type Props = {
+  reservation: Reservation;
+  properties: Property[];
+  onClose: () => void;
+  onEdit: () => void;
+  onChanged: (updated: Reservation) => void;
+};
+type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
 
 const money = (v: number) => `${v.toLocaleString('pl-PL', { maximumFractionDigits: 2 })} zł`;
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
-export default function ReservationView({ reservation: r, properties, onClose, onEdit }: Props) {
+export default function ReservationView({ reservation: r, properties, onClose, onEdit, onChanged }: Props) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  const cancelledImport = r.status === 'cancelled' && Boolean(r.external_uid);
+
+  const convert = async (force = false) => {
+    setBusy(true);
+    setError('');
+    try {
+      onChanged(await api.convertToDirect(r.id, force));
+      setConflicts([]);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) setConflicts(err.data.conflicts as Conflict[]);
+      else setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const review = async () => {
+    setBusy(true);
+    try {
+      onChanged(await api.reviewCancellation(r.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const property = properties.find((p) => p.units.some((u) => u.id === r.unit_id));
   const unit = property?.units.find((u) => u.id === r.unit_id);
   const nights = diffDays(r.check_in, r.check_out);
@@ -43,7 +81,36 @@ export default function ReservationView({ reservation: r, properties, onClose, o
             </div>
           </div>
 
-          {missingGuest && (
+          {cancelledImport && (
+            <div className="banner error cancel-box">
+              <strong>Odwołana na {SOURCES[r.source] ?? r.source}</strong>
+              <p>
+                Rezerwacja zniknęła z kalendarza Bookingu{r.cancelled_at ? ` (${formatShort(r.cancelled_at.slice(0, 10))})` : ''}.
+                Jeśli gość przyjeżdża mimo to (np. rezerwuje u Ciebie bezpośrednio), zamień ją — dane gościa zostaną.
+              </p>
+              {conflicts.length > 0 && (
+                <>
+                  <p><strong>Termin jest już zajęty przez:</strong></p>
+                  <ul>
+                    {conflicts.map((c) => (
+                      <li key={c.id}>{c.guest_name || SOURCES[c.source] || c.source}: {formatShort(c.check_in)} – {formatShort(c.check_out)}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <div className="cancel-actions">
+                {conflicts.length > 0
+                  ? <button type="button" className="btn danger" disabled={busy} onClick={() => convert(true)}>Zamień mimo to</button>
+                  : <button type="button" className="btn primary" disabled={busy} onClick={() => convert()}>Zamień na rezerwację bezpośrednią</button>}
+                {!r.cancel_reviewed && (
+                  <button type="button" className="btn" disabled={busy} onClick={review}>Gość nie przyjeżdża — ukryj</button>
+                )}
+              </div>
+              {error && <p className="warn">{error}</p>}
+            </div>
+          )}
+
+          {missingGuest && !cancelledImport && (
             <button type="button" className="banner info view-fill" onClick={onEdit}>
               Brak danych gościa — stuknij, aby uzupełnić
             </button>

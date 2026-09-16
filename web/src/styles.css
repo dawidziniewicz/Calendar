@@ -305,3 +305,13 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .view-notes { background: var(--surface); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; }
 .view-notes h4 { margin: 0 0 6px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .view-notes p { margin: 0; white-space: pre-wrap; }
+
+/* ---- Odwołane na Bookingu ---- */
+.tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 0.7rem; font-weight: 700; line-height: 1; }
+.tabs-mobile button { position: relative; }
+.tabs-mobile .tab-badge { position: absolute; top: 6px; left: calc(50% + 6px); margin: 0; }
+.count.danger { background: var(--danger); color: #fff; }
+.small { font-size: 0.85rem; margin: -4px 0 8px; }
+.guest-card.kind-cancel { border-left: 4px solid var(--danger); opacity: 0.95; }
+.cancel-box p { margin: 6px 0; }
+.cancel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
