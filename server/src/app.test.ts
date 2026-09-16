@@ -36,7 +36,7 @@ test('wymaga klucza API i zalogowania', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('set-cookie') ?? '', /HttpOnly/);
   assert.equal((await call('GET', '/api/properties')).status, 200);
-  assert.deepEqual(await (await call('GET', '/api/auth/me')).json(), { username: 'dawid' });
+  assert.deepEqual(await (await call('GET', '/api/auth/me')).json(), { username: 'dawid', role: 'admin' });
   await call('POST', '/api/auth/logout');
   assert.equal((await call('GET', '/api/properties')).status, 401);
 });
@@ -176,4 +176,32 @@ test('odwołanie można oznaczyć jako przejrzane', async () => {
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('konto tylko do podglądu nie może nic zmieniać', async () => {
+  const { db, app } = setup();
+  db.prepare("INSERT INTO users (username, password_hash, role) VALUES ('jan', ?, 'viewer')").run(hashPassword('podglad-123'));
+  let cookie = '';
+  const call = async (method: string, path: string, body?: unknown) => {
+    const res = await app.request(path, { method, headers: { 'x-api-key': KEY, 'content-type': 'application/json', cookie }, body: body ? JSON.stringify(body) : undefined });
+    const set = res.headers.get('set-cookie');
+    if (set) cookie = set.split(';')[0];
+    return res;
+  };
+  const login = await call('POST', '/api/auth/login', { username: 'jan', password: 'podglad-123' });
+  assert.deepEqual(await login.json(), { username: 'jan', role: 'viewer' });
+
+  assert.equal((await call('GET', '/api/reservations')).status, 200);
+  const props = await (await call('GET', '/api/properties')).json();
+  assert.equal(props[0].units[0].export_token, '');
+
+  const res = { unit_id: 1, check_in: '2030-01-01', check_out: '2030-01-03' };
+  for (const [m, path, body] of [
+    ['POST', '/api/reservations', res], ['PUT', '/api/reservations/1', res], ['DELETE', '/api/reservations/1'],
+    ['POST', '/api/units', { property_id: 1, name: 'x' }], ['POST', '/api/sync'], ['POST', '/api/feeds', { unit_id: 1, url: 'https://x' }],
+  ] as [string, string, unknown?][]) {
+    assert.equal((await call(m, path, body)).status, 403, `${m} ${path}`);
+  }
+  assert.equal((await call('POST', '/api/auth/password', { current: 'podglad-123', next: 'nowe-haslo-789' })).status, 200);
+  assert.equal((await call('POST', '/api/auth/logout')).status, 200);
 });

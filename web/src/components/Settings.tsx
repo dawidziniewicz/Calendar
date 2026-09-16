@@ -3,9 +3,9 @@ import { api, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
 
-type Props = { user: string; onLogout: () => void; properties: Property[]; reload: () => void };
+type Props = { user: string; readOnly: boolean; onLogout: () => void; properties: Property[]; reload: () => void };
 
-export default function Settings({ user, onLogout, properties, reload }: Props) {
+export default function Settings({ user, readOnly, onLogout, properties, reload }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult[] | null>(null);
   const [error, setError] = useState('');
@@ -37,6 +37,15 @@ export default function Settings({ user, onLogout, properties, reload }: Props) 
     const name = prompt('Nazwa nowego obiektu:');
     if (name?.trim()) run(() => api.createProperty({ name }));
   };
+
+  if (readOnly) {
+    return (
+      <section className="settings">
+        <div className="panel"><p className="muted" style={{ margin: 0 }}>To konto ma dostęp tylko do podglądu rezerwacji.</p></div>
+        <AccountPanel user={user} onLogout={onLogout} />
+      </section>
+    );
+  }
 
   const feedCount = properties.reduce((n, p) => n + p.units.reduce((m, u) => m + u.feeds.length, 0), 0);
   const summary = syncResult && syncResult.reduce((a, r) => ({ added: a.added + r.added, updated: a.updated + r.updated, cancelled: a.cancelled + r.cancelled, failed: a.failed + (r.ok ? 0 : 1) }),

@@ -18,6 +18,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 1) migrateV1(db);
   if (user_version < 2) migrateV2(db);
   if (user_version < 3) migrateV3(db);
+  if (user_version < 4) migrateV4(db);
+}
+
+// Role: admin (pełny dostęp) i viewer (tylko podgląd).
+function migrateV4(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('admin', 'viewer'));
+    PRAGMA user_version = 4;
+    COMMIT;
+  `);
 }
 
 // Odwołania z Bookingu: kiedy synchronizacja anulowała rezerwację i czy już ją przejrzano.

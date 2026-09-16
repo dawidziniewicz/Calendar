@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from './api';
+import { api, type Session } from './api';
 import type { Draft, Property, Reservation } from './types';
 import { addDays, today } from './dates';
 import Timeline from './components/Timeline';
@@ -16,6 +16,8 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'agenda', label: 'Przyjazdy', icon: 'M5 12h14m-6-6 6 6-6 6' },
   { id: 'settings', label: 'Obiekty', icon: 'M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6' },
 ];
+// Konto „tylko podgląd” zamiast Obiektów widzi tylko ustawienia konta.
+const VIEWER_TABS = TABS.map((t) => (t.id === 'settings' ? { ...t, label: 'Konto', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m-7 8a7 7 0 0 1 14 0' } : t));
 
 export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
   unit_id: unitId,
@@ -34,10 +36,10 @@ export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
 });
 
 export default function App() {
-  const [user, setUser] = useState<string | null | undefined>(undefined); // undefined = sprawdzanie sesji
+  const [user, setUser] = useState<Session | null | undefined>(undefined); // undefined = sprawdzanie sesji
 
   useEffect(() => {
-    api.me().then((u) => setUser(u.username)).catch(() => setUser(null));
+    api.me().then(setUser).catch(() => setUser(null));
     const onAuth = () => setUser(null);
     window.addEventListener('auth:required', onAuth);
     return () => window.removeEventListener('auth:required', onAuth);
@@ -48,7 +50,9 @@ export default function App() {
   return <Main user={user} onLogout={() => setUser(null)} />;
 }
 
-function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
+function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
+  const readOnly = user.role === 'viewer';
+  const tabs = readOnly ? VIEWER_TABS : TABS;
   const [tab, setTab] = useState<Tab>(() => (sessionStorageGet('tab') as Tab) || 'calendar');
   const [properties, setProperties] = useState<Property[]>([]);
   const [error, setError] = useState('');
@@ -65,8 +69,8 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
 
   // Rezerwacje odwołane na Bookingu, na które trzeba zareagować (plakietka na zakładce Przyjazdy)
   useEffect(() => {
-    api.bookingCancellations().then(setCancellations).catch(() => {});
-  }, [version]);
+    if (!readOnly) api.bookingCancellations().then(setCancellations).catch(() => {});
+  }, [version, readOnly]);
 
   // Po powrocie do aplikacji na telefonie odśwież dane.
   useEffect(() => {
@@ -95,16 +99,20 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
           <span>Od Morza Do Gór</span>
         </div>
         <nav className="tabs-desktop">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
               {t.label}
               {t.id === 'agenda' && cancellations.length > 0 && <span className="tab-badge">{cancellations.length}</span>}
             </button>
           ))}
         </nav>
-        <button className="btn primary add-btn" onClick={() => openNew()} disabled={!units.length}>
-          <span aria-hidden>＋</span> Rezerwacja
-        </button>
+        {readOnly ? (
+          <span className="readonly-badge add-btn">Tylko podgląd</span>
+        ) : (
+          <button className="btn primary add-btn" onClick={() => openNew()} disabled={!units.length}>
+            <span aria-hidden>＋</span> Rezerwacja
+          </button>
+        )}
       </header>
 
       {error && (
@@ -114,20 +122,20 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
       )}
 
       <main className={`content content-${tab}`}>
-        {tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={openNew} />}
+        {tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={readOnly ? undefined : openNew} />}
         {tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
-        {tab === 'settings' && <Settings user={user} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {tab === 'settings' && <Settings user={user.username} readOnly={readOnly} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={t.icon} /></svg>
             {t.id === 'agenda' && cancellations.length > 0 && <span className="tab-badge">{cancellations.length}</span>}
             <span>{t.label}</span>
           </button>
         ))}
-        <button className="fab" onClick={() => openNew()} disabled={!units.length} aria-label="Nowa rezerwacja">＋</button>
+        {!readOnly && <button className="fab" onClick={() => openNew()} disabled={!units.length} aria-label="Nowa rezerwacja">＋</button>}
       </nav>
 
       {viewing && !editing && (
@@ -135,12 +143,13 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
           reservation={viewing}
           properties={properties}
           onClose={() => setViewing(null)}
+          readOnly={readOnly}
           onEdit={() => setEditing({ ...viewing })}
           onChanged={(updated) => { setViewing(updated); setVersion((v) => v + 1); }}
         />
       )}
 
-      {editing && (
+      {editing && !readOnly && (
         <ReservationSheet
           draft={editing}
           properties={properties}

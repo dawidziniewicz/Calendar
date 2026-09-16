@@ -82,7 +82,7 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     }
     clearFails(keys);
     setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts(c), maxAge: SESSION_DAYS * 86400 });
-    return c.json({ username: user.username });
+    return c.json({ username: user.username, role: user.role });
   });
 
   api.use('*', async (c, next) => {
@@ -90,10 +90,13 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     const user = sessionUser(db, getCookie(c, SESSION_COOKIE));
     if (!user) return c.json({ error: 'Zaloguj się', code: 'unauthenticated' }, 401);
     c.set('user', user);
+    // Konto „tylko podgląd”: wyłącznie odczyt, wylogowanie i zmiana własnego hasła.
+    const readOnlyAllowed = c.req.method === 'GET' || c.req.path.endsWith('/auth/logout') || c.req.path.endsWith('/auth/password');
+    if (user.role === 'viewer' && !readOnlyAllowed) return c.json({ error: 'Konto tylko do podglądu — brak uprawnień do zmian' }, 403);
     await next();
   });
 
-  api.get('/auth/me', (c) => c.json({ username: c.get('user').username }));
+  api.get('/auth/me', (c) => c.json({ username: c.get('user').username, role: c.get('user').role }));
 
   api.post('/auth/logout', (c) => {
     deleteSession(db, getCookie(c, SESSION_COOKIE));
@@ -117,9 +120,13 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     const properties = all('SELECT * FROM properties ORDER BY sort, id') as Record<string, unknown>[];
     const units = all('SELECT * FROM units ORDER BY sort, id') as Record<string, unknown>[];
     const feeds = all('SELECT * FROM feeds ORDER BY id') as Record<string, unknown>[];
+    const viewer = c.get('user').role === 'viewer';
     return c.json(properties.map((p) => ({
       ...p,
-      units: units.filter((u) => u.property_id === p.id).map((u) => ({ ...u, feeds: feeds.filter((f) => f.unit_id === u.id) })),
+      units: units.filter((u) => u.property_id === p.id).map((u) => (viewer
+        // podgląd nie widzi prywatnych linków (token eksportu, adresy kalendarzy Bookingu)
+        ? { ...u, export_token: '', feeds: [] }
+        : { ...u, feeds: feeds.filter((f) => f.unit_id === u.id) })),
     })));
   });
 

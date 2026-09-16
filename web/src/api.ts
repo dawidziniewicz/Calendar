@@ -34,12 +34,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export type Session = { username: string; role: 'admin' | 'viewer' };
 export type SyncResult = { feedId: number; unitId: number; ok: boolean; added: number; updated: number; cancelled: number; error?: string };
 export type Guest = { guest_name: string; guest_phone: string; guest_email: string; last_stay: string; stays: number };
 
 export const api = {
-  me: () => request<{ username: string }>('GET', '/auth/me'),
-  login: (username: string, password: string) => request<{ username: string }>('POST', '/auth/login', { username, password }),
+  me: () => request<Session>('GET', '/auth/me'),
+  login: (username: string, password: string) => request<Session>('POST', '/auth/login', { username, password }),
   logout: () => request('POST', '/auth/logout'),
   changePassword: (current: string, next: string) => request('POST', '/auth/password', { current, next }),
   properties: () => request<Property[]>('GET', '/properties'),

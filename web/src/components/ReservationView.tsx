@@ -8,6 +8,7 @@ type Props = {
   reservation: Reservation;
   properties: Property[];
   onClose: () => void;
+  readOnly: boolean;
   onEdit: () => void;
   onChanged: (updated: Reservation) => void;
 };
@@ -16,7 +17,7 @@ type Conflict = { id: number; check_in: string; check_out: string; guest_name: s
 const money = (v: number) => `${v.toLocaleString('pl-PL', { maximumFractionDigits: 2 })} zł`;
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
-export default function ReservationView({ reservation: r, properties, onClose, onEdit, onChanged }: Props) {
+export default function ReservationView({ reservation: r, properties, readOnly, onClose, onEdit, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
@@ -65,7 +66,7 @@ export default function ReservationView({ reservation: r, properties, onClose, o
         <header className="sheet-head">
           <button type="button" className="link" onClick={onClose}>Zamknij</button>
           <h2>Rezerwacja</h2>
-          <button type="button" className="link strong" onClick={onEdit}>Edytuj</button>
+          {readOnly ? <span className="head-spacer" /> : <button type="button" className="link strong" onClick={onEdit}>Edytuj</button>}
         </header>
 
         <div className="sheet-body view">
@@ -81,7 +82,7 @@ export default function ReservationView({ reservation: r, properties, onClose, o
             </div>
           </div>
 
-          {cancelledImport && (
+          {cancelledImport && !readOnly && (
             <div className="banner error cancel-box">
               <strong>Odwołana na {SOURCES[r.source] ?? r.source}</strong>
               <p>
@@ -110,7 +111,7 @@ export default function ReservationView({ reservation: r, properties, onClose, o
             </div>
           )}
 
-          {missingGuest && !cancelledImport && (
+          {missingGuest && !cancelledImport && !readOnly && (
             <button type="button" className="banner info view-fill" onClick={onEdit}>
               Brak danych gościa — stuknij, aby uzupełnić
             </button>
@@ -164,9 +165,11 @@ export default function ReservationView({ reservation: r, properties, onClose, o
             </div>
           )}
 
-          <div className="sheet-actions">
-            <button type="button" className="btn primary big" onClick={onEdit}>Edytuj rezerwację</button>
-          </div>
+          {!readOnly && (
+            <div className="sheet-actions">
+              <button type="button" className="btn primary big" onClick={onEdit}>Edytuj rezerwację</button>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -8,7 +8,7 @@ type Props = {
   properties: Property[];
   version: number;
   onSelect: (r: Reservation) => void;
-  onCreate: (unitId: number, date: string) => void;
+  onCreate?: (unitId: number, date: string) => void; // brak = tylko podgląd
 };
 
 const DAYS = 42;
@@ -117,14 +117,12 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                     <span>{u.name}</span>
                   </div>
                   <div className="tl-row">
-                    {days.map((d) => (
-                      <button
-                        key={d}
-                        className={`tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''}`}
-                        onClick={() => onCreate(u.id, d)}
-                        aria-label={`Nowa rezerwacja: ${u.name}, ${formatShort(d)}`}
-                      />
-                    ))}
+                    {days.map((d) => {
+                      const cls = `tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''}`;
+                      return onCreate
+                        ? <button key={d} className={cls} onClick={() => onCreate(u.id, d)} aria-label={`Nowa rezerwacja: ${u.name}, ${formatShort(d)}`} />
+                        : <div key={d} className={`${cls} readonly`} />;
+                    })}
                     {(byUnit.get(u.id) ?? []).map((r) => {
                       const from = diffDays(start, r.check_in);
                       const to = diffDays(start, r.check_out);

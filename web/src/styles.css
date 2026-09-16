@@ -131,7 +131,7 @@ h4 { margin: 18px 0 6px; font-size: 0.9rem; }
 .tl-cell { border: 0; border-left: 1px solid var(--line); background: transparent; padding: 0; }
 .tl-cell.weekend { background: var(--weekend); }
 .tl-cell.today { background: var(--today); }
-@media (hover: hover) { .tl-cell:hover { background: color-mix(in srgb, var(--primary) 14%, transparent); } }
+@media (hover: hover) { button.tl-cell:hover { background: color-mix(in srgb, var(--primary) 14%, transparent); } }
 
 .tl-bar {
   position: absolute; top: 7px; bottom: 7px; z-index: 2;
@@ -315,3 +315,8 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .guest-card.kind-cancel { border-left: 4px solid var(--danger); opacity: 0.95; }
 .cancel-box p { margin: 6px 0; }
 .cancel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* ---- Konto tylko do podglądu ---- */
+.readonly-badge { font-size: 0.8rem; font-weight: 600; color: var(--muted); background: var(--surface-2); padding: 6px 12px; border-radius: 999px; }
+.tl-cell.readonly { cursor: default; }
+.head-spacer { width: 56px; }

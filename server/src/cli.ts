@@ -1,5 +1,7 @@
 // Zarządzanie kontami. Na serwerze:
-//   docker compose exec api npm run -s user add <login>
+//   docker compose exec api npm run -s user add <login>            (pełny dostęp)
+//   docker compose exec api npm run -s user add <login> podglad    (tylko podgląd)
+//   docker compose exec api npm run -s user role <login> admin|podglad
 //   docker compose exec api npm run -s user passwd <login>
 //   docker compose exec api npm run -s user remove <login>
 //   docker compose exec api npm run -s user list
@@ -7,7 +9,14 @@ import { openDb } from './db.ts';
 import { hashPassword, setPassword } from './auth.ts';
 
 const db = openDb(process.env.DB_PATH ?? './data/kalendarz.sqlite');
-const [cmd, username] = process.argv.slice(2);
+const [cmd, username, roleArg] = process.argv.slice(2);
+
+function parseRole(arg: string | undefined): 'admin' | 'viewer' {
+  if (!arg || arg === 'admin') return 'admin';
+  if (['podglad', 'podgląd', 'viewer'].includes(arg)) return 'viewer';
+  fail(`Nieznana rola „${arg}”. Użyj: admin albo podglad.`);
+}
+const roleLabel = (r: string) => (r === 'viewer' ? 'tylko podgląd' : 'admin');
 
 function readHidden(prompt: string): Promise<string> {
   return new Promise((resolve) => {
@@ -66,15 +75,24 @@ switch (cmd) {
   case 'add': {
     if (!username || !/^[\w.@-]{3,50}$/.test(username)) fail('Podaj login (3–50 znaków: litery, cyfry, . _ - @).');
     if (findUser(username)) fail(`Użytkownik „${username}” już istnieje. Zmiana hasła: user passwd ${username}`);
+    const role = parseRole(roleArg);
     const password = await askNewPassword();
-    db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(username, hashPassword(password));
-    console.log(`Utworzono użytkownika „${username}”.`);
+    db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(username, hashPassword(password), role);
+    console.log(`Utworzono użytkownika „${username}” (${roleLabel(role)}).`);
     break;
   }
   case 'passwd': {
     const user = findUser(username ?? '') ?? fail(`Nie ma użytkownika „${username}”.`);
     setPassword(db, user.id, await askNewPassword());
     console.log(`Zmieniono hasło „${user.username}” (wylogowano wszystkie jego sesje).`);
+    break;
+  }
+  case 'role': {
+    const user = findUser(username ?? '') ?? fail(`Nie ma użytkownika „${username}”.`);
+    if (!roleArg) fail('Podaj rolę: admin albo podglad.');
+    const role = parseRole(roleArg);
+    db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, user.id);
+    console.log(`„${user.username}” ma teraz rolę: ${roleLabel(role)}.`);
     break;
   }
   case 'remove': {
@@ -84,12 +102,12 @@ switch (cmd) {
     break;
   }
   case 'list': {
-    const rows = db.prepare('SELECT username, created_at FROM users ORDER BY username').all() as { username: string; created_at: string }[];
+    const rows = db.prepare('SELECT username, role, created_at FROM users ORDER BY username').all() as { username: string; role: string; created_at: string }[];
     if (!rows.length) console.log('Brak użytkowników. Dodaj: user add <login>');
-    for (const r of rows) console.log(`${r.username}\t(utworzony ${r.created_at})`);
+    for (const r of rows) console.log(`${r.username}\t${roleLabel(r.role)}\t(utworzony ${r.created_at})`);
     break;
   }
   default:
-    console.log('Użycie: user add <login> | user passwd <login> | user remove <login> | user list');
+    console.log('Użycie: user add <login> [podglad] | user role <login> admin|podglad | user passwd <login> | user remove <login> | user list');
 }
 db.close();

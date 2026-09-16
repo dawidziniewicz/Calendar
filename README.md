@@ -104,11 +104,14 @@ Logowanie jest w samej aplikacji: **login + hasło**. Konta zakładasz na serwer
 cd ~/kalendarz
 docker compose exec api npm run -s user add dawid        # zapyta o hasło (min. 8 znaków)
 docker compose exec api npm run -s user add jozek
+docker compose exec api npm run -s user add jan podglad  # konto TYLKO DO PODGLĄDU
+docker compose exec api npm run -s user role jan admin    # zmiana roli: admin / podglad
 docker compose exec api npm run -s user list             # lista kont
 docker compose exec api npm run -s user passwd jozek     # nowe hasło (wylogowuje z urządzeń)
 docker compose exec api npm run -s user remove jozek     # usunięcie konta
 ```
 
+- Konto **podglad** widzi kalendarz, przyjazdy i szczegóły rezerwacji (może dzwonić do gości), ale nie może niczego dodać, zmienić ani usunąć – blokuje to serwer. Nie widzi też prywatnych linków do kalendarzy Bookingu.
 - Sesja trwa 90 dni – na telefonie logujesz się raz.
 - Po 5 błędnych hasłach logowanie z danego adresu IP / na dany login jest blokowane na 15 minut.
 - Hasło możesz też zmienić w aplikacji: *Obiekty* → na dole *Zmień hasło*.
