@@ -53,7 +53,15 @@ export default function App() {
 function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const readOnly = user.role === 'viewer';
   const tabs = readOnly ? VIEWER_TABS : TABS;
-  const [tab, setTab] = useState<Tab>(() => (sessionStorageGet('tab') as Tab) || 'calendar');
+  const [tab, setTab] = useState<Tab>(() => {
+    // Kliknięcie w powiadomienie otwiera /?tab=agenda
+    const fromUrl = new URLSearchParams(location.search).get('tab') as Tab | null;
+    if (fromUrl && ['calendar', 'agenda', 'settings'].includes(fromUrl)) {
+      history.replaceState(null, '', '/');
+      return fromUrl;
+    }
+    return (sessionStorageGet('tab') as Tab) || 'calendar';
+  });
   const [properties, setProperties] = useState<Property[]>([]);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Draft | null>(null);

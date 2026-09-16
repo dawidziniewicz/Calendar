@@ -60,6 +60,12 @@ export const api = {
   saveReservation: (r: Draft, force = false) =>
     r.id ? request<Reservation>('PUT', `/reservations/${r.id}`, { ...r, force }) : request<Reservation>('POST', '/reservations', { ...r, force }),
   deleteReservation: (id: number) => request('DELETE', `/reservations/${id}`),
+  pushPublicKey: () => request<{ publicKey: string }>('GET', '/push/public-key'),
+  pushSubscribe: (subscription: PushSubscriptionJSON) => request('POST', '/push/subscribe', { subscription }),
+  pushUnsubscribe: (endpoint: string) => request('POST', '/push/unsubscribe', { endpoint }),
+  pushTest: () => request<{ sent: number }>('POST', '/push/test'),
+  pushSettings: () => request<{ time: string }>('GET', '/push/settings'),
+  savePushSettings: (time: string) => request<{ time: string }>('PUT', '/push/settings', { time }),
   bookingCancellations: () => request<Reservation[]>('GET', '/booking-cancellations'),
   convertToDirect: (id: number, force = false) => request<Reservation>('POST', `/reservations/${id}/convert-direct`, { force }),
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),

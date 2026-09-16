@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
+import Notifications from './Notifications';
 
 type Props = { user: string; readOnly: boolean; onLogout: () => void; properties: Property[]; reload: () => void };
 
@@ -42,6 +43,7 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
     return (
       <section className="settings">
         <div className="panel"><p className="muted" style={{ margin: 0 }}>To konto ma dostęp tylko do podglądu rezerwacji.</p></div>
+        <Notifications />
         <AccountPanel user={user} onLogout={onLogout} />
       </section>
     );
@@ -77,6 +79,7 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
         <button className="btn" onClick={addProperty}>＋ Dodaj obiekt</button>
       </div>
 
+      <Notifications />
       <AccountPanel user={user} onLogout={onLogout} />
     </section>
   );

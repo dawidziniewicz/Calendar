@@ -9,6 +9,7 @@ import {
   verifyPassword, type User,
 } from './auth.ts';
 import { buildIcal } from './ical.ts';
+import { TIME_RE, arrivalsMessage, saveSubscription, sendToSubscriptions, vapidKeys, warsawDate, warsawTime, type Sender } from './push.ts';
 import { syncAll } from './sync.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -26,7 +27,7 @@ function safeEqual(a: string, b: string) {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-export function createApp(db: DatabaseSync, apiKey: string) {
+export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender) {
   const app = new Hono();
   const all = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).all(...p);
   const get = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).get(...p);
@@ -91,7 +92,8 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     if (!user) return c.json({ error: 'Zaloguj się', code: 'unauthenticated' }, 401);
     c.set('user', user);
     // Konto „tylko podgląd”: wyłącznie odczyt, wylogowanie i zmiana własnego hasła.
-    const readOnlyAllowed = c.req.method === 'GET' || c.req.path.endsWith('/auth/logout') || c.req.path.endsWith('/auth/password');
+    const readOnlyAllowed = c.req.method === 'GET' || c.req.path.endsWith('/auth/logout') || c.req.path.endsWith('/auth/password')
+      || c.req.path.includes('/push/');
     if (user.role === 'viewer' && !readOnlyAllowed) return c.json({ error: 'Konto tylko do podglądu — brak uprawnień do zmian' }, 403);
     await next();
   });
@@ -113,6 +115,47 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     setPassword(db, user.id, b.next); // usuwa też wszystkie sesje
     setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts(c), maxAge: SESSION_DAYS * 86400 });
     return c.json({ ok: true });
+  });
+
+  // ---- Powiadomienia push (dostępne też dla kont podglądu) ----
+  api.get('/push/public-key', (c) => c.json({ publicKey: vapidKeys(db).publicKey }));
+
+  api.get('/push/settings', (c) => {
+    const row = get('SELECT notify_time FROM users WHERE id = ?', c.get('user').id) as { notify_time: string };
+    return c.json({ time: row.notify_time });
+  });
+
+  api.put('/push/settings', async (c) => {
+    const b = await c.req.json();
+    if (typeof b.time !== 'string' || !TIME_RE.test(b.time)) bad('Podaj godzinę w formacie GG:MM');
+    const user = c.get('user');
+    // Nowa godzina jeszcze dziś w przyszłości → powiadomienie przyjdzie dziś (także gdy dziś już było wysłane).
+    if (b.time > warsawTime()) run('UPDATE users SET notified_on = NULL WHERE id = ?', user.id);
+    run('UPDATE users SET notify_time = ? WHERE id = ?', b.time, user.id);
+    return c.json({ time: b.time });
+  });
+
+  api.post('/push/subscribe', async (c) => {
+    const b = await c.req.json();
+    const sub = b.subscription;
+    if (typeof sub?.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || typeof sub.keys?.p256dh !== 'string' || typeof sub.keys?.auth !== 'string') {
+      bad('Nieprawidłowa subskrypcja');
+    }
+    saveSubscription(db, c.get('user').id, sub);
+    return c.json({ ok: true });
+  });
+
+  api.post('/push/unsubscribe', async (c) => {
+    const b = await c.req.json();
+    run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?', str(b.endpoint, 1000), c.get('user').id);
+    return c.json({ ok: true });
+  });
+
+  api.post('/push/test', async (c) => {
+    if (!pushSender) return c.json({ error: 'Powiadomienia są wyłączone na serwerze' }, 503);
+    const msg = arrivalsMessage(db, warsawDate()) ?? { title: 'Powiadomienia działają ✓', body: 'Dziś brak przyjazdów. Codziennie rano dostaniesz listę przyjazdów.', url: '/?tab=agenda' };
+    const sent = await sendToSubscriptions(db, pushSender, c.get('user').id, msg);
+    return c.json({ sent });
   });
 
   // ---- Obiekty i jednostki ----

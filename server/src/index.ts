@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { openDb } from './db.ts';
 import { createApp } from './app.ts';
 import { syncAll } from './sync.ts';
+import { dailyArrivalsTick, webPushSender } from './push.ts';
 
 const apiKey = process.env.API_KEY ?? '';
 if (apiKey.length < 16) {
@@ -15,7 +16,8 @@ const port = Number(process.env.PORT ?? 8787);
 const syncMinutes = Number(process.env.SYNC_INTERVAL_MINUTES ?? 15);
 
 const db = openDb(dbPath);
-const app = createApp(db, apiKey);
+const pushSender = webPushSender(db);
+const app = createApp(db, apiKey, pushSender);
 
 serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, (info) => console.log(`API działa na porcie ${info.port}`));
 
@@ -44,6 +46,13 @@ function backup() {
     console.error('Kopia zapasowa nie powiodła się', err);
   }
 }
+
+// Codzienne powiadomienie o przyjazdach — o godzinie ustawionej przez każdego użytkownika (czas polski)
+setInterval(() => {
+  dailyArrivalsTick(db, pushSender)
+    .then((n) => n && console.log(`Wysłano powiadomienie o przyjazdach (${n} urządzeń)`))
+    .catch((err) => console.error('Powiadomienie o przyjazdach nie powiodło się', err));
+}, 60_000);
 
 setTimeout(runSync, 5_000);
 setInterval(runSync, Math.max(5, syncMinutes) * 60_000);

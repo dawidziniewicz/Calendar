@@ -190,6 +190,19 @@ Na Androidzie: Chrome → menu ⋮ → *Zainstaluj aplikację*. Na komputerze: C
 
 ---
 
+## Powiadomienia o przyjazdach
+
+Codziennie o wybranej godzinie (domyślnie **9:00**, czas polski) serwer wysyła powiadomienie z listą dzisiejszych przyjazdów — tylko gdy jakieś są.
+
+1. iPhone (iOS 16.4+): aplikacja musi być dodana do ekranu początkowego i otwarta z ikony.
+2. *Obiekty* (lub *Konto*) → **Powiadomienia** → **Włącz powiadomienia** → *Zezwól*.
+3. **Wyślij test** – sprawdza, czy powiadomienie dochodzi.
+
+Każda osoba włącza je na swoim telefonie i sama ustawia godzinę w tym samym panelu (**Godzina powiadomienia** → *Zapisz godzinę*).
+Klucze do powiadomień serwer generuje sam przy pierwszym uruchomieniu (zapisane w bazie).
+
+---
+
 ## Praca lokalna (programowanie)
 
 Wymagany Node.js 24+.

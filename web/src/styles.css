@@ -326,3 +326,6 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 
 .feed-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .small-summary { font-size: 0.8rem; margin-top: 2px; }
+.notif-desc { margin: -4px 0 10px; font-size: 0.9rem; }
+.notif-time { margin: 0 0 12px; }
+.row > label.narrow-time { flex: 0 0 170px; min-width: 150px; }

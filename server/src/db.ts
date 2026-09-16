@@ -20,6 +20,37 @@ function migrate(db: DatabaseSync) {
   if (user_version < 3) migrateV3(db);
   if (user_version < 4) migrateV4(db);
   if (user_version < 5) migrateV5(db);
+  if (user_version < 6) migrateV6(db);
+  if (user_version < 7) migrateV7(db);
+}
+
+// Każdy użytkownik ustawia własną godzinę powiadomienia o przyjazdach.
+function migrateV7(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE users ADD COLUMN notify_time TEXT NOT NULL DEFAULT '09:00';
+    ALTER TABLE users ADD COLUMN notified_on TEXT;
+    PRAGMA user_version = 7;
+    COMMIT;
+  `);
+}
+
+// Powiadomienia push: subskrypcje telefonów i ustawienia (klucze VAPID, data ostatniego powiadomienia).
+function migrateV6(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE push_subscriptions (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    PRAGMA user_version = 6;
+    COMMIT;
+  `);
 }
 
 // Daty rezerwacji z Bookingu zmienione ręcznie — synchronizacja ich nie nadpisuje.

@@ -5,6 +5,7 @@ import { hashPassword } from './auth.ts';
 import { createApp } from './app.ts';
 import { parseIcal } from './ical.ts';
 import { syncFeed } from './sync.ts';
+import { dailyArrivalsTick, saveSubscription, type Sender } from './push.ts';
 
 const KEY = 'test-key-1234567890';
 
@@ -271,4 +272,52 @@ test('rezerwację z Bookingu można edytować, a ręcznie zmienionych dat synchr
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('codzienne powiadomienie o przyjazdach: o godzinie każdego użytkownika, raz dziennie, tylko gdy są przyjazdy', async () => {
+  const { db, call, login } = setup();
+  await login();
+  db.prepare("INSERT INTO users (username, password_hash, notify_time) VALUES ('jozek', 'x', '07:30')").run();
+  const sent: { endpoint: string; payload: string }[] = [];
+  const send: Sender = async (sub, payload) => {
+    if (sub.endpoint.includes('dead')) throw Object.assign(new Error('gone'), { statusCode: 410 });
+    sent.push({ endpoint: sub.endpoint, payload });
+  };
+  const keys = { p256dh: 'p', auth: 'a' };
+  assert.equal((await call('POST', '/api/push/subscribe', { subscription: { endpoint: 'https://push.example/dawid', keys } })).status, 200);
+  saveSubscription(db, 1, { endpoint: 'https://push.example/dead', keys });
+  saveSubscription(db, 2, { endpoint: 'https://push.example/jozek', keys });
+
+  // ustawienia godziny
+  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00' });
+  assert.equal((await call('PUT', '/api/push/settings', { time: '25:00' })).status, 400);
+  assert.equal((await call('PUT', '/api/push/settings', { time: '10:15' })).status, 200);
+
+  const at = (iso: string) => new Date(iso); // czas UTC; w lipcu Warszawa = UTC+2
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-01T08:00:00Z')), 0); // brak przyjazdów
+
+  await call('POST', '/api/reservations', { unit_id: 1, check_in: '2030-07-02', check_out: '2030-07-05', guest_name: 'Ola', adults: 2, children: 1 });
+  await call('POST', '/api/reservations', { unit_id: 7, check_in: '2030-07-02', check_out: '2030-07-04', source: 'booking' });
+
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T05:00:00Z')), 0); // 7:00 — za wcześnie dla obu
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T05:31:00Z')), 1); // 7:31 — Józek
+  assert.deepEqual(sent.map((s) => s.endpoint), ['https://push.example/jozek']);
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T07:30:00Z')), 0); // 9:30 — Dawid ma 10:15
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T08:16:00Z')), 1); // 10:16 — Dawid
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T08:17:00Z')), 0); // już wysłane obu
+
+  const msg = JSON.parse(sent[1].payload);
+  assert.equal(msg.title, 'Dziś przyjazdy: 2');
+  assert.match(msg.body, /Mały domek 1: Ola \(3 os\.\)/);
+  assert.match(msg.body, /Karpatka 1: Booking\.com/);
+  // martwa subskrypcja usunięta
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint LIKE '%dead'").get() as { n: number }).n, 0);
+
+  // serwer wyłączony o 7:30 — nadrabia do 3 godzin, później już nie
+  db.prepare('UPDATE users SET notified_on = NULL').run();
+  await call('POST', '/api/reservations', { unit_id: 2, check_in: '2030-07-03', check_out: '2030-07-05' });
+  sent.length = 0;
+  // 11:00: Dawid (10:15) nadrabia, Józek (7:30) — minęło ponad 3 godziny, więc już nie
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-03T09:00:00Z')), 1);
+  assert.deepEqual(sent.map((s) => s.endpoint), ['https://push.example/dawid']);
 });
