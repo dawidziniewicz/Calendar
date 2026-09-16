@@ -257,6 +257,9 @@ fieldset p { margin: 0; font-size: 0.85rem; }
     box-shadow: 0 6px 18px rgba(0,0,0,.25);
   }
   .content-settings ~ .tabs-mobile .fab { display: none; }
+  /* Przycisk ＋ nie może zasłaniać legendy ani ostatniej karty */
+  .legend { padding-right: 84px; min-height: 58px; align-content: flex-start; }
+  .content-agenda { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 90px); }
   .sheet-backdrop { padding: 0; align-items: flex-end; }
   .sheet { max-width: none; height: calc(100dvh - env(safe-area-inset-top) - 20px); border-radius: 16px 16px 0 0; }
   .sheet-head { min-height: 54px; padding: 10px 14px; }
