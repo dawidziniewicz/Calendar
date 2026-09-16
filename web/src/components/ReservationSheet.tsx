@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, type Guest } from '../api';
-import type { Draft, Property, Status } from '../types';
+import type { Draft, Property, Reservation, Status } from '../types';
 import { SOURCES, STATUS_LABELS } from '../types';
 import { addDays, diffDays, formatShort, nightsLabel } from '../dates';
 
-type Props = { draft: Draft; properties: Property[]; onClose: () => void; onSaved: () => void };
+type Props = { draft: Draft; properties: Property[]; onClose: () => void; onSaved: (saved: Reservation | null) => void };
 type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
 
 export default function ReservationSheet({ draft, properties, onClose, onSaved }: Props) {
@@ -51,8 +51,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
     setSaving(true);
     setError('');
     try {
-      await api.saveReservation(r, force);
-      onSaved();
+      onSaved(await api.saveReservation(r, force));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) setConflicts(err.data.conflicts as Conflict[]);
       else setError(err instanceof Error ? err.message : String(err));
@@ -70,7 +69,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
     setSaving(true);
     try {
       await api.deleteReservation(r.id);
-      onSaved();
+      onSaved(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSaving(false);
@@ -84,7 +83,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
       <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <header className="sheet-head">
           <button type="button" className="link" onClick={onClose}>Anuluj</button>
-          <h2>{r.id ? 'Rezerwacja' : 'Nowa rezerwacja'}</h2>
+          <h2>{r.id ? 'Edycja rezerwacji' : 'Nowa rezerwacja'}</h2>
           <button type="submit" className="link strong" disabled={saving}>{saving ? 'Zapis…' : 'Zapisz'}</button>
         </header>
 
@@ -153,11 +152,11 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <div className="field">
               Dorośli
-              <Stepper value={r.adults} onChange={(v) => set('adults', v)} />
+              <Stepper label="Dorośli" value={r.adults} onChange={(v) => set('adults', v)} />
             </div>
             <div className="field">
               Dzieci
-              <Stepper value={r.children} onChange={(v) => set('children', v)} />
+              <Stepper label="Dzieci" value={r.children} onChange={(v) => set('children', v)} />
             </div>
             {unit && r.adults + r.children > unit.capacity && (
               <p className="full warn">Uwaga: {unit.name} mieści maksymalnie {unit.capacity} osób.</p>
@@ -216,12 +215,29 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
   );
 }
 
-function Stepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+function Stepper({ value, onChange, label }: { value: number; onChange: (v: number) => void; label: string }) {
+  // Tekst trzymany lokalnie, żeby dało się skasować pole i wpisać nową liczbę z klawiatury.
+  const [text, setText] = useState(String(value));
+  useEffect(() => setText(String(value)), [value]);
+
   return (
     <div className="stepper">
-      <button type="button" onClick={() => onChange(Math.max(0, value - 1))} aria-label="Mniej">−</button>
-      <span>{value}</span>
-      <button type="button" onClick={() => onChange(value + 1)} aria-label="Więcej">+</button>
+      <button type="button" onClick={() => onChange(Math.max(0, value - 1))} aria-label={`${label}: mniej`}>−</button>
+      <input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        aria-label={label}
+        value={text}
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => {
+          const digits = e.target.value.replace(/\D/g, '').slice(0, 3);
+          setText(digits);
+          if (digits !== '') onChange(Number(digits));
+        }}
+        onBlur={() => { if (text === '') { setText('0'); onChange(0); } }}
+      />
+      <button type="button" onClick={() => onChange(value + 1)} aria-label={`${label}: więcej`}>+</button>
     </div>
   );
 }

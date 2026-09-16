@@ -198,7 +198,7 @@ textarea { resize: vertical; }
 .chip.active { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
 .stepper { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); height: 42px; overflow: hidden; }
 .stepper button { width: 44px; height: 100%; border: 0; background: none; font-size: 1.3rem; color: var(--primary); }
-.stepper span { flex: 1; text-align: center; font-size: 1rem; color: var(--ink); font-weight: 600; }
+.stepper input { flex: 1; min-width: 0; min-height: 0 !important; height: 100%; border: 0 !important; border-radius: 0 !important; background: transparent !important; text-align: center; font-weight: 600; padding: 0 !important; }
 .sheet-actions { display: flex; flex-direction: column; gap: 10px; }
 fieldset p { margin: 0; font-size: 0.85rem; }
 
@@ -272,3 +272,34 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .splash { min-height: 100dvh; display: flex; align-items: center; justify-content: center; }
 .password-form { display: grid; gap: 10px; margin-top: 10px; }
 .user-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ---- Podgląd rezerwacji ---- */
+.view-hero { display: flex; gap: 12px; align-items: flex-start; background: var(--surface); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.unit-dot.big { width: 14px; height: 14px; margin-top: 8px; }
+.view-name { margin: 0 0 2px; font-size: 1.25rem; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.view-name em { color: var(--muted); font-weight: 600; }
+.view-tags { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.tag { font-size: 0.75rem; font-weight: 600; padding: 2px 9px; border-radius: 999px; color: #fff; background: var(--src-direct); }
+.src-tag-booking { background: var(--src-booking); }
+.src-tag-airbnb { background: var(--src-airbnb); }
+.src-tag-other { background: var(--src-other); }
+.st-tag-tentative { background: var(--accent); }
+.st-tag-cancelled { background: var(--danger); }
+.view-fill { width: 100%; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.contact-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.contact { display: flex; align-items: center; gap: 10px; padding: 10px 14px; min-height: 56px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); color: var(--primary); text-decoration: none; font-weight: 600; }
+.contact span { display: flex; flex-direction: column; color: var(--ink); overflow-wrap: anywhere; }
+.contact small { font-size: 0.72rem; color: var(--muted); font-weight: 600; }
+.contact.call-main { flex: 1 1 200px; background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.contact.call-main span, .contact.call-main small { color: var(--primary-ink); }
+.contact:not(.call-main) { flex: 0 1 auto; }
+.view-list { margin: 0 0 12px; background: var(--surface); border-radius: var(--radius); padding: 4px 14px; }
+.view-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.view-list > div:last-child { border-bottom: 0; }
+.view-list dt { color: var(--muted); font-size: 0.9rem; }
+.view-list dd { margin: 0; text-align: right; font-weight: 600; }
+.view-list dd.due { color: var(--accent); }
+.view-list dd.paid { color: var(--primary); }
+.view-notes { background: var(--surface); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; }
+.view-notes h4 { margin: 0 0 6px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.view-notes p { margin: 0; white-space: pre-wrap; }

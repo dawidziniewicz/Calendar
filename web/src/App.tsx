@@ -7,6 +7,7 @@ import Agenda from './components/Agenda';
 import Settings from './components/Settings';
 import ReservationSheet from './components/ReservationSheet';
 import Login from './components/Login';
+import ReservationView from './components/ReservationView';
 
 type Tab = 'calendar' | 'agenda' | 'settings';
 
@@ -52,6 +53,7 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<Draft | null>(null);
+  const [viewing, setViewing] = useState<Reservation | null>(null);
   const [version, setVersion] = useState(0); // podbijane po zapisie — widoki przeładowują rezerwacje
 
   const loadProperties = useCallback(() => {
@@ -77,7 +79,7 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
     if (!units.length) return;
     setEditing(emptyDraft(unitId ?? units[0].id, date ?? today()));
   };
-  const openExisting = (r: Reservation) => setEditing({ ...r });
+  const openExisting = (r: Reservation) => setViewing(r);
 
   return (
     <div className="app">
@@ -118,12 +120,26 @@ function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
         <button className="fab" onClick={() => openNew()} disabled={!units.length} aria-label="Nowa rezerwacja">＋</button>
       </nav>
 
+      {viewing && !editing && (
+        <ReservationView
+          reservation={viewing}
+          properties={properties}
+          onClose={() => setViewing(null)}
+          onEdit={() => setEditing({ ...viewing })}
+        />
+      )}
+
       {editing && (
         <ReservationSheet
           draft={editing}
           properties={properties}
+          // Anuluj w edycji istniejącej rezerwacji wraca do podglądu
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); setVersion((v) => v + 1); }}
+          onSaved={(saved) => {
+            setEditing(null);
+            setViewing(saved && editing.id ? saved : null);
+            setVersion((v) => v + 1);
+          }}
         />
       )}
     </div>
