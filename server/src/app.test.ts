@@ -274,7 +274,7 @@ test('rezerwację z Bookingu można edytować, a ręcznie zmienionych dat synchr
   }
 });
 
-test('codzienne powiadomienie o przyjazdach: o godzinie każdego użytkownika, raz dziennie, tylko gdy są przyjazdy', async () => {
+test('powiadomienia o przyjazdach: osobne na każdy przyjazd, o godzinie każdego użytkownika, raz dziennie', async () => {
   const { db, call, login } = setup();
   await login();
   db.prepare("INSERT INTO users (username, password_hash, notify_time) VALUES ('jozek', 'x', '07:30')").run();
@@ -300,16 +300,20 @@ test('codzienne powiadomienie o przyjazdach: o godzinie każdego użytkownika, r
   await call('POST', '/api/reservations', { unit_id: 7, check_in: '2030-07-02', check_out: '2030-07-04', source: 'booking' });
 
   assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T05:00:00Z')), 0); // 7:00 — za wcześnie dla obu
-  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T05:31:00Z')), 1); // 7:31 — Józek
-  assert.deepEqual(sent.map((s) => s.endpoint), ['https://push.example/jozek']);
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T05:31:00Z')), 2); // 7:31 — Józek, 2 przyjazdy = 2 powiadomienia
+  assert.deepEqual(sent.map((s) => s.endpoint), ['https://push.example/jozek', 'https://push.example/jozek']);
   assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T07:30:00Z')), 0); // 9:30 — Dawid ma 10:15
-  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T08:16:00Z')), 1); // 10:16 — Dawid
+  assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T08:16:00Z')), 2); // 10:16 — Dawid
   assert.equal(await dailyArrivalsTick(db, send, at('2030-07-02T08:17:00Z')), 0); // już wysłane obu
 
-  const msg = JSON.parse(sent[1].payload);
-  assert.equal(msg.title, 'Dziś przyjazdy: 2');
-  assert.match(msg.body, /Mały domek 1: Ola \(3 os\.\)/);
-  assert.match(msg.body, /Karpatka 1: Booking\.com/);
+  const [first, second] = sent.slice(2).map((s) => JSON.parse(s.payload));
+  assert.equal(first.title, 'Przyjazd dziś: Mały domek 1 · Osada Jantar');
+  assert.equal(first.body, 'Ola · 3 os. · 3 noce, wyjazd 5 lip');
+  assert.match(first.url, /^\/\?reservation=\d+$/);
+  assert.equal(second.title, 'Przyjazd dziś: Karpatka 1 · Apartamenty Karpatka');
+  assert.equal(second.body, 'Gość z Booking.com · 2 noce, wyjazd 4 lip');
+  assert.notEqual(first.tag, second.tag);
+  assert.equal((await call('GET', first.url.replace('/?reservation=', '/api/reservations/'))).status, 200);
   // martwa subskrypcja usunięta
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint LIKE '%dead'").get() as { n: number }).n, 0);
 

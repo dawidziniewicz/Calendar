@@ -14,7 +14,7 @@ type Tab = 'calendar' | 'agenda' | 'settings';
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'calendar', label: 'Kalendarz', icon: 'M4 6h16M4 6v13a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V6M4 6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1M8 3v4m8-4v4M4 10h16' },
   { id: 'agenda', label: 'Przyjazdy', icon: 'M5 12h14m-6-6 6 6-6 6' },
-  { id: 'settings', label: 'Obiekty', icon: 'M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6' },
+  { id: 'settings', label: 'Ustawienia i obiekty', icon: 'M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6' },
 ];
 // Konto „tylko podgląd” zamiast Obiektów widzi tylko ustawienia konta.
 const VIEWER_TABS = TABS.map((t) => (t.id === 'settings' ? { ...t, label: 'Konto', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m-7 8a7 7 0 0 1 14 0' } : t));
@@ -74,6 +74,14 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   }, []);
 
   useEffect(loadProperties, [loadProperties]);
+
+  // Stuknięcie w powiadomienie o przyjeździe otwiera /?reservation=123
+  useEffect(() => {
+    const id = Number(new URLSearchParams(location.search).get('reservation'));
+    if (!id) return;
+    history.replaceState(null, '', '/');
+    api.reservation(id).then(setViewing).catch((e) => setError(e.message));
+  }, []);
 
   // Rezerwacje odwołane na Bookingu, na które trzeba zareagować (plakietka na zakładce Przyjazdy)
   useEffect(() => {

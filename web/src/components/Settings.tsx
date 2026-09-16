@@ -75,9 +75,7 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
 
       {properties.map((p) => <PropertyPanel key={p.id} property={p} run={run} />)}
 
-      <div className="settings-footer">
-        <button className="btn" onClick={addProperty}>＋ Dodaj obiekt</button>
-      </div>
+      <button className="add-property" onClick={addProperty}>＋ Dodaj obiekt</button>
 
       <Notifications />
       <AccountPanel user={user} onLogout={onLogout} />

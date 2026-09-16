@@ -88,7 +88,7 @@ export default function Notifications() {
   return (
     <div className="panel">
       <h2>Powiadomienia</h2>
-      <p className="muted notif-desc">Codziennie o {savedTime} lista dzisiejszych przyjazdów (tylko gdy są).</p>
+      <p className="muted notif-desc">Codziennie o {savedTime} osobne powiadomienie o każdym dzisiejszym przyjeździe.</p>
 
       {state !== 'unsupported' && (
         <div className="row notif-time">

@@ -39,7 +39,7 @@ export function saveSubscription(db: DatabaseSync, userId: number, sub: PushSubs
 }
 
 /** Wysyła do wybranych subskrypcji; martwe (telefon odinstalował / wyłączył) usuwa z bazy. */
-export async function sendToSubscriptions(db: DatabaseSync, send: Sender, userId: number | null, message: { title: string; body: string; url?: string }) {
+export async function sendToSubscriptions(db: DatabaseSync, send: Sender, userId: number | null, message: PushMessage) {
   const rows = (userId == null
     ? db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions').all()
     : db.prepare('SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId)) as
@@ -62,19 +62,28 @@ export async function sendToSubscriptions(db: DatabaseSync, send: Sender, userId
 export const warsawDate = (d = new Date()) => d.toLocaleDateString('sv-SE', { timeZone: TZ });
 export const warsawTime = (d = new Date()) => d.toLocaleTimeString('pl-PL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
 
-export function arrivalsMessage(db: DatabaseSync, date: string) {
-  const rows = db.prepare(`SELECT r.guest_name, r.source, r.adults, r.children, u.name AS unit
-    FROM reservations r JOIN units u ON u.id = r.unit_id
-    WHERE r.check_in = ? AND r.status != 'cancelled' ORDER BY u.property_id, u.sort`).all(date) as
-    { guest_name: string; source: string; adults: number; children: number; unit: string }[];
-  if (!rows.length) return null;
-  const who = (r: (typeof rows)[number]) => r.guest_name || (r.source === 'booking' ? 'Booking.com' : r.source === 'airbnb' ? 'Airbnb' : 'Gość');
-  const people = (r: (typeof rows)[number]) => (r.adults + r.children ? ` (${r.adults + r.children} os.)` : '');
-  return {
-    title: rows.length === 1 ? 'Dziś 1 przyjazd' : `Dziś przyjazdy: ${rows.length}`,
-    body: rows.map((r) => `${r.unit}: ${who(r)}${people(r)}`).join('\n'),
-    url: '/?tab=agenda',
-  };
+export type PushMessage = { title: string; body: string; url?: string; tag?: string };
+
+const shortDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('pl-PL', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const nightsPl = (n: number) => (n === 1 ? '1 noc' : `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'noce' : 'nocy'}`);
+
+/** Osobne powiadomienie dla każdego dzisiejszego przyjazdu. */
+export function arrivalMessages(db: DatabaseSync, date: string): PushMessage[] {
+  const rows = db.prepare(`SELECT r.id, r.guest_name, r.source, r.adults, r.children, r.check_out, u.name AS unit, p.name AS property
+    FROM reservations r JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
+    WHERE r.check_in = ? AND r.status != 'cancelled' ORDER BY p.sort, u.sort`).all(date) as
+    { id: number; guest_name: string; source: string; adults: number; children: number; check_out: string; unit: string; property: string }[];
+  return rows.map((r) => {
+    const who = r.guest_name || (r.source === 'booking' ? 'Gość z Booking.com' : r.source === 'airbnb' ? 'Gość z Airbnb' : 'Gość');
+    const nights = Math.round((Date.parse(r.check_out) - Date.parse(date)) / 86_400_000);
+    const people = r.adults + r.children ? ` · ${r.adults + r.children} os.` : '';
+    return {
+      title: `Przyjazd dziś: ${r.unit} · ${r.property}`,
+      body: `${who}${people} · ${nightsPl(nights)}, wyjazd ${shortDate(r.check_out)}`,
+      url: `/?reservation=${r.id}`,
+      tag: `arrival-${r.id}`, // różne tagi → iPhone nie zastępuje jednego powiadomienia drugim
+    };
+  });
 }
 
 export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -82,7 +91,7 @@ const minutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.sl
 
 /**
  * Wywoływane co minutę: każdemu użytkownikowi z włączonymi powiadomieniami raz dziennie, o jego godzinie,
- * wysyła listę dzisiejszych przyjazdów. Gdy serwer był wtedy wyłączony — nadrabia do 3 godzin później.
+ * wysyła po jednym powiadomieniu na każdy dzisiejszy przyjazd. Gdy serwer był wtedy wyłączony — nadrabia do 3 godzin później.
  */
 export async function dailyArrivalsTick(db: DatabaseSync, send: Sender, now = new Date()) {
   const today = warsawDate(now);
@@ -91,11 +100,11 @@ export async function dailyArrivalsTick(db: DatabaseSync, send: Sender, now = ne
     WHERE u.notified_on IS NULL OR u.notified_on != ?`).all(today) as { id: number; notify_time: string }[];
   const due = users.filter((u) => nowMin >= minutes(u.notify_time) && nowMin - minutes(u.notify_time) < 180);
   if (!due.length) return 0;
-  const msg = arrivalsMessage(db, today);
+  const messages = arrivalMessages(db, today);
   let sent = 0;
   for (const u of due) {
     db.prepare('UPDATE users SET notified_on = ? WHERE id = ?').run(today, u.id);
-    if (msg) sent += await sendToSubscriptions(db, send, u.id, msg);
+    for (const msg of messages) sent += await sendToSubscriptions(db, send, u.id, msg);
   }
   return sent;
 }

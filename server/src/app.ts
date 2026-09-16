@@ -9,7 +9,7 @@ import {
   verifyPassword, type User,
 } from './auth.ts';
 import { buildIcal } from './ical.ts';
-import { TIME_RE, arrivalsMessage, saveSubscription, sendToSubscriptions, vapidKeys, warsawDate, warsawTime, type Sender } from './push.ts';
+import { TIME_RE, arrivalMessages, saveSubscription, sendToSubscriptions, vapidKeys, warsawDate, warsawTime, type Sender } from './push.ts';
 import { syncAll } from './sync.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -153,8 +153,11 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
 
   api.post('/push/test', async (c) => {
     if (!pushSender) return c.json({ error: 'Powiadomienia są wyłączone na serwerze' }, 503);
-    const msg = arrivalsMessage(db, warsawDate()) ?? { title: 'Powiadomienia działają ✓', body: 'Dziś brak przyjazdów. Codziennie rano dostaniesz listę przyjazdów.', url: '/?tab=agenda' };
-    const sent = await sendToSubscriptions(db, pushSender, c.get('user').id, msg);
+    const arrivals = arrivalMessages(db, warsawDate());
+    const messages = arrivals.length ? arrivals
+      : [{ title: 'Powiadomienia działają ✓', body: 'Dziś brak przyjazdów. O ustawionej godzinie dostaniesz osobne powiadomienie o każdym przyjeździe.', url: '/?tab=agenda' }];
+    let sent = 0;
+    for (const msg of messages) sent += await sendToSubscriptions(db, pushSender, c.get('user').id, msg);
     return c.json({ sent });
   });
 
@@ -251,6 +254,11 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   api.post('/sync', async (c) => c.json(await syncAll(db)));
 
   // ---- Rezerwacje ----
+  api.get('/reservations/:id{[0-9]+}', (c) => {
+    const row = get('SELECT * FROM reservations WHERE id = ?', int(c.req.param('id')));
+    return row ? c.json(row) : c.json({ error: 'Nie znaleziono rezerwacji' }, 404);
+  });
+
   api.get('/reservations', (c) => {
     const from = c.req.query('from') ?? '0000-01-01';
     const to = c.req.query('to') ?? '9999-12-31';

@@ -229,7 +229,8 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .url { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .export { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .export code { flex: 1 1 100%; font-size: 0.75rem; background: var(--bg); padding: 8px 10px; border-radius: 8px; overflow-wrap: anywhere; }
-.settings-footer { display: flex; justify-content: space-between; gap: 10px; }
+.add-property { display: block; width: 100%; margin: 0 0 22px; padding: 14px; border: 1.5px dashed var(--line); border-radius: var(--radius); background: transparent; color: var(--primary); font-weight: 600; font-size: 0.95rem; }
+@media (hover: hover) { .add-property:hover { background: var(--surface); border-color: var(--primary); } }
 
 /* ---- Telefon ---- */
 @media (max-width: 760px) {
@@ -249,7 +250,7 @@ fieldset p { margin: 0; font-size: 0.85rem; }
     background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     border-top: 1px solid var(--line);
   }
-  .tabs-mobile button:not(.fab) { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: none; color: var(--muted); font-size: 0.7rem; font-weight: 600; }
+  .tabs-mobile button:not(.fab) { text-align: center; line-height: 1.1; padding: 0 4px; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: none; color: var(--muted); font-size: 0.7rem; font-weight: 600; }
   .tabs-mobile button.active { color: var(--primary); }
   .fab {
     position: absolute; right: 16px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 14px);
@@ -264,7 +265,6 @@ fieldset p { margin: 0; font-size: 0.85rem; }
   .sheet { max-width: none; height: calc(100dvh - env(safe-area-inset-top) - 20px); border-radius: 16px 16px 0 0; }
   .sheet-head { min-height: 54px; padding: 10px 14px; }
   .sheet-head .link { padding: 10px 6px; }
-  .settings-footer { flex-direction: column; }
 }
 
 /* ---- Logowanie ---- */
