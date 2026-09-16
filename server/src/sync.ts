@@ -23,12 +23,22 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
       status = CASE WHEN cancelled_at IS NOT NULL THEN 'confirmed' ELSE status END,
       cancelled_at = NULL, cancel_reviewed = 0, updated_at = datetime('now') WHERE id = ?`);
 
+    // Po podmianie linku Booking może nadać inne UID — dopasuj wtedy po datach, zamiast dublować rezerwację.
+    const byDates = db.prepare(`SELECT id, external_uid FROM reservations WHERE feed_id = ? AND check_in = ? AND check_out = ?`);
+    const rebind = db.prepare('UPDATE reservations SET external_uid = ? WHERE id = ?');
+
     db.exec('BEGIN');
     try {
-      const seen = new Set<string>();
+      const seen = new Set(events.map((e) => e.uid));
       for (const e of events) {
-        seen.add(e.uid);
-        const row = find.get(feed.id, e.uid) as { id: number; check_in: string; check_out: string; status: string; cancelled_at: string | null } | undefined;
+        let row = find.get(feed.id, e.uid) as { id: number; check_in: string; check_out: string; status: string; cancelled_at: string | null } | undefined;
+        if (!row) {
+          const orphan = (byDates.all(feed.id, e.start, e.end) as { id: number; external_uid: string }[]).find((r) => !seen.has(r.external_uid));
+          if (orphan) {
+            rebind.run(e.uid, orphan.id);
+            row = find.get(feed.id, e.uid) as typeof row;
+          }
+        }
         if (!row) {
           insert.run(feed.unit_id, e.start, e.end, feed.source, feed.id, e.uid, e.summary);
           result.added++;

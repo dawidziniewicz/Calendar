@@ -53,6 +53,7 @@ export const api = {
   regenerateToken: (id: number) => request('POST', `/units/${id}/regenerate-token`),
   createFeed: (f: { unit_id: number; source: string; url: string }) => request('POST', '/feeds', f),
   deleteFeed: (id: number) => request('DELETE', `/feeds/${id}`),
+  updateFeed: (id: number, url: string) => request('PUT', `/feeds/${id}`, { url }),
   sync: () => request<SyncResult[]>('POST', '/sync'),
   reservations: (from: string, to: string, cancelled = false) =>
     request<Reservation[]>('GET', `/reservations?from=${from}&to=${to}${cancelled ? '&cancelled=1' : ''}`),

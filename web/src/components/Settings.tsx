@@ -153,6 +153,7 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
           {dirty && <button className="btn primary small" onClick={() => run(() => api.updateUnit(u.id, form))}>Zapisz zmiany</button>}
 
           <h4>1. Import z Booking.com / Airbnb (zajęte terminy)</h4>
+          <p className="muted">W Bookingu przy eksporcie wybierz <b>„zarezerwowane i zamknięte dni”</b>, żeby widzieć też zamknięte terminy.</p>
           {u.feeds.map((f) => (
             <div key={f.id} className="feed">
               <div>
@@ -161,7 +162,13 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
                   {f.last_error ? `Błąd: ${f.last_error}` : f.last_sync_at ? `Ostatnia synchronizacja: ${new Date(f.last_sync_at.replace(' ', 'T') + 'Z').toLocaleString('pl-PL')}` : 'Jeszcze nie synchronizowano'}
                 </div>
               </div>
-              <button className="btn small danger-outline" onClick={() => confirm('Odłączyć ten kalendarz? Rezerwacje zostaną w aplikacji.') && run(() => api.deleteFeed(f.id))}>Odłącz</button>
+              <div className="feed-actions">
+                <button className="btn small" onClick={() => {
+                  const url = prompt('Wklej nowy link do kalendarza (rezerwacje i dane gości zostaną):', f.url);
+                  if (url?.trim() && url.trim() !== f.url) run(() => api.updateFeed(f.id, url.trim()));
+                }}>Zmień link</button>
+                <button className="btn small danger-outline" onClick={() => confirm('Odłączyć ten kalendarz? Rezerwacje zostaną w aplikacji. Jeśli chcesz tylko wkleić nowy link z Bookingu, użyj „Zmień link” — inaczej rezerwacje się zdublują.') && run(() => api.deleteFeed(f.id))}>Odłącz</button>
+              </div>
             </div>
           ))}
           <div className="row">

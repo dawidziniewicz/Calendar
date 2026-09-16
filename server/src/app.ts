@@ -189,6 +189,16 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     return c.json({ id: Number(r.lastInsertRowid) }, 201);
   });
 
+  // Podmiana linku (np. nowy eksport z Bookingu z zamkniętymi dniami) — rezerwacje i dane gości zostają.
+  api.put('/feeds/:id', async (c) => {
+    const b = await c.req.json();
+    const url = str(b.url, 1000);
+    if (!/^https:\/\//.test(url)) bad('Adres kalendarza musi zaczynać się od https://');
+    const r = run('UPDATE feeds SET url = ?, last_error = NULL WHERE id = ?', url, c.req.param('id'));
+    if (!r.changes) return c.json({ error: 'Nie znaleziono' }, 404);
+    return c.json({ ok: true });
+  });
+
   api.delete('/feeds/:id', (c) => {
     // Rezerwacje z usuniętego kalendarza stają się zwykłymi wpisami (feed_id = NULL) — nic nie ginie.
     run('DELETE FROM feeds WHERE id = ?', c.req.param('id'));

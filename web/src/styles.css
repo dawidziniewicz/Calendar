@@ -323,3 +323,6 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .readonly-badge { font-size: 0.8rem; font-weight: 600; color: var(--muted); background: var(--surface-2); padding: 6px 12px; border-radius: 999px; }
 .tl-cell.readonly { cursor: default; }
 .head-spacer { width: 56px; }
+
+.feed-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.small-summary { font-size: 0.8rem; margin-top: 2px; }

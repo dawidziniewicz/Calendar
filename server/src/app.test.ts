@@ -205,3 +205,32 @@ test('konto tylko do podglądu nie może nic zmieniać', async () => {
   assert.equal((await call('POST', '/api/auth/password', { current: 'podglad-123', next: 'nowe-haslo-789' })).status, 200);
   assert.equal((await call('POST', '/api/auth/logout')).status, 200);
 });
+
+test('podmiana linku kalendarza nie dubluje rezerwacji (nawet gdy zmienią się UID)', async () => {
+  const { db, call, login } = setup();
+  await login();
+  const ev = (uid: string, a: string, b: string) => `BEGIN:VEVENT\nUID:${uid}\nDTSTART;VALUE=DATE:${a}\nDTEND;VALUE=DATE:${b}\nEND:VEVENT\n`;
+  let body = `BEGIN:VCALENDAR\n${ev('old-1', '20301101', '20301105')}END:VCALENDAR`;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch;
+  try {
+    await call('POST', '/api/feeds', { unit_id: 5, url: 'https://example.com/a.ics' });
+    await syncFeed(db, { id: 1, unit_id: 5, source: 'booking', url: 'https://example.com/a.ics' });
+    const [r] = await (await call('GET', '/api/reservations?from=2030-11-01&to=2030-11-02')).json();
+    await call('PUT', `/api/reservations/${r.id}`, { ...r, guest_name: 'Stały Gość' });
+
+    assert.equal((await call('PUT', '/api/feeds/1', { url: 'http://zly' })).status, 400);
+    assert.equal((await call('PUT', '/api/feeds/1', { url: 'https://example.com/b.ics' })).status, 200);
+
+    // nowy link: ta sama rezerwacja z innym UID + zamknięty termin
+    body = `BEGIN:VCALENDAR\n${ev('new-1', '20301101', '20301105')}${ev('closed-1', '20301110', '20301112')}END:VCALENDAR`;
+    const res = await syncFeed(db, { id: 1, unit_id: 5, source: 'booking', url: 'https://example.com/b.ics' });
+    assert.deepEqual([res.added, res.cancelled], [1, 0]);
+    const rows = await (await call('GET', '/api/reservations?from=2030-11-01&to=2030-11-30&cancelled=1')).json();
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].guest_name, 'Stały Gość');
+    assert.equal(rows[0].external_uid, 'new-1');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
