@@ -1,8 +1,13 @@
 import { Hono } from 'hono';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { timingSafeEqual } from 'node:crypto';
 import { newToken } from './db.ts';
+import {
+  SESSION_COOKIE, SESSION_DAYS, checkLogin, clearFails, createSession, deleteSession, lockedFor, registerFail, sessionUser, setPassword,
+  verifyPassword, type User,
+} from './auth.ts';
 import { buildIcal } from './ical.ts';
 import { syncAll } from './sync.ts';
 
@@ -51,10 +56,60 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     });
   });
 
-  const api = new Hono();
+  const api = new Hono<{ Variables: { user: User } }>();
+  // Klucz API dodaje proxy w Cloudflare Pages — bez niego serwer nie odpowiada nikomu.
   api.use('*', async (c, next) => {
-    if (!safeEqual(c.req.header('x-api-key') ?? '', apiKey)) return c.json({ error: 'Brak autoryzacji' }, 401);
+    if (!safeEqual(c.req.header('x-api-key') ?? '', apiKey)) return c.json({ error: 'Brak autoryzacji serwera' }, 403);
     await next();
+  });
+
+  // ---- Logowanie ----
+  const cookieOpts = (c: { req: { header: (n: string) => string | undefined } }) => ({
+    path: '/', httpOnly: true, sameSite: 'Lax' as const, secure: c.req.header('x-forwarded-proto') === 'https',
+  });
+
+  api.post('/auth/login', async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    const username = str(b.username, 50);
+    const password = typeof b.password === 'string' ? b.password.slice(0, 200) : '';
+    const keys = [`ip:${c.req.header('x-client-ip') ?? 'unknown'}`, `user:${username.toLowerCase()}`];
+    const wait = lockedFor(keys);
+    if (wait) return c.json({ error: `Za dużo nieudanych prób. Spróbuj za ${Math.ceil(wait / 60_000)} min.` }, 429);
+    const user = username && password ? checkLogin(db, username, password) : null;
+    if (!user) {
+      registerFail(keys);
+      return c.json({ error: 'Nieprawidłowy login lub hasło' }, 401);
+    }
+    clearFails(keys);
+    setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts(c), maxAge: SESSION_DAYS * 86400 });
+    return c.json({ username: user.username });
+  });
+
+  api.use('*', async (c, next) => {
+    if (c.req.path.endsWith('/auth/login')) return next();
+    const user = sessionUser(db, getCookie(c, SESSION_COOKIE));
+    if (!user) return c.json({ error: 'Zaloguj się', code: 'unauthenticated' }, 401);
+    c.set('user', user);
+    await next();
+  });
+
+  api.get('/auth/me', (c) => c.json({ username: c.get('user').username }));
+
+  api.post('/auth/logout', (c) => {
+    deleteSession(db, getCookie(c, SESSION_COOKIE));
+    deleteCookie(c, SESSION_COOKIE, cookieOpts(c));
+    return c.json({ ok: true });
+  });
+
+  api.post('/auth/password', async (c) => {
+    const b = await c.req.json();
+    const user = c.get('user');
+    const row = get('SELECT password_hash FROM users WHERE id = ?', user.id) as { password_hash: string };
+    if (typeof b.current !== 'string' || !verifyPassword(b.current, row.password_hash)) bad('Obecne hasło jest nieprawidłowe');
+    if (typeof b.next !== 'string' || b.next.length < 8) bad('Nowe hasło musi mieć co najmniej 8 znaków');
+    setPassword(db, user.id, b.next); // usuwa też wszystkie sesje
+    setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts(c), maxAge: SESSION_DAYS * 86400 });
+    return c.json({ ok: true });
   });
 
   // ---- Obiekty i jednostki ----

@@ -13,7 +13,7 @@ Osada Jantar (5 domków), Apartament Sopot, Apartamenty Karpatka (2), Agroturyst
 
 ```
  iPhone / komputer
-        │  https://kalendarz.odmorzadogor.pl   (logowanie: Cloudflare Access, kod PIN na e-mail)
+        │  https://kalendarz.odmorzadogor.pl   (logowanie: login + hasło)
         ▼
  Cloudflare Pages ── interfejs (React) + funkcja /api (proxy)
         │  https://kalendarz-api.odmorzadogor.pl   (dostęp tylko z tokenem serwisowym)
@@ -96,67 +96,65 @@ docker compose logs -f api       # powinno być: "API działa na porcie 8787"
 
 **Kopie zapasowe** – serwer codziennie zapisuje kopię bazy do `~/kalendarz/data/backups/` (30 ostatnich dni). Warto raz na jakiś czas skopiować ten katalog poza dom (dysk w chmurze, pendrive).
 
-## Krok 3. Zabezpieczenia (Cloudflare Access)
+## Krok 3. Konta użytkowników
 
-Cała aplikacja jest tylko dla Ciebie. Logowanie robi Cloudflare Access – podajesz e-mail, dostajesz kod PIN (darmowe do 50 użytkowników).
+Logowanie jest w samej aplikacji: **login + hasło**. Konta zakładasz na serwerze (nie ma rejestracji z internetu):
 
-### 3a. Token dla proxy → API
+```bash
+cd ~/kalendarz
+docker compose exec api npm run -s user add dawid        # zapyta o hasło (min. 8 znaków)
+docker compose exec api npm run -s user add jozek
+docker compose exec api npm run -s user list             # lista kont
+docker compose exec api npm run -s user passwd jozek     # nowe hasło (wylogowuje z urządzeń)
+docker compose exec api npm run -s user remove jozek     # usunięcie konta
+```
 
-1. Zero Trust → *Access controls* → **Service credentials** → *Service Tokens* → *Create* → nazwa `pages-proxy`, czas: *Non-expiring*.
+- Sesja trwa 90 dni – na telefonie logujesz się raz.
+- Po 5 błędnych hasłach logowanie z danego adresu IP / na dany login jest blokowane na 15 minut.
+- Hasło możesz też zmienić w aplikacji: *Obiekty* → na dole *Zmień hasło*.
+
+### Ochrona API w domu (token serwisowy Cloudflare Access)
+
+Adres `kalendarz-api.odmorzadogor.pl` ma odpowiadać tylko funkcji z Cloudflare Pages:
+
+1. Zero Trust → *Access* → **Service auth** → *Service Tokens* → *Create* → nazwa `pages-proxy`, czas: *Non-expiring*.
 2. Zapisz **Client ID** i **Client Secret** (secret pokazuje się tylko raz).
-3. *Access controls* → **Applications** → *Add an application* → **Self-hosted**:
+3. *Access* → **Applications** → *Add an application* → **Self-hosted**:
    - nazwa `Kalendarz API`, domena: `kalendarz-api.odmorzadogor.pl`
    - Policy: nazwa `proxy`, **Action: Service Auth**, Include → *Service Token* → `pages-proxy`.
 
-Od teraz API w domu jest osiągalne tylko przez funkcję w Cloudflare Pages (dodatkowo sprawdza jeszcze `API_KEY`).
-
-### 3b. Logowanie do aplikacji
-
-1. Zero Trust → *Settings* → *Authentication* → upewnij się, że jest **One-time PIN**.
-2. *Applications* → *Add an application* → **Self-hosted**:
-   - nazwa `Kalendarz`, **Session duration: 1 month** (żeby nie logować się co chwilę na telefonie)
-   - domeny (dodaj trzy): `kalendarz.odmorzadogor.pl`, `kalendarz.pages.dev`, `*.kalendarz.pages.dev`
-   - Policy: `admin`, **Action: Allow**, Include → *Emails* → `dawidziniewicz@gmail.com`
-3. Po zapisaniu otwórz aplikację i skopiuj **Application Audience (AUD) Tag** → to będzie `ACCESS_AUD`.
-   Adres zespołu (*Settings* → *Custom Pages* / *Team domain*), np. `mojzespol.cloudflareaccess.com` → `ACCESS_TEAM_DOMAIN`.
-4. **Wyjątek dla Bookingu** – Booking musi pobierać eksport kalendarza bez logowania. Dodaj jeszcze jedną aplikację *Self-hosted*:
-   - nazwa `Kalendarz iCal`, domena `kalendarz.odmorzadogor.pl`, **Path: `ical`**
-   - Policy: **Action: Bypass**, Include → *Everyone*.
-   Adresy eksportu zawierają 48-znakowy losowy token, więc nie da się ich zgadnąć.
+Dla samej aplikacji (`kalendarz.odmorzadogor.pl`) **nie twórz** aplikacji Access – logowanie robi aplikacja.
 
 ## Krok 4. Cloudflare Pages
 
-1. **Projekt**: Cloudflare → *Workers & Pages* → *Create* → *Pages* → **Upload assets** (nie „Connect to Git” – wdrażać będzie GitHub Actions) → nazwa projektu **`kalendarz`** → wgraj dowolny plik, żeby utworzyć projekt.
-   (Albo z terminala: `npx wrangler pages project create kalendarz --production-branch=main`.)
-2. **Własna domena**: projekt → *Custom domains* → `kalendarz.odmorzadogor.pl`.
-3. **Zmienne**: projekt → *Settings* → *Variables and Secrets* → dodaj dla **Production** i **Preview** (typ *Secret* dla kluczy):
+1. **Projekt**: z Maca `npx wrangler login`, potem `npx wrangler pages project create kalendarz --production-branch=main`.
+   Zapisz adres, który zwróci (np. `kalendarz-abc.pages.dev`).
+2. **Własna domena**: *Workers & Pages* → `kalendarz` → *Custom domains* → `kalendarz.odmorzadogor.pl`.
+3. **Zmienne**: projekt → *Settings* → *Variables and Secrets* (dla **Production**):
 
-   | Nazwa | Wartość |
-   |---|---|
-   | `API_ORIGIN` | `https://kalendarz-api.odmorzadogor.pl` |
-   | `API_KEY` | to samo co `API_KEY` w `.env` na serwerze |
-   | `CF_ACCESS_CLIENT_ID` | Client ID z kroku 3a |
-   | `CF_ACCESS_CLIENT_SECRET` | Client Secret z kroku 3a |
-   | `ACCESS_TEAM_DOMAIN` | np. `mojzespol.cloudflareaccess.com` |
-   | `ACCESS_AUD` | AUD Tag z kroku 3b |
+   | Nazwa | Wartość | Typ |
+   |---|---|---|
+   | `API_ORIGIN` | `https://kalendarz-api.odmorzadogor.pl` | Text |
+   | `API_KEY` | to samo co `API_KEY` w `.env` na serwerze | Secret |
+   | `CF_ACCESS_CLIENT_ID` | Client ID z kroku 3 | Secret |
+   | `CF_ACCESS_CLIENT_SECRET` | Client Secret z kroku 3 | Secret |
 
    Zmienne działają od następnego wdrożenia.
 
 ## Krok 5. Automatyczne wdrażanie (GitHub Actions)
 
-1. Cloudflare → ikona profilu → *My Profile* → **API Tokens** → *Create Token* → *Custom token*:
-   uprawnienie **Account → Cloudflare Pages → Edit**. Skopiuj token.
-2. **Account ID**: Cloudflare → *Workers & Pages* → prawa kolumna *Account ID*.
+1. Cloudflare → *My Profile* → **API Tokens** → *Create Token* → *Custom token*: **Account → Cloudflare Pages → Edit**.
+2. **Account ID**: ciąg w adresie `dash.cloudflare.com/<account-id>/...`.
 3. GitHub → repozytorium → *Settings* → *Secrets and variables* → *Actions*:
    - Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
    - (opcjonalnie) Variables: `CF_PAGES_PROJECT` – jeśli projekt nie nazywa się `kalendarz`.
 
-Co się dzieje po `git push`:
-
 | Zmiana w | Gałąź `main` | Gałąź `dev` |
 |---|---|---|
-| `web/` | produkcja: `kalendarz.odmorzadogor.pl` | podgląd: `dev.kalendarz.pages.dev` |
+| `web/` | produkcja: `kalendarz.odmorzadogor.pl` | podgląd: `dev.<projekt>.pages.dev` |
 | `server/` | testy → obraz `ghcr.io/…/calendar-server:latest` → serwer pobiera go w ≤10 min (cron) | tylko testy |
+
+Ręczne uruchomienie: *Actions* → wybierz workflow → **Run workflow** → `main`.
 
 ## Krok 6. Booking.com
 
@@ -181,7 +179,7 @@ To samo możesz zrobić z Airbnb („Kopiuj dla Airbnb” oraz import linku iCal
 
 ## Krok 7. Instalacja na iPhonie
 
-1. Otwórz **Safari** → `https://kalendarz.odmorzadogor.pl` → wpisz e-mail → wpisz kod PIN z maila.
+1. Otwórz **Safari** → `https://kalendarz.odmorzadogor.pl` → zaloguj się loginem i hasłem.
 2. Przycisk **Udostępnij** (kwadrat ze strzałką) → **Do ekranu początkowego** → *Dodaj*.
 3. Ikona „Kalendarz” działa jak aplikacja – na pełnym ekranie, bez paska adresu.
 
@@ -198,6 +196,7 @@ Wymagany Node.js 24+.
 cd server && npm install
 cp .env.example .env            # ustaw API_KEY (min. 16 znaków)
 npm run dev                     # http://localhost:8787
+npm run user add dawid          # konto do logowania lokalnie
 npm test
 
 # Aplikacja (drugi terminal)
@@ -213,7 +212,8 @@ Przy pierwszym uruchomieniu baza tworzy się sama z listą obiektów z odmorzado
 | Objaw | Co sprawdzić |
 |---|---|
 | „Serwer domowy nie odpowiada” | `docker compose ps`, `docker compose logs api cloudflared`; w Zero Trust → Tunnels status *Healthy* |
-| „Brak konfiguracji ACCESS_…” | zmienne w Pages (krok 4) + nowe wdrożenie (*Actions* → *Web* → *Run workflow*) |
-| 401 / 403 w `/api` | `API_KEY` identyczny w Pages i `.env`; service token przypisany do aplikacji `Kalendarz API` |
-| Booking nie widzi eksportu | aplikacja *Bypass* dla ścieżki `ical` (krok 3b.4); link otwiera się w oknie incognito? |
+| „Brak autoryzacji serwera” | `API_KEY` identyczny w Pages i `.env` + nowe wdrożenie |
+| „Serwer zwrócił nieoczekiwaną odpowiedź” | `CF_ACCESS_CLIENT_ID/SECRET` w Pages; service token przypisany do aplikacji `Kalendarz API` |
+| Nie pamiętam hasła | `docker compose exec api npm run -s user passwd <login>` |
+| Booking nie widzi eksportu | czy link otwiera się w oknie incognito; czy dla `kalendarz.odmorzadogor.pl` nie ma aplikacji Access |
 | Błąd synchronizacji przy domku | czerwona plakietka w *Obiekty* – rozwiń domek, zobacz komunikat; sprawdź, czy link Bookingu jest aktualny |

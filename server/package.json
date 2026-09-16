@@ -9,6 +9,7 @@
     "dev": "node --watch --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/index.ts",
     "start": "node --disable-warning=ExperimentalWarning src/index.ts",
     "typecheck": "tsc",
+    "user": "node --disable-warning=ExperimentalWarning src/cli.ts",
     "test": "node --disable-warning=ExperimentalWarning --test src/*.test.ts"
   },
   "dependencies": {

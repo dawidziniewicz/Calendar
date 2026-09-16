@@ -15,8 +15,31 @@ export const newToken = () => randomBytes(24).toString('hex');
 
 function migrate(db: DatabaseSync) {
   const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  if (user_version >= 1) return;
+  if (user_version < 1) migrateV1(db);
+  if (user_version < 2) migrateV2(db);
+}
 
+function migrateV2(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    PRAGMA user_version = 2;
+    COMMIT;
+  `);
+}
+
+function migrateV1(db: DatabaseSync) {
   db.exec(`
     BEGIN;
     CREATE TABLE properties (

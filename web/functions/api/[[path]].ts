@@ -1,7 +1,4 @@
-import { forward, verifyAccess, type Ctx } from '../../functions-lib/proxy';
+import { forward, type Ctx } from '../../functions-lib/proxy';
 
-export const onRequest = async (ctx: Ctx) => {
-  const denied = await verifyAccess(ctx.request, ctx.env);
-  if (denied) return Response.json({ error: denied }, { status: 401 });
-  return forward(ctx, true);
-};
+// Logowanie (login + hasło) sprawdza serwer w domu; tu tylko przekazujemy żądanie z kluczem API.
+export const onRequest = (ctx: Ctx) => forward(ctx, true);

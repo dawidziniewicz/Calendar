@@ -3,9 +3,9 @@ import { api, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
 
-type Props = { properties: Property[]; reload: () => void };
+type Props = { user: string; onLogout: () => void; properties: Property[]; reload: () => void };
 
-export default function Settings({ properties, reload }: Props) {
+export default function Settings({ user, onLogout, properties, reload }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult[] | null>(null);
   const [error, setError] = useState('');
@@ -66,8 +66,9 @@ export default function Settings({ properties, reload }: Props) {
 
       <div className="settings-footer">
         <button className="btn" onClick={addProperty}>＋ Dodaj obiekt</button>
-        <a className="btn" href="/cdn-cgi/access/logout">Wyloguj</a>
       </div>
+
+      <AccountPanel user={user} onLogout={onLogout} />
     </section>
   );
 }
@@ -178,6 +179,52 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AccountPanel({ user, onLogout }: { user: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const logout = async () => {
+    try { await api.logout(); } catch { /* i tak wylogowujemy lokalnie */ }
+    onLogout();
+  };
+
+  const change = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (next !== repeat) { setMsg({ ok: false, text: 'Nowe hasła się różnią' }); return; }
+    try {
+      await api.changePassword(current, next);
+      setMsg({ ok: true, text: 'Hasło zmienione. Inne urządzenia zostały wylogowane.' });
+      setCurrent(''); setNext(''); setRepeat(''); setOpen(false);
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  return (
+    <div className="panel">
+      <div className="user-line">
+        <span>Zalogowano jako <b>{user}</b></span>
+        <div className="row">
+          <button className="btn small" onClick={() => { setOpen(!open); setMsg(null); }}>Zmień hasło</button>
+          <button className="btn small danger-outline" onClick={logout}>Wyloguj</button>
+        </div>
+      </div>
+      {open && (
+        <form className="password-form" onSubmit={change}>
+          <input type="password" autoComplete="current-password" placeholder="Obecne hasło" required value={current} onChange={(e) => setCurrent(e.target.value)} />
+          <input type="password" autoComplete="new-password" placeholder="Nowe hasło (min. 8 znaków)" minLength={8} required value={next} onChange={(e) => setNext(e.target.value)} />
+          <input type="password" autoComplete="new-password" placeholder="Powtórz nowe hasło" minLength={8} required value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+          <button className="btn primary" type="submit">Zapisz nowe hasło</button>
+        </form>
+      )}
+      {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
     </div>
   );
 }

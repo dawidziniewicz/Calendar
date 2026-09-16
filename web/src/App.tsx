@@ -6,6 +6,7 @@ import Timeline from './components/Timeline';
 import Agenda from './components/Agenda';
 import Settings from './components/Settings';
 import ReservationSheet from './components/ReservationSheet';
+import Login from './components/Login';
 
 type Tab = 'calendar' | 'agenda' | 'settings';
 
@@ -32,6 +33,21 @@ export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
 });
 
 export default function App() {
+  const [user, setUser] = useState<string | null | undefined>(undefined); // undefined = sprawdzanie sesji
+
+  useEffect(() => {
+    api.me().then((u) => setUser(u.username)).catch(() => setUser(null));
+    const onAuth = () => setUser(null);
+    window.addEventListener('auth:required', onAuth);
+    return () => window.removeEventListener('auth:required', onAuth);
+  }, []);
+
+  if (user === undefined) return <div className="splash"><img src="/icons/icon-192.png" alt="" width={56} height={56} /></div>;
+  if (user === null) return <Login onLoggedIn={setUser} />;
+  return <Main user={user} onLogout={() => setUser(null)} />;
+}
+
+function Main({ user, onLogout }: { user: string; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>(() => (sessionStorageGet('tab') as Tab) || 'calendar');
   const [properties, setProperties] = useState<Property[]>([]);
   const [error, setError] = useState('');
@@ -89,7 +105,7 @@ export default function App() {
       <main className={`content content-${tab}`}>
         {tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={openNew} />}
         {tab === 'agenda' && <Agenda properties={properties} version={version} onSelect={openExisting} />}
-        {tab === 'settings' && <Settings properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {tab === 'settings' && <Settings user={user} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">

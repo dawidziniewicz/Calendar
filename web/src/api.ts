@@ -27,9 +27,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
-    // np. strona logowania Cloudflare Access po wygaśnięciu sesji
-    if (res.ok || res.status === 401 || res.status === 403) throw new ApiError(401, { error: 'Sesja wygasła — odśwież aplikację i zaloguj się ponownie' });
+    throw new ApiError(res.status || 500, { error: `Serwer zwrócił nieoczekiwaną odpowiedź (HTTP ${res.status}). Sprawdź konfigurację API_ORIGIN / tunelu.` });
   }
+  if (res.status === 401 && data.code === 'unauthenticated') window.dispatchEvent(new Event('auth:required'));
   if (!res.ok) throw new ApiError(res.status, data);
   return data as T;
 }
@@ -38,6 +38,10 @@ export type SyncResult = { feedId: number; unitId: number; ok: boolean; added: n
 export type Guest = { guest_name: string; guest_phone: string; guest_email: string; last_stay: string; stays: number };
 
 export const api = {
+  me: () => request<{ username: string }>('GET', '/auth/me'),
+  login: (username: string, password: string) => request<{ username: string }>('POST', '/auth/login', { username, password }),
+  logout: () => request('POST', '/auth/logout'),
+  changePassword: (current: string, next: string) => request('POST', '/auth/password', { current, next }),
   properties: () => request<Property[]>('GET', '/properties'),
   createProperty: (p: { name: string; location?: string; address?: string }) => request<{ id: number }>('POST', '/properties', p),
   updateProperty: (id: number, p: { name: string; location: string; address: string }) => request('PUT', `/properties/${id}`, p),

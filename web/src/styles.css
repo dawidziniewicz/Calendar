@@ -261,3 +261,14 @@ fieldset p { margin: 0; font-size: 0.85rem; }
   .sheet { max-width: none; height: calc(100dvh - env(safe-area-inset-top) - 10px); border-radius: 16px 16px 0 0; }
   .settings-footer { flex-direction: column; }
 }
+
+/* ---- Logowanie ---- */
+.login { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 16px); }
+.login-card { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 28px 22px; }
+.login-card img { align-self: center; border-radius: 14px; }
+.login-card h1 { margin: 4px 0 0; text-align: center; font-size: 1.3rem; }
+.login-card > p { margin: -10px 0 6px; text-align: center; }
+.login-card .banner { margin: 0; }
+.splash { min-height: 100dvh; display: flex; align-items: center; justify-content: center; }
+.password-form { display: grid; gap: 10px; margin-top: 10px; }
+.user-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
