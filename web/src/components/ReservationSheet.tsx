@@ -90,7 +90,8 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
         <div className="sheet-body">
           {imported && (
             <div className="banner info">
-              Zaimportowano z {SOURCES[r.source] ?? r.source}. Terminy aktualizują się automatycznie — uzupełnij dane gościa.
+              Zaimportowano z {SOURCES[r.source] ?? r.source}. Możesz zmienić wszystko — jeśli zmienisz daty, synchronizacja nie będzie ich już nadpisywać
+              (odwołanie na Bookingu dalej zostanie wykryte).
               {draft.external_summary && <small> ({draft.external_summary})</small>}
             </div>
           )}
@@ -98,7 +99,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
           <fieldset>
             <label className="full">
               Domek / apartament
-              <select value={r.unit_id} disabled={imported} onChange={(e) => set('unit_id', Number(e.target.value))}>
+              <select value={r.unit_id} onChange={(e) => set('unit_id', Number(e.target.value))}>
                 {properties.map((p) => (
                   <optgroup key={p.id} label={p.name}>
                     {p.units.map((u) => <option key={u.id} value={u.id}>{u.name} (do {u.capacity} os.)</option>)}
@@ -108,7 +109,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <label>
               Przyjazd
-              <input type="date" required value={r.check_in} disabled={imported} onChange={(e) => {
+              <input type="date" required value={r.check_in} onChange={(e) => {
                 const v = e.target.value;
                 if (!v) return;
                 // zachowaj liczbę nocy przy zmianie przyjazdu
@@ -118,18 +119,15 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <label>
               Wyjazd
-              <input type="date" required value={r.check_out} min={addDays(r.check_in, 1)} disabled={imported} onChange={(e) => e.target.value && set('check_out', e.target.value)} />
+              <input type="date" required value={r.check_out} min={addDays(r.check_in, 1)} onChange={(e) => e.target.value && set('check_out', e.target.value)} />
             </label>
-            {!imported && (
-              <div className="full chips">
-                {[1, 2, 3, 4, 5, 7, 14].map((n) => (
-                  <button type="button" key={n} className={`chip ${nights === n ? 'active' : ''}`} onClick={() => set('check_out', addDays(r.check_in, n))}>
-                    {nightsLabel(n)}
-                  </button>
-                ))}
-              </div>
-            )}
-            {imported && <p className="full muted">{nightsLabel(nights)}</p>}
+            <div className="full chips">
+              {[1, 2, 3, 4, 5, 7, 14].map((n) => (
+                <button type="button" key={n} className={`chip ${nights === n ? 'active' : ''}`} onClick={() => set('check_out', addDays(r.check_in, n))}>
+                  {nightsLabel(n)}
+                </button>
+              ))}
+            </div>
           </fieldset>
 
           <fieldset>
@@ -167,7 +165,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             <legend>Szczegóły</legend>
             <label>
               Źródło
-              <select value={r.source} disabled={imported} onChange={(e) => set('source', e.target.value)}>
+              <select value={r.source} onChange={(e) => set('source', e.target.value)}>
                 {Object.entries(SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
             </label>

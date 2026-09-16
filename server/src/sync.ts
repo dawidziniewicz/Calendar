@@ -15,11 +15,13 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
     if (!body.includes('BEGIN:VCALENDAR')) throw new Error('Odpowiedź nie jest plikiem iCal');
     const events = parseIcal(body);
 
-    const find = db.prepare('SELECT id, check_in, check_out, status, cancelled_at FROM reservations WHERE feed_id = ? AND external_uid = ?');
+    const find = db.prepare('SELECT id, check_in, check_out, status, cancelled_at, dates_locked FROM reservations WHERE feed_id = ? AND external_uid = ?');
     const insert = db.prepare(`INSERT INTO reservations (unit_id, check_in, check_out, source, feed_id, external_uid, external_summary)
       VALUES (?, ?, ?, ?, ?, ?, ?)`);
     // Rezerwacja wróciła do kalendarza Bookingu → przywracamy tylko, jeśli to synchronizacja ją anulowała.
-    const update = db.prepare(`UPDATE reservations SET check_in = ?, check_out = ?, external_summary = ?,
+    const update = db.prepare(`UPDATE reservations SET
+      check_in = CASE WHEN dates_locked = 1 THEN check_in ELSE ? END,
+      check_out = CASE WHEN dates_locked = 1 THEN check_out ELSE ? END, external_summary = ?,
       status = CASE WHEN cancelled_at IS NOT NULL THEN 'confirmed' ELSE status END,
       cancelled_at = NULL, cancel_reviewed = 0, updated_at = datetime('now') WHERE id = ?`);
 
@@ -31,7 +33,7 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
     try {
       const seen = new Set(events.map((e) => e.uid));
       for (const e of events) {
-        let row = find.get(feed.id, e.uid) as { id: number; check_in: string; check_out: string; status: string; cancelled_at: string | null } | undefined;
+        let row = find.get(feed.id, e.uid) as { id: number; check_in: string; check_out: string; status: string; cancelled_at: string | null; dates_locked: number } | undefined;
         if (!row) {
           const orphan = (byDates.all(feed.id, e.start, e.end) as { id: number; external_uid: string }[]).find((r) => !seen.has(r.external_uid));
           if (orphan) {
@@ -42,7 +44,7 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
         if (!row) {
           insert.run(feed.unit_id, e.start, e.end, feed.source, feed.id, e.uid, e.summary);
           result.added++;
-        } else if (row.check_in !== e.start || row.check_out !== e.end || row.cancelled_at) {
+        } else if ((!row.dates_locked && (row.check_in !== e.start || row.check_out !== e.end)) || row.cancelled_at) {
           update.run(e.start, e.end, e.summary, row.id);
           result.updated++;
         }

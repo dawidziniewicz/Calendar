@@ -23,6 +23,7 @@ export type Reservation = {
   notes: string;
   cancelled_at?: string | null;
   cancel_reviewed?: number;
+  dates_locked?: number;
 };
 
 export type Draft = Omit<Reservation, 'id' | 'feed_id' | 'external_uid' | 'external_summary'> & { id?: number; feed_id?: number | null; external_summary?: string | null };

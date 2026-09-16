@@ -19,6 +19,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 2) migrateV2(db);
   if (user_version < 3) migrateV3(db);
   if (user_version < 4) migrateV4(db);
+  if (user_version < 5) migrateV5(db);
+}
+
+// Daty rezerwacji z Bookingu zmienione ręcznie — synchronizacja ich nie nadpisuje.
+function migrateV5(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE reservations ADD COLUMN dates_locked INTEGER NOT NULL DEFAULT 0;
+    PRAGMA user_version = 5;
+    COMMIT;
+  `);
 }
 
 // Role: admin (pełny dostęp) i viewer (tylko podgląd).

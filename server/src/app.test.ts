@@ -99,7 +99,7 @@ test('synchronizacja dodaje, aktualizuje i anuluje, zachowując dane gościa', a
     assert.equal((await syncFeed(db, feed)).added, 2);
 
     const [a] = await (await call('GET', '/api/reservations?from=2030-08-01&to=2030-08-02')).json();
-    await call('PUT', `/api/reservations/${a.id}`, { ...a, guest_name: 'Anna Nowak', check_in: '2030-01-01' });
+    await call('PUT', `/api/reservations/${a.id}`, { ...a, guest_name: 'Anna Nowak' });
 
     feedBody = `BEGIN:VCALENDAR\n${ev('a', '20300802', '20300806')}END:VCALENDAR`;
     const r = await syncFeed(db, feed);
@@ -230,6 +230,44 @@ test('podmiana linku kalendarza nie dubluje rezerwacji (nawet gdy zmienią się 
     assert.equal(rows.length, 2);
     assert.equal(rows[0].guest_name, 'Stały Gość');
     assert.equal(rows[0].external_uid, 'new-1');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('rezerwację z Bookingu można edytować, a ręcznie zmienionych dat synchronizacja nie nadpisuje', async () => {
+  const { db, call, login } = setup();
+  await login();
+  const ev = (a: string, b: string) => `BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:bk\nDTSTART;VALUE=DATE:${a}\nDTEND;VALUE=DATE:${b}\nEND:VEVENT\nEND:VCALENDAR`;
+  let body = ev('20301201', '20301204');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch;
+  try {
+    await call('POST', '/api/feeds', { unit_id: 1, url: 'https://example.com/e.ics' });
+    const feed = { id: 1, unit_id: 1, source: 'booking', url: 'https://example.com/e.ics' };
+    await syncFeed(db, feed);
+    const [r] = await (await call('GET', '/api/reservations?from=2030-12-01&to=2030-12-02')).json();
+
+    // tylko dane gościa → daty dalej synchronizowane
+    await call('PUT', `/api/reservations/${r.id}`, { ...r, guest_name: 'Marta' });
+    body = ev('20301202', '20301205');
+    await syncFeed(db, feed);
+    let row = db.prepare('SELECT * FROM reservations WHERE id = ?').get(r.id) as Record<string, unknown>;
+    assert.deepEqual([row.check_in, row.dates_locked], ['2030-12-02', 0]);
+
+    // zmiana domku i dat
+    const res = await call('PUT', `/api/reservations/${r.id}`, { ...row, unit_id: 2, check_in: '2030-12-10', check_out: '2030-12-14' });
+    assert.equal(res.status, 200);
+    body = ev('20301203', '20301206');
+    await syncFeed(db, feed);
+    row = db.prepare('SELECT * FROM reservations WHERE id = ?').get(r.id) as Record<string, unknown>;
+    assert.deepEqual([row.unit_id, row.check_in, row.check_out, row.guest_name, row.dates_locked], [2, '2030-12-10', '2030-12-14', 'Marta', 1]);
+
+    // anulowanie na Bookingu dalej wykrywane
+    body = 'BEGIN:VCALENDAR\nEND:VCALENDAR';
+    await syncFeed(db, feed);
+    row = db.prepare('SELECT * FROM reservations WHERE id = ?').get(r.id) as Record<string, unknown>;
+    assert.equal(row.status, 'cancelled');
   } finally {
     globalThis.fetch = realFetch;
   }

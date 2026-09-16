@@ -76,6 +76,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               <h3 className="view-name">{r.guest_name || <em>{SOURCES[r.source] ?? r.source}</em>}</h3>
               <div className="muted">{unit?.name} · {property?.name}</div>
               {r.external_summary && <div className="muted small-summary">Booking: „{r.external_summary}”</div>}
+              {r.feed_id && r.dates_locked ? <div className="muted small-summary">Daty zmienione ręcznie — synchronizacja ich nie nadpisuje</div> : null}
               <div className="view-tags">
                 <span className={`tag src-tag-${r.source}`}>{SOURCES[r.source] ?? r.source}</span>
                 {r.status !== 'confirmed' && <span className={`tag st-tag-${r.status}`}>{STATUS_LABELS[r.status]}</span>}

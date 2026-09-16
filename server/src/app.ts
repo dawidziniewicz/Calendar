@@ -268,19 +268,15 @@ export function createApp(db: DatabaseSync, apiKey: string) {
     if (!existing) return c.json({ error: 'Nie znaleziono' }, 404);
     const b = await c.req.json();
     const r = readReservation(b);
-    // Terminy i obiekt rezerwacji z Bookingu są zarządzane przez synchronizację.
-    if (existing.feed_id) {
-      r.unit_id = existing.unit_id as number;
-      r.check_in = existing.check_in as string;
-      r.check_out = existing.check_out as string;
-      r.source = existing.source as string;
-    }
+    // Rezerwację z Bookingu można edytować w całości. Ręczna zmiana dat blokuje ich nadpisywanie przez synchronizację.
+    const datesChanged = r.check_in !== existing.check_in || r.check_out !== existing.check_out;
+    const datesLocked = existing.feed_id && datesChanged ? 1 : (existing.dates_locked as number);
     const found = conflicts(r, id);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     run(`UPDATE reservations SET unit_id = ?, check_in = ?, check_out = ?, status = ?, source = ?, guest_name = ?, guest_phone = ?,
-      guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, updated_at = datetime('now') WHERE id = ?`,
+      guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, updated_at = datetime('now') WHERE id = ?`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes, id);
+      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, id);
     return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
   });
 
