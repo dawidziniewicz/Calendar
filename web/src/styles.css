@@ -258,7 +258,9 @@ fieldset p { margin: 0; font-size: 0.85rem; }
   }
   .content-settings ~ .tabs-mobile .fab { display: none; }
   .sheet-backdrop { padding: 0; align-items: flex-end; }
-  .sheet { max-width: none; height: calc(100dvh - env(safe-area-inset-top) - 10px); border-radius: 16px 16px 0 0; }
+  .sheet { max-width: none; height: calc(100dvh - env(safe-area-inset-top) - 20px); border-radius: 16px 16px 0 0; }
+  .sheet-head { min-height: 54px; padding: 10px 14px; }
+  .sheet-head .link { padding: 10px 6px; }
   .settings-footer { flex-direction: column; }
 }
 
