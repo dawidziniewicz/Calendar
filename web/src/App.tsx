@@ -1,0 +1,119 @@
+import { useCallback, useEffect, useState } from 'react';
+import { api } from './api';
+import type { Draft, Property, Reservation } from './types';
+import { addDays, today } from './dates';
+import Timeline from './components/Timeline';
+import Agenda from './components/Agenda';
+import Settings from './components/Settings';
+import ReservationSheet from './components/ReservationSheet';
+
+type Tab = 'calendar' | 'agenda' | 'settings';
+
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: 'calendar', label: 'Kalendarz', icon: 'M4 6h16M4 6v13a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V6M4 6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1M8 3v4m8-4v4M4 10h16' },
+  { id: 'agenda', label: 'Przyjazdy', icon: 'M5 12h14m-6-6 6 6-6 6' },
+  { id: 'settings', label: 'Obiekty', icon: 'M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6' },
+];
+
+export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
+  unit_id: unitId,
+  check_in: checkIn,
+  check_out: addDays(checkIn, 2),
+  status: 'confirmed',
+  source: 'direct',
+  guest_name: '',
+  guest_phone: '',
+  guest_email: '',
+  adults: 2,
+  children: 0,
+  price: null,
+  paid: null,
+  notes: '',
+});
+
+export default function App() {
+  const [tab, setTab] = useState<Tab>(() => (sessionStorageGet('tab') as Tab) || 'calendar');
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState<Draft | null>(null);
+  const [version, setVersion] = useState(0); // podbijane po zapisie — widoki przeładowują rezerwacje
+
+  const loadProperties = useCallback(() => {
+    api.properties().then((p) => { setProperties(p); setError(''); }).catch((e) => setError(e.message));
+  }, []);
+
+  useEffect(loadProperties, [loadProperties]);
+
+  // Po powrocie do aplikacji na telefonie odśwież dane.
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') setVersion((v) => v + 1); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
+  const selectTab = (t: Tab) => {
+    setTab(t);
+    try { sessionStorage.setItem('tab', t); } catch { /* prywatny tryb */ }
+  };
+
+  const units = properties.flatMap((p) => p.units);
+  const openNew = (unitId?: number, date?: string) => {
+    if (!units.length) return;
+    setEditing(emptyDraft(unitId ?? units[0].id, date ?? today()));
+  };
+  const openExisting = (r: Reservation) => setEditing({ ...r });
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <img src="/icons/icon-192.png" alt="" width={28} height={28} />
+          <span>Od Morza Do Gór</span>
+        </div>
+        <nav className="tabs-desktop">
+          {TABS.map((t) => (
+            <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>{t.label}</button>
+          ))}
+        </nav>
+        <button className="btn primary add-btn" onClick={() => openNew()} disabled={!units.length}>
+          <span aria-hidden>＋</span> Rezerwacja
+        </button>
+      </header>
+
+      {error && (
+        <div className="banner error">
+          {error} <button className="link" onClick={loadProperties}>Spróbuj ponownie</button>
+        </div>
+      )}
+
+      <main className={`content content-${tab}`}>
+        {tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={openNew} />}
+        {tab === 'agenda' && <Agenda properties={properties} version={version} onSelect={openExisting} />}
+        {tab === 'settings' && <Settings properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+      </main>
+
+      <nav className="tabs-mobile">
+        {TABS.map((t) => (
+          <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={t.icon} /></svg>
+            <span>{t.label}</span>
+          </button>
+        ))}
+        <button className="fab" onClick={() => openNew()} disabled={!units.length} aria-label="Nowa rezerwacja">＋</button>
+      </nav>
+
+      {editing && (
+        <ReservationSheet
+          draft={editing}
+          properties={properties}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); setVersion((v) => v + 1); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function sessionStorageGet(key: string) {
+  try { return sessionStorage.getItem(key); } catch { return null; }
+}

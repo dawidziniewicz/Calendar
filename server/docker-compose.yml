@@ -1,0 +1,23 @@
+# Uruchamiane na domowym serwerze: docker compose up -d
+services:
+  api:
+    image: ghcr.io/dawidziniewicz/calendar-server:latest
+    # Do lokalnego budowania zamiast pobierania z GHCR: zakomentuj "image" i odkomentuj "build"
+    # build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /data/kalendarz.sqlite
+      PORT: "8787"
+    volumes:
+      - ./data:/data
+
+  # Bezpieczny tunel do Cloudflare — nie trzeba otwierać portów na routerze.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      - api
