@@ -112,8 +112,11 @@ h4 { margin: 18px 0 6px; font-size: 0.9rem; }
 .tl-corner-2 { top: 28px; height: 44px; border-bottom: 1px solid var(--line); }
 .tl-months, .tl-days { display: grid; grid-template-columns: repeat(var(--days), var(--day-w)); position: sticky; z-index: 10; background: var(--surface); }
 .tl-months { top: 0; height: 28px; }
-.tl-months > div { border-left: 1px solid var(--line); font-size: 0.78rem; font-weight: 650; text-transform: capitalize; padding: 6px 8px; overflow: hidden; white-space: nowrap; }
-.tl-months > div span { position: sticky; left: calc(var(--label-w) + 8px); }
+.tl-months > div { border-left: 1px solid var(--line); font-size: 0.78rem; font-weight: 650; text-transform: capitalize; padding: 6px 8px; white-space: nowrap; }
+/* Nazwa miesiąca przykleja się do lewej krawędzi podczas przewijania i odjeżdża dopiero z końcem miesiąca.
+   overflow: clip (a nie hidden) — hidden tworzy własny kontener przewijania i psuje przyklejanie. */
+.tl-months > div { overflow: clip; }
+.tl-months > div span { position: sticky; left: calc(var(--label-w) + 8px); display: inline-block; }
 .tl-days { top: 28px; height: 44px; border-bottom: 1px solid var(--line); }
 .tl-day { display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; border-left: 1px solid var(--line); }
 .tl-day small { font-size: 0.66rem; color: var(--muted); text-transform: lowercase; }
