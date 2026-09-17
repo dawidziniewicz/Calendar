@@ -9,6 +9,7 @@
   --primary-ink: #ffffff;
   --accent: #d97742;
   --danger: #b3261e;
+  --weekend-ink: #c62828;
   --weekend: rgba(217, 119, 66, 0.07);
   --today: rgba(31, 95, 85, 0.12);
   --src-direct: #1f5f55;
@@ -36,6 +37,7 @@
     --primary-ink: #0b1311;
     --weekend: rgba(217, 119, 66, 0.08);
     --today: rgba(79, 168, 148, 0.16);
+    --weekend-ink: #ff7a7a;
     --src-direct: #2f8a78;
     --src-booking: #3b6fc4;
     --src-airbnb: #cc4f68;
@@ -122,6 +124,7 @@ h4 { margin: 18px 0 6px; font-size: 0.9rem; }
 .tl-day small { font-size: 0.66rem; color: var(--muted); text-transform: lowercase; }
 .tl-day b { font-size: 0.9rem; font-weight: 600; }
 .tl-day.weekend { background: var(--weekend); }
+.tl-day.weekend:not(.today) b { color: var(--weekend-ink); }
 .tl-day.today b { background: var(--primary); color: var(--primary-ink); border-radius: 999px; min-width: 24px; text-align: center; padding: 1px 4px; }
 
 .tl-property { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 700; padding: 12px 10px 4px; background: var(--surface-2); border-right-color: transparent; white-space: nowrap; overflow: visible; }
