@@ -3,6 +3,7 @@ import { api, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
 import Notifications from './Notifications';
+import CalendarPrefs from './CalendarPrefs';
 
 type Props = { user: string; readOnly: boolean; onLogout: () => void; properties: Property[]; reload: () => void };
 
@@ -43,6 +44,7 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
     return (
       <section className="settings">
         <div className="panel"><p className="muted" style={{ margin: 0 }}>To konto ma dostęp tylko do podglądu rezerwacji.</p></div>
+        <CalendarPrefs />
         <Notifications />
         <AccountPanel user={user} onLogout={onLogout} />
       </section>
@@ -77,6 +79,7 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
 
       <button className="add-property" onClick={addProperty}>＋ Dodaj obiekt</button>
 
+      <CalendarPrefs />
       <Notifications />
       <AccountPanel user={user} onLogout={onLogout} />
     </section>

@@ -329,3 +329,12 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .notif-desc { margin: -4px 0 10px; font-size: 0.9rem; }
 .notif-time { margin: 0 0 12px; }
 .row > label.narrow-time { flex: 0 0 170px; min-width: 150px; }
+
+/* ---- Szerokość dni w kalendarzu (Ustawienia) ---- */
+.timeline.size-compact { --day-w: 30px; }
+.timeline.size-large { --day-w: 54px; }
+.timeline.size-compact .tl-day small { font-size: 0.58rem; }
+.timeline.size-compact .tl-bar { font-size: 0.72rem; padding: 0 5px; }
+.segmented { display: flex; gap: 6px; flex-wrap: wrap; }
+.prefs-field { margin-bottom: 12px; }
+.prefs-field > span { display: block; font-size: 0.8rem; color: var(--muted); font-weight: 550; margin-bottom: 6px; }

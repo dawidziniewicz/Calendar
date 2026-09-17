@@ -10,6 +10,14 @@ export function addDays(iso: string, n: number) {
   return toIso(d);
 }
 
+export function addMonths(iso: string, n: number) {
+  const d = fromIso(iso);
+  d.setMonth(d.getMonth() + n);
+  return toIso(d);
+}
+
+export const monthsLabel = (n: number) => (n === 1 ? '1 miesiąc' : n >= 2 && n <= 4 ? `${n} miesiące` : `${n} miesięcy`);
+
 export const diffDays = (from: string, to: string) => Math.round((fromIso(to).getTime() - fromIso(from).getTime()) / 86_400_000);
 
 const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('pl-PL', opts);

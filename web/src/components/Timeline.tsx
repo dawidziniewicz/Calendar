@@ -2,7 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Property, Reservation } from '../types';
 import { SOURCES } from '../types';
-import { addDays, diffDays, formatMonth, formatShort, formatWeekday, fromIso, isWeekend, today } from '../dates';
+import { getPrefs } from '../prefs';
+import { addDays, addMonths, diffDays, formatMonth, formatShort, formatWeekday, fromIso, isWeekend, today } from '../dates';
 
 type Props = {
   properties: Property[];
@@ -11,19 +12,20 @@ type Props = {
   onCreate?: (unitId: number, date: string) => void; // brak = tylko podgląd
 };
 
-const DAYS = 42;
-
 export function reservationLabel(r: Reservation) {
   if (r.guest_name) return r.guest_name;
   return SOURCES[r.source] ?? r.source;
 }
 
 export default function Timeline({ properties, version, onSelect, onCreate }: Props) {
+  const [{ months: rangeMonths, daySize }] = useState(getPrefs);
   const [start, setStart] = useState(() => addDays(today(), -2));
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const end = addDays(start, DAYS);
+  const end = addMonths(start, rangeMonths);
+  const DAYS = diffDays(start, end);
+  const step = rangeMonths === 1 ? 7 : rangeMonths <= 3 ? 14 : 30; // o ile dni przesuwają strzałki
   const now = today();
 
   useEffect(() => {
@@ -36,7 +38,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
     return () => { alive = false; };
   }, [start, end, version]);
 
-  const days = useMemo(() => Array.from({ length: DAYS }, (_, i) => addDays(start, i)), [start]);
+  const days = useMemo(() => Array.from({ length: DAYS }, (_, i) => addDays(start, i)), [start, DAYS]);
   const months = useMemo(() => {
     const out: { label: string; span: number }[] = [];
     for (const d of days) {
@@ -71,9 +73,9 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
     <section className="timeline-wrap">
       <div className="toolbar">
         <div className="toolbar-nav">
-          <button className="btn" onClick={() => setStart(addDays(start, -14))} aria-label="Wcześniej">‹</button>
+          <button className="btn" onClick={() => setStart(addDays(start, -step))} aria-label="Wcześniej">‹</button>
           <button className="btn" onClick={() => setStart(addDays(now, -2))}>Dziś</button>
-          <button className="btn" onClick={() => setStart(addDays(start, 14))} aria-label="Później">›</button>
+          <button className="btn" onClick={() => setStart(addDays(start, step))} aria-label="Później">›</button>
           <input
             type="date"
             className="date-jump"
@@ -90,7 +92,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
       </div>
       {error && <div className="banner error">{error}</div>}
 
-      <div className="timeline" style={{ ['--days' as string]: DAYS }}>
+      <div className={`timeline size-${daySize}`} style={{ ['--days' as string]: DAYS }}>
         <div className="tl-grid">
           <div className="tl-corner" />
           <div className="tl-months">
