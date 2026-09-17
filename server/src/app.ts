@@ -11,6 +11,7 @@ import {
 import { buildIcal } from './ical.ts';
 import { TIME_RE, arrivalMessages, saveSubscription, sendToSubscriptions, vapidKeys, warsawDate, warsawTime, type Sender } from './push.ts';
 import { syncAll } from './sync.ts';
+import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = ['confirmed', 'tentative', 'cancelled'];
@@ -58,6 +59,11 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   });
 
   const api = new Hono<{ Variables: { user: User } }>();
+
+  // Powiadomienia o zmianach wysyłamy w tle — odpowiedź nie czeka na serwery Apple/Google.
+  const notify = (events: ChangeEvent[], excludeUserId: number | null) => {
+    announce(db, pushSender, events, excludeUserId).catch((err) => console.error('Powiadomienie o zmianie nie powiodło się', err));
+  };
   // Klucz API dodaje proxy w Cloudflare Pages — bez niego serwer nie odpowiada nikomu.
   api.use('*', async (c, next) => {
     if (!safeEqual(c.req.header('x-api-key') ?? '', apiKey)) return c.json({ error: 'Brak autoryzacji serwera' }, 403);
@@ -120,19 +126,24 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   // ---- Powiadomienia push (dostępne też dla kont podglądu) ----
   api.get('/push/public-key', (c) => c.json({ publicKey: vapidKeys(db).publicKey }));
 
-  api.get('/push/settings', (c) => {
-    const row = get('SELECT notify_time FROM users WHERE id = ?', c.get('user').id) as { notify_time: string };
-    return c.json({ time: row.notify_time });
-  });
+  const pushSettings = (userId: number) => {
+    const row = get('SELECT notify_time, notify_changes FROM users WHERE id = ?', userId) as { notify_time: string; notify_changes: number };
+    return { time: row.notify_time, changes: row.notify_changes === 1 };
+  };
+
+  api.get('/push/settings', (c) => c.json(pushSettings(c.get('user').id)));
 
   api.put('/push/settings', async (c) => {
     const b = await c.req.json();
-    if (typeof b.time !== 'string' || !TIME_RE.test(b.time)) bad('Podaj godzinę w formacie GG:MM');
     const user = c.get('user');
-    // Nowa godzina jeszcze dziś w przyszłości → powiadomienie przyjdzie dziś (także gdy dziś już było wysłane).
-    if (b.time > warsawTime()) run('UPDATE users SET notified_on = NULL WHERE id = ?', user.id);
-    run('UPDATE users SET notify_time = ? WHERE id = ?', b.time, user.id);
-    return c.json({ time: b.time });
+    if (b.time !== undefined) {
+      if (typeof b.time !== 'string' || !TIME_RE.test(b.time)) bad('Podaj godzinę w formacie GG:MM');
+      // Nowa godzina jeszcze dziś w przyszłości → powiadomienie przyjdzie dziś (także gdy dziś już było wysłane).
+      if (b.time > warsawTime()) run('UPDATE users SET notified_on = NULL WHERE id = ?', user.id);
+      run('UPDATE users SET notify_time = ? WHERE id = ?', b.time, user.id);
+    }
+    if (b.changes !== undefined) run('UPDATE users SET notify_changes = ? WHERE id = ?', b.changes ? 1 : 0, user.id);
+    return c.json(pushSettings(user.id));
   });
 
   api.post('/push/subscribe', async (c) => {
@@ -251,7 +262,11 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     return c.json({ ok: true });
   });
 
-  api.post('/sync', async (c) => c.json(await syncAll(db)));
+  api.post('/sync', async (c) => {
+    const results = await syncAll(db);
+    notify(syncEvents(db, results.flatMap((r) => r.changes)), null);
+    return c.json(results);
+  });
 
   // ---- Rezerwacje ----
   api.get('/reservations/:id{[0-9]+}', (c) => {
@@ -310,7 +325,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
       adults, children, price, paid, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
       r.adults, r.children, r.price, r.paid, r.notes);
-    return c.json(get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid), 201);
+    const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
+    notify([{ kind: 'created', row: created, by: c.get('user').username }], c.get('user').id);
+    return c.json(created, 201);
   });
 
   api.put('/reservations/:id', async (c) => {
@@ -328,7 +345,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
       guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, updated_at = datetime('now') WHERE id = ?`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
       r.adults, r.children, r.price, r.paid, r.notes, datesLocked, id);
-    return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
+    const updated = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown>;
+    notify([{ kind: 'updated', before: existing, after: updated, by: c.get('user').username }], c.get('user').id);
+    return c.json(updated);
   });
 
   // ---- Odwołane na Bookingu: do przejrzenia / zamiany na bezpośrednią ----
@@ -354,7 +373,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     run(`UPDATE reservations SET feed_id = NULL, external_uid = NULL, source = 'direct', status = 'confirmed',
       cancelled_at = NULL, cancel_reviewed = 0, notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END,
       updated_at = datetime('now') WHERE id = ?`, note, note, id);
-    return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
+    const converted = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown>;
+    notify([{ kind: 'converted', row: converted, by: c.get('user').username }], c.get('user').id);
+    return c.json(converted);
   });
 
   api.post('/reservations/:id/review-cancellation', (c) => {
@@ -365,7 +386,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   });
 
   api.delete('/reservations/:id', (c) => {
+    const row = get('SELECT * FROM reservations WHERE id = ?', int(c.req.param('id'))) as Record<string, unknown> | undefined;
     run('DELETE FROM reservations WHERE id = ?', c.req.param('id'));
+    if (row) notify([{ kind: 'deleted', row, by: c.get('user').username }], c.get('user').id);
     return c.json({ ok: true });
   });
 

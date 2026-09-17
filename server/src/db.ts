@@ -22,6 +22,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 5) migrateV5(db);
   if (user_version < 6) migrateV6(db);
   if (user_version < 7) migrateV7(db);
+  if (user_version < 8) migrateV8(db);
+}
+
+// Powiadomienia o zmianach w rezerwacjach (włączone domyślnie, każdy może wyłączyć).
+function migrateV8(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE users ADD COLUMN notify_changes INTEGER NOT NULL DEFAULT 1;
+    PRAGMA user_version = 8;
+    COMMIT;
+  `);
 }
 
 // Każdy użytkownik ustawia własną godzinę powiadomienia o przyjazdach.

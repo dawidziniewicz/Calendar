@@ -1,13 +1,18 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { parseIcal } from './ical.ts';
+import type { SyncChange } from './changes.ts';
 
-type Feed = { id: number; unit_id: number; source: string; url: string };
-export type SyncResult = { feedId: number; unitId: number; ok: boolean; added: number; updated: number; cancelled: number; error?: string };
+type Feed = { id: number; unit_id: number; source: string; url: string; last_sync_at?: string | null };
+export type SyncResult = {
+  feedId: number; unitId: number; ok: boolean; added: number; updated: number; cancelled: number; error?: string;
+  changes: SyncChange[]; // do powiadomień; puste przy pierwszej synchronizacji kalendarza
+};
 
 const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
 
 export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult> {
-  const result: SyncResult = { feedId: feed.id, unitId: feed.unit_id, ok: false, added: 0, updated: 0, cancelled: 0 };
+  const result: SyncResult = { feedId: feed.id, unitId: feed.unit_id, ok: false, added: 0, updated: 0, cancelled: 0, changes: [] };
+  const changes: SyncChange[] = [];
   try {
     const res = await fetch(feed.url, { signal: AbortSignal.timeout(20_000), headers: { 'User-Agent': 'kalendarz-odmorzadogor/1.0' } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -42,10 +47,12 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
           }
         }
         if (!row) {
-          insert.run(feed.unit_id, e.start, e.end, feed.source, feed.id, e.uid, e.summary);
+          const { lastInsertRowid } = insert.run(feed.unit_id, e.start, e.end, feed.source, feed.id, e.uid, e.summary);
+          changes.push({ kind: 'added', id: Number(lastInsertRowid) });
           result.added++;
         } else if ((!row.dates_locked && (row.check_in !== e.start || row.check_out !== e.end)) || row.cancelled_at) {
           update.run(e.start, e.end, e.summary, row.id);
+          changes.push(row.cancelled_at ? { kind: 'restored', id: row.id } : { kind: 'moved', id: row.id, oldIn: row.check_in, oldOut: row.check_out });
           result.updated++;
         }
       }
@@ -55,7 +62,7 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
       const cancel = db.prepare(`UPDATE reservations SET status = 'cancelled', cancelled_at = datetime('now'), cancel_reviewed = 0,
         updated_at = datetime('now') WHERE id = ?`);
       for (const r of active) {
-        if (!seen.has(r.external_uid)) { cancel.run(r.id); result.cancelled++; }
+        if (!seen.has(r.external_uid)) { cancel.run(r.id); changes.push({ kind: 'cancelled', id: r.id }); result.cancelled++; }
       }
       db.prepare(`UPDATE feeds SET last_sync_at = datetime('now'), last_error = NULL WHERE id = ?`).run(feed.id);
       db.exec('COMMIT');
@@ -64,6 +71,8 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
       throw err;
     }
     result.ok = true;
+    // Pierwsze pobranie kalendarza wczytuje wszystkie istniejące rezerwacje — bez zasypywania powiadomieniami.
+    if (feed.last_sync_at) result.changes = changes;
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
     db.prepare(`UPDATE feeds SET last_sync_at = datetime('now'), last_error = ? WHERE id = ?`).run(result.error, feed.id);
@@ -72,7 +81,7 @@ export async function syncFeed(db: DatabaseSync, feed: Feed): Promise<SyncResult
 }
 
 export async function syncAll(db: DatabaseSync): Promise<SyncResult[]> {
-  const feeds = db.prepare('SELECT id, unit_id, source, url FROM feeds').all() as Feed[];
+  const feeds = db.prepare('SELECT id, unit_id, source, url, last_sync_at FROM feeds').all() as Feed[];
   const results: SyncResult[] = [];
   for (const f of feeds) results.push(await syncFeed(db, f));
   return results;

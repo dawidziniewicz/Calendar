@@ -198,6 +198,11 @@ Codziennie o wybranej godzinie (domyślnie **9:00**, czas polski) serwer wysyła
 2. *Ustawienia i obiekty* (lub *Konto*) → **Powiadomienia** → **Włącz powiadomienia** → *Zezwól*.
 3. **Wyślij test** – sprawdza, czy powiadomienie dochodzi.
 
+**Zmiany w rezerwacjach** (przełącznik w tym samym panelu, domyślnie włączony):
+- gdy ktoś doda, zmieni lub usunie rezerwację — powiadomienie dostają **pozostali** użytkownicy (z opisem, co zmieniono i kto),
+- nowa rezerwacja, zmiana terminu, odwołanie lub przywrócenie na Booking.com — dostają wszyscy,
+- pierwsze pobranie nowo podłączonego kalendarza nie wysyła powiadomień; więcej niż 5 zmian naraz → jedno zbiorcze.
+
 Każda osoba włącza je na swoim telefonie i sama ustawia godzinę w tym samym panelu (**Godzina powiadomienia** → *Zapisz godzinę*).
 Klucze do powiadomień serwer generuje sam przy pierwszym uruchomieniu (zapisane w bazie).
 

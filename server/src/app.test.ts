@@ -6,6 +6,7 @@ import { createApp } from './app.ts';
 import { parseIcal } from './ical.ts';
 import { syncFeed } from './sync.ts';
 import { dailyArrivalsTick, saveSubscription, type Sender } from './push.ts';
+import { announce, syncEvents } from './changes.ts';
 
 const KEY = 'test-key-1234567890';
 
@@ -289,7 +290,7 @@ test('powiadomienia o przyjazdach: osobne na każdy przyjazd, o godzinie każdeg
   saveSubscription(db, 2, { endpoint: 'https://push.example/jozek', keys });
 
   // ustawienia godziny
-  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00' });
+  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00', changes: true });
   assert.equal((await call('PUT', '/api/push/settings', { time: '25:00' })).status, 400);
   assert.equal((await call('PUT', '/api/push/settings', { time: '10:15' })).status, 200);
 
@@ -324,4 +325,106 @@ test('powiadomienia o przyjazdach: osobne na każdy przyjazd, o godzinie każdeg
   // 11:00: Dawid (10:15) nadrabia, Józek (7:30) — minęło ponad 3 godziny, więc już nie
   assert.equal(await dailyArrivalsTick(db, send, at('2030-07-03T09:00:00Z')), 1);
   assert.deepEqual(sent.map((s) => s.endpoint), ['https://push.example/dawid']);
+});
+
+function setupWithPush() {
+  const db = openDb(':memory:');
+  const sent: { endpoint: string; msg: { title: string; body: string; url: string } }[] = [];
+  const send: Sender = async (sub, payload) => { sent.push({ endpoint: sub.endpoint, msg: JSON.parse(payload) }); };
+  const app = createApp(db, KEY, send);
+  const hash = hashPassword('haslo-12345');
+  for (const name of ['dawid', 'jozek', 'jan']) db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(name, hash);
+  const keys = { p256dh: 'p', auth: 'a' };
+  saveSubscription(db, 1, { endpoint: 'https://push.example/dawid', keys });
+  saveSubscription(db, 2, { endpoint: 'https://push.example/jozek', keys });
+  saveSubscription(db, 3, { endpoint: 'https://push.example/jan', keys });
+  const session = (username: string) => {
+    let cookie = '';
+    return async (method: string, path: string, body?: unknown) => {
+      const res = await app.request(path, { method, headers: { 'x-api-key': KEY, 'content-type': 'application/json', cookie }, body: body ? JSON.stringify(body) : undefined });
+      const set = res.headers.get('set-cookie');
+      if (set) cookie = set.split(';')[0];
+      return res;
+    };
+  };
+  const loginAs = async (username: string) => {
+    const call = session(username);
+    await call('POST', '/api/auth/login', { username, password: 'haslo-12345' });
+    return call;
+  };
+  const flush = () => new Promise((r) => setTimeout(r, 10));
+  return { db, sent, send, loginAs, flush };
+}
+
+test('powiadomienia o zmianach: inni użytkownicy dostają info o dodaniu, zmianie i usunięciu', async () => {
+  const { sent, loginAs, flush } = setupWithPush();
+  const dawid = await loginAs('dawid');
+  const jan = await loginAs('jan');
+  await jan('PUT', '/api/push/settings', { changes: false }); // Jan wyłączył powiadomienia o zmianach
+  const to = () => [...new Set(sent.map((s) => s.endpoint.split('/').pop()))];
+
+  const r = await (await dawid('POST', '/api/reservations', { unit_id: 1, check_in: '2030-08-10', check_out: '2030-08-13', guest_name: 'Ewa', adults: 2 })).json();
+  await flush();
+  assert.deepEqual(to(), ['jozek']); // nie autor, nie Jan
+  assert.equal(sent[0].msg.title, 'Nowa rezerwacja · Mały domek 1 · Osada Jantar');
+  assert.equal(sent[0].msg.body, 'Ewa · 10–13 sie (3 noce) · dodane przez dawid');
+  assert.equal(sent[0].msg.url, `/?reservation=${r.id}`);
+
+  const jozek = await loginAs('jozek');
+  sent.length = 0;
+  await jozek('PUT', `/api/reservations/${r.id}`, { ...r, check_in: '2030-08-30', check_out: '2030-09-02', paid: 500 });
+  await flush();
+  assert.deepEqual(to(), ['dawid']);
+  assert.equal(sent[0].msg.title, 'Zmiana rezerwacji · Mały domek 1 · Osada Jantar');
+  assert.equal(sent[0].msg.body, 'Ewa · 30 sie – 2 wrz\nZmieniono: daty (było: 10–13 sie), wpłata · jozek');
+
+  // zapis bez zmian → bez powiadomienia
+  sent.length = 0;
+  const same = await (await jozek('GET', `/api/reservations/${r.id}`)).json();
+  await jozek('PUT', `/api/reservations/${r.id}`, same);
+  await flush();
+  assert.equal(sent.length, 0);
+
+  await dawid('DELETE', `/api/reservations/${r.id}`);
+  await flush();
+  assert.equal(sent[0].msg.title, 'Usunięta rezerwacja · Mały domek 1 · Osada Jantar');
+  assert.deepEqual(to(), ['jozek']);
+});
+
+test('powiadomienia o zmianach z Bookingu: nie przy pierwszym pobraniu; nowe, zmiana terminu, odwołanie; zbiorcze przy wielu', async () => {
+  const { db, sent, send, loginAs, flush } = setupWithPush();
+  const dawid = await loginAs('dawid');
+  await dawid('POST', '/api/feeds', { unit_id: 6, url: 'https://example.com/s.ics' });
+  const ev = (uid: string, a: string, b: string) => `BEGIN:VEVENT\nUID:${uid}\nDTSTART;VALUE=DATE:${a}\nDTEND;VALUE=DATE:${b}\nEND:VEVENT\n`;
+  let body = `BEGIN:VCALENDAR\n${ev('a', '20300901', '20300904')}END:VCALENDAR`;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(body)) as typeof fetch;
+  const feed = () => db.prepare('SELECT id, unit_id, source, url, last_sync_at FROM feeds WHERE id = 1').get() as Parameters<typeof syncFeed>[1];
+  const runSync = async () => { const r = await syncFeed(db, feed()); await announce(db, send, syncEvents(db, r.changes), null); };
+  try {
+    await runSync(); // pierwsze pobranie
+    assert.equal(sent.length, 0);
+
+    body = `BEGIN:VCALENDAR\n${ev('a', '20300902', '20300905')}${ev('b', '20300910', '20300912')}END:VCALENDAR`;
+    await runSync();
+    const titles = sent.filter((s) => s.endpoint.endsWith('dawid')).map((s) => s.msg.title);
+    assert.deepEqual(titles.sort(), ['Booking.com: zmiana terminu · Sopot Holiday Sauna · Apartament Sopot', 'Nowa rezerwacja z Booking.com · Sopot Holiday Sauna · Apartament Sopot']);
+    assert.equal(sent.find((s) => s.msg.title.startsWith('Booking.com: zmiana'))!.msg.body, 'Gość z Booking.com · teraz 2–5 wrz (było: 1–4 wrz)');
+    assert.equal(new Set(sent.map((s) => s.endpoint)).size, 3); // zmiany z Bookingu → wszyscy
+
+    sent.length = 0;
+    body = `BEGIN:VCALENDAR\n${ev('a', '20300902', '20300905')}END:VCALENDAR`;
+    await runSync();
+    assert.equal(sent[0].msg.title, 'Odwołana na Booking.com · Sopot Holiday Sauna · Apartament Sopot');
+
+    sent.length = 0;
+    body = 'BEGIN:VCALENDAR\n' + Array.from({ length: 7 }, (_, i) => ev(`m${i}`, `203010${10 + i * 3}`, `203010${11 + i * 3}`)).join('') + 'END:VCALENDAR';
+    await runSync();
+    const forDawid = sent.filter((s) => s.endpoint.endsWith('dawid'));
+    assert.equal(forDawid.length, 1);
+    assert.match(forDawid[0].msg.title, /^Zmiany w rezerwacjach: 8$/); // 7 nowych + odwołanie „a”
+    await flush();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

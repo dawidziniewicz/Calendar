@@ -5,6 +5,7 @@ import { openDb } from './db.ts';
 import { createApp } from './app.ts';
 import { syncAll } from './sync.ts';
 import { dailyArrivalsTick, webPushSender } from './push.ts';
+import { announce, syncEvents } from './changes.ts';
 
 const apiKey = process.env.API_KEY ?? '';
 if (apiKey.length < 16) {
@@ -27,6 +28,7 @@ async function runSync() {
     const failed = results.filter((r) => !r.ok);
     if (results.length) console.log(`Synchronizacja: ${results.length} kalendarzy, błędy: ${failed.length}`);
     for (const f of failed) console.warn(`  kalendarz #${f.feedId}: ${f.error}`);
+    await announce(db, pushSender, syncEvents(db, results.flatMap((r) => r.changes)), null);
   } catch (err) {
     console.error('Synchronizacja nie powiodła się', err);
   }

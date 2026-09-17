@@ -21,9 +21,10 @@ export default function Notifications() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [time, setTime] = useState('09:00');
   const [savedTime, setSavedTime] = useState('09:00');
+  const [changes, setChanges] = useState(true);
 
   useEffect(() => {
-    api.pushSettings().then((s) => { setTime(s.time); setSavedTime(s.time); }).catch(() => {});
+    api.pushSettings().then((s) => { setTime(s.time); setSavedTime(s.time); setChanges(s.changes); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -75,9 +76,15 @@ export default function Notifications() {
   });
 
   const saveTime = () => run(async () => {
-    const res = await api.savePushSettings(time);
+    const res = await api.savePushSettings({ time });
     setSavedTime(res.time);
     setMsg({ ok: true, text: `Zapisano — powiadomienie będzie przychodzić codziennie o ${res.time}.` });
+  });
+
+  const toggleChanges = (value: boolean) => run(async () => {
+    setChanges(value);
+    const res = await api.savePushSettings({ changes: value });
+    setChanges(res.changes);
   });
 
   const test = () => run(async () => {
@@ -88,7 +95,10 @@ export default function Notifications() {
   return (
     <div className="panel">
       <h2>Powiadomienia</h2>
-      <p className="muted notif-desc">Codziennie o {savedTime} osobne powiadomienie o każdym dzisiejszym przyjeździe.</p>
+      <p className="muted notif-desc">
+        Codziennie o {savedTime} osobne powiadomienie o każdym dzisiejszym przyjeździe.
+        {changes && ' Do tego powiadomienia o nowych, zmienionych i odwołanych rezerwacjach (z Bookingu i od innych osób).'}
+      </p>
 
       {state !== 'unsupported' && (
         <div className="row notif-time">
@@ -98,6 +108,16 @@ export default function Notifications() {
           </label>
           {time !== savedTime && <button className="btn primary small" disabled={busy} onClick={saveTime}>Zapisz godzinę</button>}
         </div>
+      )}
+
+      {state !== 'unsupported' && (
+        <label className="switch-row">
+          <input type="checkbox" checked={changes} disabled={busy} onChange={(e) => toggleChanges(e.target.checked)} />
+          <span>
+            <b>Zmiany w rezerwacjach</b>
+            <small>Nowe, zmienione, usunięte i odwołane — z Bookingu oraz gdy zmieni je inna osoba</small>
+          </span>
+        </label>
       )}
 
       {state === 'loading' && <p className="muted">Sprawdzanie…</p>}

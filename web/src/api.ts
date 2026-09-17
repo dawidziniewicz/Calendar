@@ -34,6 +34,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export type PushSettings = { time: string; changes: boolean };
 export type Session = { username: string; role: 'admin' | 'viewer' };
 export type SyncResult = { feedId: number; unitId: number; ok: boolean; added: number; updated: number; cancelled: number; error?: string };
 export type Guest = { guest_name: string; guest_phone: string; guest_email: string; last_stay: string; stays: number };
@@ -65,8 +66,8 @@ export const api = {
   pushSubscribe: (subscription: PushSubscriptionJSON) => request('POST', '/push/subscribe', { subscription }),
   pushUnsubscribe: (endpoint: string) => request('POST', '/push/unsubscribe', { endpoint }),
   pushTest: () => request<{ sent: number }>('POST', '/push/test'),
-  pushSettings: () => request<{ time: string }>('GET', '/push/settings'),
-  savePushSettings: (time: string) => request<{ time: string }>('PUT', '/push/settings', { time }),
+  pushSettings: () => request<PushSettings>('GET', '/push/settings'),
+  savePushSettings: (patch: Partial<PushSettings>) => request<PushSettings>('PUT', '/push/settings', patch),
   bookingCancellations: () => request<Reservation[]>('GET', '/booking-cancellations'),
   convertToDirect: (id: number, force = false) => request<Reservation>('POST', `/reservations/${id}/convert-direct`, { force }),
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
