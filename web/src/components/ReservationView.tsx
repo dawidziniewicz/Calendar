@@ -175,8 +175,9 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
                 {unit && r.adults + r.children > unit.capacity && <span className="warn"> (maks. {unit.capacity})</span>}
               </dd>
             </div>
-            {r.price != null && <div><dt>Cena</dt><dd>{money(r.price)}</dd></div>}
-            {r.paid != null && <div><dt>Wpłacono</dt><dd>{money(r.paid)}</dd></div>}
+            {/* Konto tylko do podglądu widzi wyłącznie kwotę do zapłaty */}
+            {!readOnly && r.price != null && <div><dt>Cena</dt><dd>{money(r.price)}</dd></div>}
+            {!readOnly && r.paid != null && <div><dt>Wpłacono</dt><dd>{money(r.paid)}</dd></div>}
             {due != null && (
               <div><dt>Do zapłaty</dt><dd className={due > 0 ? 'due' : 'paid'}>{due > 0 ? money(due) : 'Opłacone ✓'}</dd></div>
             )}
