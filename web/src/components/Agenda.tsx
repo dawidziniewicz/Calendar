@@ -31,6 +31,11 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
   }, [properties]);
 
   const conflicts = useMemo(() => conflictIds(reservations), [reservations]);
+  // Rezerwacje w konflikcie posortowane domkami i datami, żeby kolidujące pary były obok siebie
+  const conflictList = useMemo(() => reservations.filter((r) => conflicts.has(r.id))
+    .sort((a, b) => a.unit_id - b.unit_id || a.check_in.localeCompare(b.check_in)), [reservations, conflicts]);
+  const partnersOf = (r: Reservation) => conflictList.filter((o) => o.id !== r.id && o.unit_id === r.unit_id
+    && o.check_in < r.check_out && r.check_in < o.check_out);
   const q = query.trim().toLowerCase();
   const filtered = q
     ? reservations.filter((r) => [r.guest_name, r.guest_phone, r.guest_email, r.notes, units.get(r.unit_id)?.unit.name]
@@ -50,7 +55,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
     departures: filtered.filter((r) => r.check_out === d),
   }));
 
-  const card = (r: Reservation, kind: 'in' | 'out' | 'stay' | 'cancel') => {
+  const card = (r: Reservation, kind: 'in' | 'out' | 'stay' | 'cancel' | 'conflict') => {
     const info = units.get(r.unit_id);
     const nights = diffDays(r.check_in, r.check_out);
     const guests = r.adults + r.children;
@@ -70,6 +75,11 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
               {r.source !== 'direct' && ` · ${SOURCES[r.source] ?? r.source}`}
             </div>
             {due != null && due > 0 && <div className="guest-due">Do zapłaty: {due.toLocaleString('pl-PL')} zł</div>}
+            {kind === 'conflict' && (
+              <div className="conflict-with">
+                Nakłada się z: {partnersOf(r).map((o) => `${o.guest_name || (SOURCES[o.source] ?? o.source)} (${formatShort(o.check_in)} – ${formatShort(o.check_out)})`).join(', ')}
+              </div>
+            )}
             {r.notes && <div className="guest-notes">{r.notes}</div>}
           </div>
         </button>
@@ -86,6 +96,14 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
     <section className="agenda">
       <input className="search" type="search" placeholder="Szukaj gościa, telefonu, domku…" value={query} onChange={(e) => setQuery(e.target.value)} />
       {error && <div className="banner error">{error}</div>}
+
+      {conflictList.length > 0 && (
+        <div className="agenda-day conflicts-box">
+          <h2><ConflictMark /> Konflikty terminów <span className="count danger">{conflictList.length}</span></h2>
+          <p className="muted small">Te rezerwacje nakładają się w tym samym domku. Stuknij, żeby zmienić domek lub daty.</p>
+          {conflictList.map((r) => card(r, 'conflict'))}
+        </div>
+      )}
 
       {cancellations.length > 0 && (
         <div className="agenda-day cancellations">
