@@ -55,6 +55,24 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
     return map;
   }, [reservations]);
 
+  // Nakładające się rezerwacje układamy jedna pod drugą (osobne „tory”), żeby łatwo było je zobaczyć i poprawić.
+  // Wyjazd i przyjazd tego samego dnia to nie konflikt — takie rezerwacje zostają w jednym torze.
+  const lanes = useMemo(() => {
+    const laneOf = new Map<number, number>();
+    const countOf = new Map<number, number>();
+    for (const [unitId, list] of byUnit) {
+      const ends: string[] = [];
+      for (const r of [...list].sort((a, b) => a.check_in.localeCompare(b.check_in) || a.id - b.id)) {
+        let lane = ends.findIndex((end) => end <= r.check_in);
+        if (lane === -1) lane = ends.push(r.check_out) - 1;
+        else ends[lane] = r.check_out;
+        laneOf.set(r.id, lane);
+      }
+      countOf.set(unitId, Math.max(1, ends.length));
+    }
+    return { laneOf, countOf };
+  }, [byUnit]);
+
   // Rezerwacje nakładające się w tym samym obiekcie (np. Booking + wpis ręczny) oznaczamy na czerwono.
   const overlapping = useMemo(() => {
     const ids = new Set<number>();
@@ -114,11 +132,11 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
               <div className="tl-property-fill" />
               {p.units.map((u) => (
                 <Fragment key={u.id}>
-                  <div className="tl-unit" title={`${u.name} · do ${u.capacity} os.`}>
+                  <div className="tl-unit" title={`${u.name} · do ${u.capacity} os.`} style={{ ['--lanes' as string]: lanes.countOf.get(u.id) ?? 1 }}>
                     <i style={{ background: u.color }} />
                     <span>{u.name}</span>
                   </div>
-                  <div className="tl-row">
+                  <div className="tl-row" style={{ ['--lanes' as string]: lanes.countOf.get(u.id) ?? 1 }}>
                     {days.map((d) => {
                       const cls = `tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''}`;
                       return onCreate
@@ -139,7 +157,11 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                         <button
                           key={r.id}
                           className={classes}
-                          style={{ left: `calc(${left} * var(--day-w) + 1px)`, width: `calc(${right - left} * var(--day-w) - 2px)` }}
+                          style={{
+                            left: `calc(${left} * var(--day-w) + 1px)`,
+                            width: `calc(${right - left} * var(--day-w) - 2px)`,
+                            ['--lane' as string]: lanes.laneOf.get(r.id) ?? 0,
+                          }}
                           onClick={() => onSelect(r)}
                           title={`${arrivesToday ? 'Przyjazd dziś · ' : ''}${reservationLabel(r)} · ${formatShort(r.check_in)} – ${formatShort(r.check_out)}`}
                         >

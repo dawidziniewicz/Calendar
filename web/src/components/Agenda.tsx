@@ -13,6 +13,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const [stayingOpen, setStayingOpen] = useState(false);
   const now = today();
 
   useEffect(() => {
@@ -85,8 +86,12 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
 
       {staying.length > 0 && (
         <div className="agenda-day">
-          <h2>Obecnie przebywają <span className="count">{staying.length}</span></h2>
-          {staying.map((r) => card(r, 'stay'))}
+          <button type="button" className="collapse-head" aria-expanded={stayingOpen || Boolean(q)} onClick={() => setStayingOpen(!stayingOpen)}>
+            <h2>Obecnie przebywają <span className="count">{staying.length}</span></h2>
+            <span className="chev">{stayingOpen || q ? '▴' : '▾'}</span>
+          </button>
+          {/* przy wyszukiwaniu pokazujemy wyniki także z tej listy */}
+          {(stayingOpen || q) && staying.map((r) => card(r, 'stay'))}
         </div>
       )}
 
