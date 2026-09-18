@@ -163,7 +163,7 @@ h4 { margin: 18px 0 6px; font-size: 0.9rem; }
 .legend i { display: inline-block; width: 14px; height: 10px; border-radius: 3px; vertical-align: middle; margin-right: 4px; }
 .legend i.conflict { outline: 2px solid var(--danger); background: transparent; }
 
-/* ---- Przyjazdy ---- */
+/* ---- Aktualności ---- */
 .search { width: 100%; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); padding: 0 14px; margin-bottom: 14px; }
 .agenda-day { margin-bottom: 22px; }
 
@@ -364,3 +364,13 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 
 .collapse-head { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; margin-bottom: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); text-align: left; }
 .collapse-head h2 { margin: 0; }
+
+/* Dzisiejszy dzień w Aktualnościach — wyróżniony pomarańczowym tłem */
+.agenda-day.is-today {
+  padding: 12px 12px 6px; border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.agenda-day.is-today > h2 { color: var(--accent); }
+.agenda-day.is-today > h2 .muted { color: var(--ink); }
+.agenda-day.is-today h3 { color: color-mix(in srgb, var(--accent) 70%, var(--ink)); }

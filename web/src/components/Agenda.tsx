@@ -96,16 +96,16 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
       )}
 
       {days.map(({ date, arrivals, departures }) => (
-        <div key={date} className="agenda-day">
+        <div key={date} className={`agenda-day ${date === now ? 'is-today' : ''}`}>
           <h2>
             {date === now ? 'Dziś ' : date === addDays(now, 1) ? 'Jutro ' : ''}
             <span className="muted">{date === now || date === addDays(now, 1) ? formatLong(date) : capitalize(formatLong(date))}</span>
           </h2>
           {!arrivals.length && !departures.length && <p className="empty">Brak przyjazdów i wyjazdów</p>}
-          {departures.length > 0 && <h3>Wyjazdy</h3>}
-          {departures.map((r) => card(r, 'out'))}
           {arrivals.length > 0 && <h3>Przyjazdy</h3>}
           {arrivals.map((r) => card(r, 'in'))}
+          {departures.length > 0 && <h3>Wyjazdy</h3>}
+          {departures.map((r) => card(r, 'out'))}
         </div>
       ))}
     </section>
