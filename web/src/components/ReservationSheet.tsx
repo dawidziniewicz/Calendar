@@ -183,6 +183,9 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
               Wpłacono (zł)
               <input inputMode="decimal" value={r.paid ?? ''} onChange={(e) => numberField('paid', e.target.value)} />
             </label>
+            {r.price != null && r.price > 0 && (r.paid ?? 0) < r.price && (
+              <button type="button" className="chip full paid-chip" onClick={() => set('paid', r.price)}>✓ Zapłacone w całości</button>
+            )}
             <label className="full">
               Notatki
               <textarea rows={3} value={r.notes} placeholder="np. zwierzę, późny przyjazd, faktura, kod do sejfu…" onChange={(e) => set('notes', e.target.value)} />

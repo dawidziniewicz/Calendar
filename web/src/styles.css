@@ -416,3 +416,9 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .conflicts-box > h2 .count { margin-left: 8px; }
 .guest-card.kind-conflict { border-left: 4px solid var(--danger); }
 .conflict-with { font-size: 0.85rem; color: var(--weekend-ink); font-weight: 600; margin-top: 4px; }
+
+/* Płatność */
+:root { --paid: #2f9e57; }
+.tag.paid-tag { background: var(--paid); }
+.btn.paid-btn { background: var(--paid); border-color: var(--paid); color: #fff; }
+.chip.paid-chip { justify-self: start; border-color: var(--paid); color: var(--paid); font-weight: 600; }

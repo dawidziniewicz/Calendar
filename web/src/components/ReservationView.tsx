@@ -52,6 +52,27 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
   const unit = property?.units.find((u) => u.id === r.unit_id);
   const nights = diffDays(r.check_in, r.check_out);
   const due = r.price != null ? r.price - (r.paid ?? 0) : null;
+  const fullyPaid = r.price != null && r.price > 0 && due != null && due <= 0;
+
+  // „Klient zapłacił” — wpłata = pełna cena (bez ceny pytamy o kwotę). Zmienia tylko płatność, więc zapis mimo ewentualnego konfliktu.
+  const markPaid = async () => {
+    let price = r.price;
+    if (price == null || price <= 0) {
+      const input = prompt('Ile zapłacił klient? (zł)');
+      if (input == null) return;
+      price = Number(input.replace(',', '.').replace(/\s/g, ''));
+      if (!Number.isFinite(price) || price <= 0) { setError('Podaj prawidłową kwotę'); return; }
+    }
+    setBusy(true);
+    setError('');
+    try {
+      onChanged(await api.saveReservation({ ...r, price, paid: price }, true));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
   const missingGuest = !r.guest_name && !r.guest_phone;
 
   useEffect(() => {
@@ -80,6 +101,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               <div className="view-tags">
                 <span className={`tag src-tag-${r.source}`}>{SOURCES[r.source] ?? r.source}</span>
                 {r.status !== 'confirmed' && <span className={`tag st-tag-${r.status}`}>{STATUS_LABELS[r.status]}</span>}
+                {fullyPaid && <span className="tag paid-tag">Opłacona ✓</span>}
               </div>
             </div>
           </div>
@@ -169,6 +191,12 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
 
           {!readOnly && (
             <div className="sheet-actions">
+              {!fullyPaid && r.status !== 'cancelled' && (
+                <button type="button" className="btn paid-btn big" disabled={busy} onClick={markPaid}>
+                  ✓ Klient zapłacił{due != null && due > 0 ? ` (${money(due)})` : ''}
+                </button>
+              )}
+              {error && !cancelledImport && <p className="warn">{error}</p>}
               <button type="button" className="btn primary big" onClick={onEdit}>Edytuj rezerwację</button>
             </div>
           )}
