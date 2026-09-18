@@ -376,3 +376,14 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .agenda-day.is-today h3 { color: color-mix(in srgb, var(--accent) 70%, var(--ink)); }
 
 .agenda-month { margin: 26px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--line); font-size: 1.05rem; font-weight: 750; color: var(--primary); }
+
+/* Jutro w Aktualnościach — zielone tło */
+:root { --tomorrow: #2f9e57; }
+.agenda-day.is-tomorrow {
+  padding: 12px 12px 6px; border-radius: 16px;
+  background: color-mix(in srgb, var(--tomorrow) 18%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--tomorrow) 50%, transparent);
+}
+.agenda-day.is-tomorrow > h2 { color: var(--tomorrow); }
+.agenda-day.is-tomorrow > h2 .muted { color: var(--ink); }
+.agenda-day.is-tomorrow h3 { color: color-mix(in srgb, var(--tomorrow) 75%, var(--ink)); }

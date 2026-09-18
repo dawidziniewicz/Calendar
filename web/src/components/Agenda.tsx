@@ -107,7 +107,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
           {i >= 2 && date.slice(0, 7) !== days[i - 1].date.slice(0, 7) && (
             <div className="agenda-month">{capitalize(formatMonth(date))}</div>
           )}
-        <div className={`agenda-day ${date === now ? 'is-today' : ''}`}>
+        <div className={`agenda-day ${date === now ? 'is-today' : date === addDays(now, 1) ? 'is-tomorrow' : ''}`}>
           <h2>
             {date === now ? 'Dziś ' : date === addDays(now, 1) ? 'Jutro ' : ''}
             <span className="muted">{date === now || date === addDays(now, 1) ? formatLong(date) : capitalize(formatLong(date))}</span>
