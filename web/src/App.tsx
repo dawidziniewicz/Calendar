@@ -8,6 +8,7 @@ import Settings from './components/Settings';
 import ReservationSheet from './components/ReservationSheet';
 import Login from './components/Login';
 import ReservationView from './components/ReservationView';
+import UsersPage from './components/UsersPage';
 import ConflictMark from './components/ConflictMark';
 import { conflictIds } from './conflicts';
 
@@ -20,6 +21,8 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 ];
 // Konto „tylko podgląd” zamiast Obiektów widzi tylko ustawienia konta.
 const VIEWER_TABS = TABS.map((t) => (t.id === 'settings' ? { ...t, label: 'Konto', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m-7 8a7 7 0 0 1 14 0' } : t));
+// Konto ograniczone do wybranych obiektów nie zarządza obiektami — zakładka to same ustawienia.
+const LIMITED_TABS = TABS.map((t) => (t.id === 'settings' ? { ...t, label: 'Ustawienia' } : t));
 
 export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
   unit_id: unitId,
@@ -54,7 +57,17 @@ export default function App() {
 
 function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const readOnly = user.role === 'viewer';
-  const tabs = readOnly ? VIEWER_TABS : TABS;
+  const limited = user.properties !== null;
+  // Podstrona „Użytkownicy i uprawnienia” (z obsługą przycisku Wstecz / gestu cofania na iPhonie)
+  const [page, setPage] = useState<'main' | 'users'>('main');
+  useEffect(() => {
+    const onPop = () => setPage(history.state?.page === 'users' ? 'users' : 'main');
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  const openUsers = () => { history.pushState({ page: 'users' }, ''); setPage('users'); window.scrollTo(0, 0); };
+  const closeUsers = () => { if (history.state?.page === 'users') history.back(); else setPage('main'); };
+  const tabs = readOnly ? VIEWER_TABS : limited ? LIMITED_TABS : TABS;
   const [tab, setTab] = useState<Tab>(() => {
     // Kliknięcie w powiadomienie otwiera /?tab=agenda
     const fromUrl = new URLSearchParams(location.search).get('tab') as Tab | null;
@@ -104,6 +117,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   }, []);
 
   const selectTab = (t: Tab) => {
+    if (page === 'users') closeUsers();
     setTab(t);
     try { sessionStorage.setItem('tab', t); } catch { /* prywatny tryb */ }
   };
@@ -145,10 +159,11 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         </div>
       )}
 
-      <main className={`content content-${tab}`}>
-        {tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={readOnly ? undefined : openNew} />}
-        {tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
-        {tab === 'settings' && <Settings user={user.username} readOnly={readOnly} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+      <main className={`content content-${page === 'users' ? 'settings' : tab}`}>
+        {page === 'main' && tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={readOnly ? undefined : openNew} />}
+        {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
+        {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
+        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">

@@ -23,6 +23,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 6) migrateV6(db);
   if (user_version < 7) migrateV7(db);
   if (user_version < 8) migrateV8(db);
+  if (user_version < 9) migrateV9(db);
+}
+
+// Ograniczenie konta do wybranych obiektów: JSON z listą id obiektów, NULL = wszystkie.
+function migrateV9(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE users ADD COLUMN property_ids TEXT;
+    PRAGMA user_version = 9;
+    COMMIT;
+  `);
 }
 
 // Powiadomienia o zmianach w rezerwacjach (włączone domyślnie, każdy może wyłączyć).

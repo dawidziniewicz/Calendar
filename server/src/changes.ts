@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { sendToSubscriptions, type PushMessage, type Sender } from './push.ts';
+import { allowedUnitIds, propertyIdsOf } from './auth.ts';
 
 // Powiadomienia o zmianach: dodanie / edycja / usunięcie rezerwacji przez użytkownika oraz zmiany z Bookingu.
 
@@ -115,19 +116,29 @@ export function syncEvents(db: DatabaseSync, changes: SyncChange[]): ChangeEvent
 /** Wysyła powiadomienia o zmianach wszystkim chętnym użytkownikom poza autorem zmiany. */
 export async function announce(db: DatabaseSync, send: Sender | undefined, events: ChangeEvent[], excludeUserId: number | null) {
   if (!send || !events.length) return 0;
-  const messages = events.map((e) => changeMessage(db, e)).filter((m): m is PushMessage => m !== null);
-  if (!messages.length) return 0;
-  const final = messages.length > MAX_SEPARATE
-    ? [{
-        title: `Zmiany w rezerwacjach: ${messages.length}`,
-        body: messages.slice(0, 3).map((m) => m.title).join('\n') + '\n…',
-        url: '/?tab=agenda',
-        tag: `changes-${Date.now()}`,
-      }]
-    : messages;
+  // Domki, których dotyczy zdarzenie (przy przeniesieniu — stary i nowy), żeby konta ograniczone dostały tylko swoje
+  const unitsOf = (e: ChangeEvent) => (e.kind === 'updated' ? [e.before.unit_id, e.after.unit_id] : [e.row.unit_id]).map(Number);
+  const items = events.flatMap((e) => {
+    const m = changeMessage(db, e);
+    return m ? [{ m, units: unitsOf(e) }] : [];
+  });
+  if (!items.length) return 0;
   const users = db.prepare(`SELECT DISTINCT u.id FROM users u JOIN push_subscriptions p ON p.user_id = u.id
     WHERE u.notify_changes = 1 AND u.id != ?`).all(excludeUserId ?? -1) as { id: number }[];
   let sent = 0;
-  for (const u of users) for (const m of final) sent += await sendToSubscriptions(db, send, u.id, m);
+  for (const u of users) {
+    const allowed = allowedUnitIds(db, { properties: propertyIdsOf(db, u.id) });
+    const messages = items.filter((i) => !allowed || i.units.some((id) => allowed.has(id))).map((i) => i.m);
+    if (!messages.length) continue;
+    const final = messages.length > MAX_SEPARATE
+      ? [{
+          title: `Zmiany w rezerwacjach: ${messages.length}`,
+          body: messages.slice(0, 3).map((m) => m.title).join('\n') + '\n…',
+          url: '/?tab=agenda',
+          tag: `changes-${Date.now()}`,
+        }]
+      : messages;
+    for (const m of final) sent += await sendToSubscriptions(db, send, u.id, m);
+  }
   return sent;
 }

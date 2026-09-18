@@ -5,9 +5,12 @@ import { SOURCES } from '../types';
 import Notifications from './Notifications';
 import CalendarPrefs from './CalendarPrefs';
 
-type Props = { user: string; readOnly: boolean; onLogout: () => void; properties: Property[]; reload: () => void };
+type Props = {
+  user: string; readOnly: boolean; scope: string[] | null; canManageUsers: boolean;
+  onOpenUsers: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
+};
 
-export default function Settings({ user, readOnly, onLogout, properties, reload }: Props) {
+export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onLogout, properties, reload }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult[] | null>(null);
   const [error, setError] = useState('');
@@ -40,10 +43,13 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
     if (name?.trim()) run(() => api.createProperty({ name }));
   };
 
-  if (readOnly) {
+  if (readOnly || scope) {
     return (
       <section className="settings">
-        <div className="panel"><p className="muted" style={{ margin: 0 }}>To konto ma dostęp tylko do podglądu rezerwacji.</p></div>
+        <div className="panel access-info">
+          {scope && <p>Dostęp do obiektów: <b>{scope.join(', ')}</b></p>}
+          {readOnly && <p className="muted">To konto ma dostęp tylko do podglądu rezerwacji.</p>}
+        </div>
         <CalendarPrefs />
         <Notifications />
         <AccountPanel user={user} onLogout={onLogout} />
@@ -79,6 +85,15 @@ export default function Settings({ user, readOnly, onLogout, properties, reload 
 
       <button className="add-property" onClick={addProperty}>＋ Dodaj obiekt</button>
 
+      {canManageUsers && (
+        <button type="button" className="panel nav-panel" onClick={onOpenUsers}>
+          <span>
+            <b>Użytkownicy i uprawnienia</b>
+            <small>Dodawanie kont, role (admin / obsługa), dostęp do obiektów, hasła</small>
+          </span>
+          <span className="nav-arrow">›</span>
+        </button>
+      )}
       <CalendarPrefs />
       <Notifications />
       <AccountPanel user={user} onLogout={onLogout} />

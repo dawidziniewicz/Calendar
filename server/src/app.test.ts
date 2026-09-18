@@ -38,7 +38,7 @@ test('wymaga klucza API i zalogowania', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('set-cookie') ?? '', /HttpOnly/);
   assert.equal((await call('GET', '/api/properties')).status, 200);
-  assert.deepEqual(await (await call('GET', '/api/auth/me')).json(), { username: 'dawid', role: 'admin' });
+  assert.deepEqual(await (await call('GET', '/api/auth/me')).json(), { username: 'dawid', role: 'admin', properties: null, canManageUsers: true });
   await call('POST', '/api/auth/logout');
   assert.equal((await call('GET', '/api/properties')).status, 401);
 });
@@ -191,7 +191,7 @@ test('konto tylko do podglądu nie może nic zmieniać', async () => {
     return res;
   };
   const login = await call('POST', '/api/auth/login', { username: 'jan', password: 'podglad-123' });
-  assert.deepEqual(await login.json(), { username: 'jan', role: 'viewer' });
+  assert.deepEqual(await login.json(), { username: 'jan', role: 'viewer', properties: null, canManageUsers: false });
 
   assert.equal((await call('GET', '/api/reservations')).status, 200);
   const props = await (await call('GET', '/api/properties')).json();
@@ -427,4 +427,101 @@ test('powiadomienia o zmianach z Bookingu: nie przy pierwszym pobraniu; nowe, zm
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('konto ograniczone do Osady Jantar widzi i zmienia tylko Jantar', async () => {
+  const { db, sent, send, loginAs, flush } = setupWithPush();
+  // Osada Jantar = obiekt 1 (domki 1–5), Sopot = obiekt 2 (domek 6)
+  db.prepare("INSERT INTO users (username, password_hash, property_ids) VALUES ('jantar', ?, '[1]')").run(hashPassword('haslo-12345'));
+  saveSubscription(db, 4, { endpoint: 'https://push.example/jantar', keys: { p256dh: 'p', auth: 'a' } });
+  const dawid = await loginAs('dawid');
+  const jantar = await loginAs('jantar');
+
+  assert.deepEqual(await (await jantar('GET', '/api/auth/me')).json(), { username: 'jantar', role: 'admin', properties: ['Osada Jantar'], canManageUsers: false });
+  const props = await (await jantar('GET', '/api/properties')).json();
+  assert.deepEqual(props.map((p: { name: string }) => p.name), ['Osada Jantar']);
+
+  const inJantar = await (await dawid('POST', '/api/reservations', { unit_id: 2, check_in: '2030-06-01', check_out: '2030-06-04', guest_name: 'Jantar Gość' })).json();
+  const inSopot = await (await dawid('POST', '/api/reservations', { unit_id: 6, check_in: '2030-06-01', check_out: '2030-06-04', guest_name: 'Sopot Gość' })).json();
+  await flush();
+
+  // widzi tylko Jantar
+  const list = await (await jantar('GET', '/api/reservations')).json();
+  assert.deepEqual(list.map((r: { guest_name: string }) => r.guest_name), ['Jantar Gość']);
+  assert.equal((await jantar('GET', `/api/reservations/${inSopot.id}`)).status, 404);
+  const guests = await (await jantar('GET', '/api/guests?q=Gość')).json();
+  assert.deepEqual(guests.map((g: { guest_name: string }) => g.guest_name), ['Jantar Gość']);
+
+  // zmienia tylko Jantar
+  assert.equal((await jantar('POST', '/api/reservations', { unit_id: 3, check_in: '2030-07-01', check_out: '2030-07-02' })).status, 201);
+  assert.equal((await jantar('POST', '/api/reservations', { unit_id: 6, check_in: '2030-07-01', check_out: '2030-07-02' })).status, 403);
+  assert.equal((await jantar('PUT', `/api/reservations/${inJantar.id}`, { ...inJantar, unit_id: 6 })).status, 403); // przeniesienie do Sopotu
+  assert.equal((await jantar('PUT', `/api/reservations/${inSopot.id}`, inSopot)).status, 404);
+  assert.equal((await jantar('DELETE', `/api/reservations/${inSopot.id}`)).status, 404);
+  assert.equal((await jantar('PUT', '/api/units/1', { name: 'X', capacity: 1, color: '#000000' })).status, 403);
+  assert.equal((await jantar('POST', '/api/feeds', { unit_id: 1, url: 'https://x.pl/a.ics' })).status, 403);
+
+  // powiadomienia o zmianach: tylko z Jantaru
+  sent.length = 0;
+  await dawid('PUT', `/api/reservations/${inSopot.id}`, { ...inSopot, paid: 100 });
+  await dawid('PUT', `/api/reservations/${inJantar.id}`, { ...inJantar, paid: 100 });
+  await flush();
+  const forJantar = sent.filter((x) => x.endpoint.endsWith('jantar')).map((x) => x.msg.title);
+  assert.deepEqual(forJantar, ['Zmiana rezerwacji · Mały domek 2 · Osada Jantar']);
+
+  // poranne przyjazdy: tylko z Jantaru
+  sent.length = 0;
+  db.prepare('UPDATE users SET notified_on = NULL').run();
+  await dailyArrivalsTick(db, send, new Date('2030-06-01T08:00:00Z'));
+  const arrivals = sent.filter((x) => x.endpoint.endsWith('jantar')).map((x) => x.msg.title);
+  assert.deepEqual(arrivals, ['Przyjazd dziś: Mały domek 2 · Osada Jantar']);
+  assert.equal(sent.filter((x) => x.endpoint.endsWith('dawid')).length, 2); // admin bez ograniczeń: oba
+});
+
+test('zarządzanie użytkownikami: admin dodaje, zmienia uprawnienia i hasło, usuwa; inni nie mają dostępu', async () => {
+  const { loginAs } = setupWithPush(); // dawid, jozek, jan — wszyscy admini bez ograniczeń
+  const dawid = await loginAs('dawid');
+
+  // nowe konto: tylko podgląd, tylko Osada Jantar
+  const created = await dawid('POST', '/api/users', { username: 'jantar', password: 'haslo-12345', role: 'viewer', properties: [1] }); // hasło jak w loginAs
+  assert.equal(created.status, 201);
+  const jantarUser = await created.json();
+  assert.deepEqual([jantarUser.username, jantarUser.role, jantarUser.properties], ['jantar', 'viewer', [1]]);
+  assert.equal((await dawid('POST', '/api/users', { username: 'jantar', password: 'obsluga-123', role: 'viewer' })).status, 400); // duplikat
+  assert.equal((await dawid('POST', '/api/users', { username: 'x', password: 'obsluga-123', role: 'viewer' })).status, 400); // za krótki login
+  assert.equal((await dawid('POST', '/api/users', { username: 'nowy', password: 'krotkie', role: 'viewer' })).status, 400);
+  assert.equal((await dawid('POST', '/api/users', { username: 'nowy', password: 'obsluga-123', role: 'viewer', properties: [] })).status, 400);
+  assert.equal((await dawid('POST', '/api/users', { username: 'nowy', password: 'obsluga-123', role: 'viewer', properties: [99] })).status, 400);
+
+  // obsługa loguje się, widzi tylko Jantar i nie może nic zmieniać ani zarządzać kontami
+  const jantar = await loginAs('jantar');
+  assert.deepEqual(await (await jantar('GET', '/api/auth/me')).json(), { username: 'jantar', role: 'viewer', properties: ['Osada Jantar'], canManageUsers: false });
+  assert.equal((await jantar('POST', '/api/reservations', { unit_id: 1, check_in: '2030-01-01', check_out: '2030-01-02' })).status, 403);
+  assert.equal((await jantar('GET', '/api/users')).status, 403);
+
+  // lista
+  const list = await (await dawid('GET', '/api/users')).json();
+  assert.deepEqual(list.map((u: { username: string; me: boolean }) => `${u.username}${u.me ? '*' : ''}`), ['dawid*', 'jan', 'jantar', 'jozek']);
+
+  // zmiana uprawnień: Jantar + Sopot, admin
+  const upd = await dawid('PUT', `/api/users/${jantarUser.id}`, { role: 'admin', properties: [1, 2] });
+  assert.deepEqual((await upd.json()).properties, [1, 2]);
+  assert.deepEqual((await (await jantar('GET', '/api/auth/me')).json()).properties, ['Osada Jantar', 'Apartament Sopot']); // działa od razu
+
+  // zmiana hasła wylogowuje użytkownika
+  assert.equal((await dawid('POST', `/api/users/${jantarUser.id}/password`, { password: 'nowe-haslo-999' })).status, 200);
+  assert.equal((await jantar('GET', '/api/auth/me')).status, 401);
+
+  // własnego konta nie da się zdegradować ani usunąć
+  const me = list.find((u: { me: boolean }) => u.me);
+  assert.equal((await dawid('PUT', `/api/users/${me.id}`, { role: 'viewer', properties: null })).status, 400);
+  assert.equal((await dawid('DELETE', `/api/users/${me.id}`)).status, 400);
+
+  // admin z ograniczeniem nie zarządza kontami
+  const jozek = await loginAs('jozek');
+  await dawid('PUT', `/api/users/${list.find((u: { username: string }) => u.username === 'jozek').id}`, { role: 'admin', properties: [1] });
+  assert.equal((await jozek('GET', '/api/users')).status, 403);
+
+  assert.equal((await dawid('DELETE', `/api/users/${jantarUser.id}`)).status, 200);
+  assert.equal((await dawid('GET', '/api/users').then((r) => r.json())).length, 3);
 });

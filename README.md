@@ -98,7 +98,11 @@ docker compose logs -f api       # powinno być: "API działa na porcie 8787"
 
 ## Krok 3. Konta użytkowników
 
-Logowanie jest w samej aplikacji: **login + hasło**. Konta zakładasz na serwerze (nie ma rejestracji z internetu):
+Logowanie jest w samej aplikacji: **login + hasło**. Nie ma rejestracji z internetu.
+
+**W aplikacji** (admin bez ograniczeń, np. `dawid`): *Ustawienia i obiekty* → **Użytkownicy i uprawnienia** – dodawanie kont, rola (*Admin – pełna edycja* / *Obsługa – tylko podgląd*), dostęp do wybranych obiektów, zmiana hasła, usuwanie. Własnych uprawnień nie da się zmienić ani usunąć swojego konta (ochrona przed zablokowaniem się).
+
+**Pierwsze konto** (i awaryjnie) zakładasz na serwerze:
 
 ```bash
 cd ~/kalendarz
@@ -106,12 +110,15 @@ docker compose exec api npm run -s user add dawid        # zapyta o hasło (min.
 docker compose exec api npm run -s user add jozek
 docker compose exec api npm run -s user add jan podglad  # konto TYLKO DO PODGLĄDU
 docker compose exec api npm run -s user role jan admin    # zmiana roli: admin / podglad
+docker compose exec api npm run -s user obiekty jantar "Osada Jantar"   # dostęp tylko do wybranych obiektów
+docker compose exec api npm run -s user obiekty jantar wszystkie        # zdjęcie ograniczenia
 docker compose exec api npm run -s user list             # lista kont
 docker compose exec api npm run -s user passwd jozek     # nowe hasło (wylogowuje z urządzeń)
 docker compose exec api npm run -s user remove jozek     # usunięcie konta
 ```
 
 - Konto **podglad** widzi kalendarz, przyjazdy i szczegóły rezerwacji (może dzwonić do gości), ale nie może niczego dodać, zmienić ani usunąć – blokuje to serwer. Nie widzi też prywatnych linków do kalendarzy Bookingu.
+- Konto z ograniczeniem **obiekty** widzi i obsługuje tylko wskazane obiekty (kalendarz, Aktualności, rezerwacje, powiadomienia). Nie może zmieniać ustawień obiektów, domków ani linków Bookingu. Można to łączyć z rolą *podglad*.
 - Sesja trwa 90 dni – na telefonie logujesz się raz.
 - Po 5 błędnych hasłach logowanie z danego adresu IP / na dany login jest blokowane na 15 minut.
 - Hasło możesz też zmienić w aplikacji: *Obiekty* → na dole *Zmień hasło*.

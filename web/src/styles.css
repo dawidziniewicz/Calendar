@@ -422,3 +422,28 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .tag.paid-tag { background: var(--paid); }
 .btn.paid-btn { background: var(--paid); border-color: var(--paid); color: #fff; }
 .chip.paid-chip { justify-self: start; border-color: var(--paid); color: var(--paid); font-weight: 600; }
+.access-info p { margin: 0; }
+.access-info p + p { margin-top: 6px; }
+
+/* ---- Użytkownicy i uprawnienia ---- */
+.nav-panel { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; cursor: pointer; }
+.nav-panel span:first-child { display: flex; flex-direction: column; gap: 3px; }
+.nav-panel small { color: var(--muted); font-size: 0.82rem; }
+.nav-arrow { font-size: 1.6rem; color: var(--muted); line-height: 1; }
+@media (hover: hover) { .nav-panel:hover { border-color: var(--primary); } }
+.page-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.page-head h1 { margin: 0; font-size: 1.3rem; }
+.page-head .back { align-self: flex-start; padding-left: 0; font-size: 0.95rem; }
+.user-card { padding: 0; overflow: hidden; }
+.user-summary { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: none; border: 0; text-align: left; }
+.user-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--surface-2); font-weight: 700; color: var(--primary); }
+.user-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.user-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.user-details { padding: 4px 14px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; }
+.user-details > p { margin: 10px 0 0; font-size: 0.88rem; }
+.user-form { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.user-form .segmented .chip { white-space: normal; text-align: left; }
+.check-row { flex-direction: row; align-items: center; gap: 10px; color: var(--ink); font-size: 0.95rem; font-weight: 500; padding: 4px 0; cursor: pointer; }
+.check-row input { width: 20px !important; height: 20px; min-height: 0 !important; accent-color: var(--primary); }
+.password-reset .row { margin: 0; }
+.delete-user { align-self: flex-start; }

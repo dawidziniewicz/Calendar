@@ -5,8 +5,8 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { timingSafeEqual } from 'node:crypto';
 import { newToken } from './db.ts';
 import {
-  SESSION_COOKIE, SESSION_DAYS, checkLogin, clearFails, createSession, deleteSession, lockedFor, registerFail, sessionUser, setPassword,
-  verifyPassword, type User,
+  SESSION_COOKIE, SESSION_DAYS, allowedUnitIds, checkLogin, clearFails, createSession, deleteSession, lockedFor, registerFail, sessionUser, setPassword,
+  verifyPassword, hashPassword, type User,
 } from './auth.ts';
 import { buildIcal } from './ical.ts';
 import { TIME_RE, arrivalMessages, saveSubscription, sendToSubscriptions, vapidKeys, warsawDate, warsawTime, type Sender } from './push.ts';
@@ -60,6 +60,29 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
 
   const api = new Hono<{ Variables: { user: User } }>();
 
+  // ---- Dostęp do obiektów (konto może być ograniczone np. tylko do Osady Jantar) ----
+  const canSee = (user: User, unitId: unknown) => {
+    const units = allowedUnitIds(db, user);
+    return !units || units.has(Number(unitId));
+  };
+  const requireUnit = (user: User, unitId: number) => {
+    if (!canSee(user, unitId)) throw new HTTPException(403, { message: 'Brak dostępu do tego domku/apartamentu' });
+  };
+  // Fragment SQL zawężający rezerwacje do dostępnych domków (id to liczby z bazy — bezpieczne do wstawienia)
+  const unitScope = (user: User) => {
+    const units = allowedUnitIds(db, user);
+    return units ? `AND unit_id IN (${[...units].join(',') || 'NULL'})` : '';
+  };
+  // Zarządzać użytkownikami może tylko admin bez ograniczenia do obiektów
+  const isFullAdmin = (user: User) => user.role === 'admin' && !user.properties;
+
+  const sessionInfo = (user: User) => {
+    const names = user.properties
+      ? (all(`SELECT name FROM properties WHERE id IN (${user.properties.join(',') || 'NULL'}) ORDER BY sort`) as { name: string }[]).map((p) => p.name)
+      : null;
+    return { username: user.username, role: user.role, properties: names, canManageUsers: isFullAdmin(user) };
+  };
+
   // Powiadomienia o zmianach wysyłamy w tle — odpowiedź nie czeka na serwery Apple/Google.
   const notify = (events: ChangeEvent[], excludeUserId: number | null) => {
     announce(db, pushSender, events, excludeUserId).catch((err) => console.error('Powiadomienie o zmianie nie powiodło się', err));
@@ -89,7 +112,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     }
     clearFails(keys);
     setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts(c), maxAge: SESSION_DAYS * 86400 });
-    return c.json({ username: user.username, role: user.role });
+    return c.json(sessionInfo(user));
   });
 
   api.use('*', async (c, next) => {
@@ -101,10 +124,14 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     const readOnlyAllowed = c.req.method === 'GET' || c.req.path.endsWith('/auth/logout') || c.req.path.endsWith('/auth/password')
       || c.req.path.includes('/push/');
     if (user.role === 'viewer' && !readOnlyAllowed) return c.json({ error: 'Konto tylko do podglądu — brak uprawnień do zmian' }, 403);
+    // Konto ograniczone do wybranych obiektów nie zmienia ustawień obiektów, domków ani kalendarzy Bookingu.
+    if (user.properties && c.req.method !== 'GET' && /\/(properties|units|feeds)(\/|$)/.test(c.req.path)) {
+      return c.json({ error: 'To konto ma dostęp tylko do wybranych obiektów — nie może zmieniać ich ustawień' }, 403);
+    }
     await next();
   });
 
-  api.get('/auth/me', (c) => c.json({ username: c.get('user').username, role: c.get('user').role }));
+  api.get('/auth/me', (c) => c.json(sessionInfo(c.get('user'))));
 
   api.post('/auth/logout', (c) => {
     deleteSession(db, getCookie(c, SESSION_COOKIE));
@@ -164,12 +191,88 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
 
   api.post('/push/test', async (c) => {
     if (!pushSender) return c.json({ error: 'Powiadomienia są wyłączone na serwerze' }, 503);
-    const arrivals = arrivalMessages(db, warsawDate());
+    const arrivals = arrivalMessages(db, warsawDate(), allowedUnitIds(db, c.get('user')));
     const messages = arrivals.length ? arrivals
       : [{ title: 'Powiadomienia działają ✓', body: 'Dziś brak przyjazdów. O ustawionej godzinie dostaniesz osobne powiadomienie o każdym przyjeździe.', url: '/?tab=agenda' }];
     let sent = 0;
     for (const msg of messages) sent += await sendToSubscriptions(db, pushSender, c.get('user').id, msg);
     return c.json({ sent });
+  });
+
+  // ---- Użytkownicy i uprawnienia (tylko pełny admin) ----
+  const USERNAME_RE = /^[\w.@-]{3,50}$/;
+  const requireFullAdmin = (user: User) => {
+    if (!isFullAdmin(user)) throw new HTTPException(403, { message: 'Tylko administrator może zarządzać użytkownikami' });
+  };
+  const readScope = (v: unknown): number[] | null => {
+    if (v === null || v === undefined) return null; // wszystkie obiekty
+    if (!Array.isArray(v) || !v.length) bad('Wybierz co najmniej jeden obiekt albo „wszystkie”');
+    const ids = [...new Set(v.map(Number))];
+    const known = new Set((all('SELECT id FROM properties') as { id: number }[]).map((p) => p.id));
+    if (ids.some((id) => !known.has(id))) bad('Nieznany obiekt');
+    return ids;
+  };
+  const readRole = (v: unknown) => (v === 'admin' || v === 'viewer' ? v : bad('Wybierz rolę'));
+  const userRow = (id: number) => {
+    const u = get('SELECT id, username, role, property_ids, created_at FROM users WHERE id = ?', id) as
+      { id: number; username: string; role: string; property_ids: string | null; created_at: string } | undefined;
+    return u && { id: u.id, username: u.username, role: u.role, properties: u.property_ids ? JSON.parse(u.property_ids) as number[] : null, created_at: u.created_at };
+  };
+  const targetUser = (c: { req: { param: (k: string) => string } }, me: User, allowSelf = false) => {
+    const u = userRow(int(c.req.param('id')));
+    if (!u) throw new HTTPException(404, { message: 'Nie znaleziono użytkownika' });
+    if (!allowSelf && u.id === me.id) bad('Nie możesz zmienić uprawnień ani usunąć własnego konta');
+    return u;
+  };
+
+  api.get('/users', (c) => {
+    requireFullAdmin(c.get('user'));
+    const ids = (all('SELECT id FROM users ORDER BY username COLLATE NOCASE') as { id: number }[]).map((r) => r.id);
+    return c.json(ids.map((id) => ({ ...userRow(id), me: id === c.get('user').id })));
+  });
+
+  api.post('/users', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const b = await c.req.json();
+    const username = str(b.username, 50);
+    if (!USERNAME_RE.test(username)) bad('Login: 3–50 znaków (litery, cyfry, . _ - @)');
+    if (get('SELECT 1 FROM users WHERE username = ?', username)) bad(`Użytkownik „${username}” już istnieje`);
+    if (typeof b.password !== 'string' || b.password.length < 8) bad('Hasło musi mieć co najmniej 8 znaków');
+    const role = readRole(b.role);
+    const scope = readScope(b.properties);
+    const r = run('INSERT INTO users (username, password_hash, role, property_ids) VALUES (?, ?, ?, ?)',
+      username, hashPassword(b.password), role, scope ? JSON.stringify(scope) : null);
+    return c.json(userRow(Number(r.lastInsertRowid)), 201);
+  });
+
+  api.put('/users/:id', async (c) => {
+    const me = c.get('user');
+    requireFullAdmin(me);
+    const u = targetUser(c, me);
+    const b = await c.req.json();
+    const role = readRole(b.role);
+    const scope = readScope(b.properties);
+    run('UPDATE users SET role = ?, property_ids = ? WHERE id = ?', role, scope ? JSON.stringify(scope) : null, u.id);
+    return c.json(userRow(u.id));
+  });
+
+  api.post('/users/:id/password', async (c) => {
+    const me = c.get('user');
+    requireFullAdmin(me);
+    const u = targetUser(c, me, true);
+    const b = await c.req.json();
+    if (typeof b.password !== 'string' || b.password.length < 8) bad('Hasło musi mieć co najmniej 8 znaków');
+    setPassword(db, u.id, b.password); // wylogowuje wszystkie sesje tego użytkownika
+    if (u.id === me.id) setCookie(c, SESSION_COOKIE, createSession(db, me.id), { ...cookieOpts(c), maxAge: SESSION_DAYS * 86400 });
+    return c.json({ ok: true });
+  });
+
+  api.delete('/users/:id', (c) => {
+    const me = c.get('user');
+    requireFullAdmin(me);
+    const u = targetUser(c, me);
+    run('DELETE FROM users WHERE id = ?', u.id);
+    return c.json({ ok: true });
   });
 
   // ---- Obiekty i jednostki ----
@@ -178,7 +281,8 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     const units = all('SELECT * FROM units ORDER BY sort, id') as Record<string, unknown>[];
     const feeds = all('SELECT * FROM feeds ORDER BY id') as Record<string, unknown>[];
     const viewer = c.get('user').role === 'viewer';
-    return c.json(properties.map((p) => ({
+    const allowed = c.get('user').properties;
+    return c.json(properties.filter((p) => !allowed || allowed.includes(p.id as number)).map((p) => ({
       ...p,
       units: units.filter((u) => u.property_id === p.id).map((u) => (viewer
         // podgląd nie widzi prywatnych linków (token eksportu, adresy kalendarzy Bookingu)
@@ -270,8 +374,8 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
 
   // ---- Rezerwacje ----
   api.get('/reservations/:id{[0-9]+}', (c) => {
-    const row = get('SELECT * FROM reservations WHERE id = ?', int(c.req.param('id')));
-    return row ? c.json(row) : c.json({ error: 'Nie znaleziono rezerwacji' }, 404);
+    const row = get('SELECT * FROM reservations WHERE id = ?', int(c.req.param('id'))) as Record<string, unknown> | undefined;
+    return row && canSee(c.get('user'), row.unit_id) ? c.json(row) : c.json({ error: 'Nie znaleziono rezerwacji' }, 404);
   });
 
   api.get('/reservations', (c) => {
@@ -279,13 +383,13 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     const to = c.req.query('to') ?? '9999-12-31';
     const withCancelled = c.req.query('cancelled') === '1';
     return c.json(all(`SELECT * FROM reservations WHERE check_out > ? AND check_in < ? ${withCancelled ? '' : "AND status != 'cancelled'"}
-      ORDER BY check_in, unit_id`, from, to));
+      ${unitScope(c.get('user'))} ORDER BY check_in, unit_id`, from, to));
   });
 
   api.get('/guests', (c) => {
     const q = `%${str(c.req.query('q'), 50)}%`;
     return c.json(all(`SELECT guest_name, guest_phone, guest_email, MAX(check_in) AS last_stay, COUNT(*) AS stays
-      FROM reservations WHERE guest_name != '' AND (guest_name LIKE ? OR guest_phone LIKE ? OR guest_email LIKE ?)
+      FROM reservations WHERE guest_name != '' AND (guest_name LIKE ? OR guest_phone LIKE ? OR guest_email LIKE ?) ${unitScope(c.get('user'))}
       GROUP BY lower(guest_name), guest_phone ORDER BY last_stay DESC LIMIT 10`, q, q, q));
   });
 
@@ -319,6 +423,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   api.post('/reservations', async (c) => {
     const b = await c.req.json();
     const r = readReservation(b);
+    requireUnit(c.get('user'), r.unit_id);
     const found = conflicts(r, 0);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email,
@@ -333,9 +438,10 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   api.put('/reservations/:id', async (c) => {
     const id = int(c.req.param('id'));
     const existing = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown> | undefined;
-    if (!existing) return c.json({ error: 'Nie znaleziono' }, 404);
+    if (!existing || !canSee(c.get('user'), existing.unit_id)) return c.json({ error: 'Nie znaleziono' }, 404);
     const b = await c.req.json();
     const r = readReservation(b);
+    requireUnit(c.get('user'), r.unit_id);
     // Rezerwację z Bookingu można edytować w całości. Ręczna zmiana dat blokuje ich nadpisywanie przez synchronizację.
     const datesChanged = r.check_in !== existing.check_in || r.check_out !== existing.check_out;
     const datesLocked = existing.feed_id && datesChanged ? 1 : (existing.dates_locked as number);
@@ -353,18 +459,18 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   // ---- Odwołane na Bookingu: do przejrzenia / zamiany na prywatną ----
   api.get('/booking-cancellations', (c) => c.json(all(`SELECT * FROM reservations
     WHERE external_uid IS NOT NULL AND status = 'cancelled' AND cancelled_at IS NOT NULL AND cancel_reviewed = 0
-    ORDER BY check_in`)));
+    ${unitScope(c.get('user'))} ORDER BY check_in`)));
 
-  const cancelledImport = (id: number) => {
+  const cancelledImport = (user: User, id: number) => {
     const row = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown> | undefined;
-    if (!row) throw new HTTPException(404, { message: 'Nie znaleziono' });
+    if (!row || !canSee(user, row.unit_id)) throw new HTTPException(404, { message: 'Nie znaleziono' });
     if (!row.external_uid || row.status !== 'cancelled') bad('To nie jest odwołana rezerwacja z Bookingu');
     return row;
   };
 
   api.post('/reservations/:id/convert-direct', async (c) => {
     const id = int(c.req.param('id'));
-    const row = cancelledImport(id);
+    const row = cancelledImport(c.get('user'), id);
     const b = await c.req.json().catch(() => ({}));
     const found = conflicts({ unit_id: row.unit_id as number, check_in: row.check_in as string, check_out: row.check_out as string, status: 'confirmed' }, id);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
@@ -380,13 +486,14 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
 
   api.post('/reservations/:id/review-cancellation', (c) => {
     const id = int(c.req.param('id'));
-    cancelledImport(id);
+    cancelledImport(c.get('user'), id);
     run('UPDATE reservations SET cancel_reviewed = 1 WHERE id = ?', id);
     return c.json(get('SELECT * FROM reservations WHERE id = ?', id));
   });
 
   api.delete('/reservations/:id', (c) => {
     const row = get('SELECT * FROM reservations WHERE id = ?', int(c.req.param('id'))) as Record<string, unknown> | undefined;
+    if (!row || !canSee(c.get('user'), row.unit_id)) return c.json({ error: 'Nie znaleziono' }, 404);
     run('DELETE FROM reservations WHERE id = ?', c.req.param('id'));
     if (row) notify([{ kind: 'deleted', row, by: c.get('user').username }], c.get('user').id);
     return c.json({ ok: true });

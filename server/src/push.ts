@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import webpush from 'web-push';
+import { allowedUnitIds, propertyIdsOf } from './auth.ts';
 
 // Powiadomienia push (Web Push). Klucze VAPID generujemy przy pierwszym uruchomieniu i trzymamy w bazie.
 
@@ -68,12 +69,12 @@ const shortDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateStri
 const nightsPl = (n: number) => (n === 1 ? '1 noc' : `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'noce' : 'nocy'}`);
 
 /** Osobne powiadomienie dla każdego dzisiejszego przyjazdu. */
-export function arrivalMessages(db: DatabaseSync, date: string): PushMessage[] {
-  const rows = db.prepare(`SELECT r.id, r.guest_name, r.source, r.adults, r.children, r.check_out, u.name AS unit, p.name AS property
+export function arrivalMessages(db: DatabaseSync, date: string, units: Set<number> | null = null): PushMessage[] {
+  const rows = db.prepare(`SELECT r.id, r.unit_id, r.guest_name, r.source, r.adults, r.children, r.check_out, u.name AS unit, p.name AS property
     FROM reservations r JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
     WHERE r.check_in = ? AND r.status != 'cancelled' ORDER BY p.sort, u.sort`).all(date) as
-    { id: number; guest_name: string; source: string; adults: number; children: number; check_out: string; unit: string; property: string }[];
-  return rows.map((r) => {
+    { id: number; unit_id: number; guest_name: string; source: string; adults: number; children: number; check_out: string; unit: string; property: string }[];
+  return rows.filter((r) => !units || units.has(r.unit_id)).map((r) => {
     const who = r.guest_name || (r.source === 'booking' ? 'Gość z Booking.com' : r.source === 'airbnb' ? 'Gość z Airbnb' : 'Gość');
     const nights = Math.round((Date.parse(r.check_out) - Date.parse(date)) / 86_400_000);
     const people = r.adults + r.children ? ` · ${r.adults + r.children} os.` : '';
@@ -100,10 +101,11 @@ export async function dailyArrivalsTick(db: DatabaseSync, send: Sender, now = ne
     WHERE u.notified_on IS NULL OR u.notified_on != ?`).all(today) as { id: number; notify_time: string }[];
   const due = users.filter((u) => nowMin >= minutes(u.notify_time) && nowMin - minutes(u.notify_time) < 180);
   if (!due.length) return 0;
-  const messages = arrivalMessages(db, today);
   let sent = 0;
   for (const u of due) {
     db.prepare('UPDATE users SET notified_on = ? WHERE id = ?').run(today, u.id);
+    // każdy dostaje tylko przyjazdy w obiektach, do których ma dostęp
+    const messages = arrivalMessages(db, today, allowedUnitIds(db, { properties: propertyIdsOf(db, u.id) }));
     for (const msg of messages) sent += await sendToSubscriptions(db, send, u.id, msg);
   }
   return sent;

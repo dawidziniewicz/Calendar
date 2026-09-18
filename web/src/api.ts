@@ -35,7 +35,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export type PushSettings = { time: string; changes: boolean };
-export type Session = { username: string; role: 'admin' | 'viewer' };
+/** properties: nazwy obiektów, do których konto ma dostęp (null = wszystkie). */
+export type Session = { username: string; role: 'admin' | 'viewer'; properties: string[] | null; canManageUsers: boolean };
+/** properties: id obiektów (null = wszystkie). */
+export type AppUser = { id: number; username: string; role: 'admin' | 'viewer'; properties: number[] | null; created_at: string; me?: boolean };
+export type UserInput = { role: 'admin' | 'viewer'; properties: number[] | null };
 export type SyncResult = { feedId: number; unitId: number; ok: boolean; added: number; updated: number; cancelled: number; error?: string };
 export type Guest = { guest_name: string; guest_phone: string; guest_email: string; last_stay: string; stays: number };
 
@@ -68,6 +72,11 @@ export const api = {
   pushTest: () => request<{ sent: number }>('POST', '/push/test'),
   pushSettings: () => request<PushSettings>('GET', '/push/settings'),
   savePushSettings: (patch: Partial<PushSettings>) => request<PushSettings>('PUT', '/push/settings', patch),
+  users: () => request<AppUser[]>('GET', '/users'),
+  createUser: (u: UserInput & { username: string; password: string }) => request<AppUser>('POST', '/users', u),
+  updateUser: (id: number, u: UserInput) => request<AppUser>('PUT', `/users/${id}`, u),
+  setUserPassword: (id: number, password: string) => request('POST', `/users/${id}/password`, { password }),
+  deleteUser: (id: number) => request('DELETE', `/users/${id}`),
   bookingCancellations: () => request<Reservation[]>('GET', '/booking-cancellations'),
   convertToDirect: (id: number, force = false) => request<Reservation>('POST', `/reservations/${id}/convert-direct`, { force }),
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
