@@ -11,7 +11,7 @@ export type ChangeEvent =
   | { kind: 'updated'; before: Row; after: Row; by: string }
   | { kind: 'sync'; change: SyncChange; row: Row };
 
-const SOURCE_LABELS: Record<string, string> = { direct: 'Bezpośrednio', booking: 'Booking.com', airbnb: 'Airbnb', other: 'Inne' };
+const SOURCE_LABELS: Record<string, string> = { direct: 'Prywatne', booking: 'Booking.com', airbnb: 'Airbnb', other: 'Inne' };
 const STATUS_LABELS: Record<string, string> = { confirmed: 'potwierdzona', tentative: 'wstępna', cancelled: 'anulowana' };
 const MAX_SEPARATE = 5; // więcej zmian naraz → jedno zbiorcze powiadomienie
 
@@ -81,7 +81,7 @@ export function changeMessage(db: DatabaseSync, ev: ChangeEvent): PushMessage | 
   if (ev.kind === 'converted') {
     const r = ev.row;
     return {
-      title: `Zamieniona na bezpośrednią · ${unitLabel(db, r.unit_id)}`,
+      title: `Zamieniona na prywatną · ${unitLabel(db, r.unit_id)}`,
       body: `${who(r)} · ${range(r)} (była odwołana na Bookingu) · ${ev.by}`,
       url: link(r),
       tag: `res-${r.id}`,

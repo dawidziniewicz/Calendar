@@ -50,7 +50,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
           <div>
             <div className="guest-name">{r.guest_name || <em>{SOURCES[r.source] ?? r.source} – uzupełnij dane gościa</em>}</div>
             <div className="guest-meta">
-              {info?.unit.name} · {info?.property.name}
+              <strong className="guest-unit">{info?.unit.name}</strong> · {info?.property.name}
             </div>
             <div className="guest-meta">
               {formatShort(r.check_in)} – {formatShort(r.check_out)} · {nightsLabel(nights)}
@@ -78,7 +78,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
       {cancellations.length > 0 && (
         <div className="agenda-day cancellations">
           <h2>Odwołane na Bookingu <span className="count danger">{cancellations.length}</span></h2>
-          <p className="muted small">Stuknij, aby zamienić na rezerwację bezpośrednią albo oznaczyć jako przejrzaną.</p>
+          <p className="muted small">Stuknij, aby zamienić na rezerwację prywatną albo oznaczyć jako przejrzaną.</p>
           {cancellations.map((r) => card(r, 'cancel'))}
         </div>
       )}

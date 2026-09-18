@@ -132,7 +132,8 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                       const left = Math.max(from + 0.5, 0);
                       const right = Math.min(to + 0.5, DAYS);
                       if (right <= 0 || left >= DAYS) return null;
-                      const classes = ['tl-bar', `src-${r.source}`, `st-${r.status}`, overlapping.has(r.id) ? 'conflict' : '',
+                      const arrivesToday = r.check_in === now;
+                      const classes = ['tl-bar', `src-${r.source}`, `st-${r.status}`, overlapping.has(r.id) ? 'conflict' : '', arrivesToday ? 'arrival-today' : '',
                         from + 0.5 < 0 ? 'cut-left' : '', to + 0.5 > DAYS ? 'cut-right' : ''].join(' ');
                       return (
                         <button
@@ -140,9 +141,9 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                           className={classes}
                           style={{ left: `calc(${left} * var(--day-w) + 1px)`, width: `calc(${right - left} * var(--day-w) - 2px)` }}
                           onClick={() => onSelect(r)}
-                          title={`${reservationLabel(r)} · ${formatShort(r.check_in)} – ${formatShort(r.check_out)}`}
+                          title={`${arrivesToday ? 'Przyjazd dziś · ' : ''}${reservationLabel(r)} · ${formatShort(r.check_in)} – ${formatShort(r.check_out)}`}
                         >
-                          <span>{reservationLabel(r)}</span>
+                          <span>{arrivesToday && <b className="bar-flag">DZIŚ</b>}{reservationLabel(r)}</span>
                         </button>
                       );
                     })}
@@ -155,11 +156,12 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
       </div>
 
       <div className="legend">
-        <span><i className="src-direct" /> Bezpośrednio</span>
+        <span><i className="src-direct" /> Prywatne</span>
         <span><i className="src-booking" /> Booking.com</span>
         <span><i className="src-airbnb" /> Airbnb</span>
         <span><i className="st-tentative" /> Wstępna</span>
         <span><i className="conflict" /> Konflikt</span>
+        <span><i className="arrival-today" /> Przyjazd dziś</span>
       </div>
     </section>
   );

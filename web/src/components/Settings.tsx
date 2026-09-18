@@ -185,7 +185,7 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
             <button className="btn small" disabled={!feedUrl.trim()} onClick={() => { run(() => api.createFeed({ unit_id: u.id, source: feedSource, url: feedUrl.trim() })); setFeedUrl(''); }}>Dodaj</button>
           </div>
 
-          <h4>2. Eksport do Booking.com (blokuje terminy zarezerwowane bezpośrednio)</h4>
+          <h4>2. Eksport do Booking.com (blokuje terminy rezerwacji prywatnych)</h4>
           <p className="muted">Wklej ten adres w extranecie Booking.com → Kalendarz → Synchronizacja kalendarzy → Importuj kalendarz.</p>
           <div className="export">
             <code>{exportUrl('booking')}</code>

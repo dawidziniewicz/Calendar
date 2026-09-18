@@ -89,7 +89,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               <strong>Odwołana na {SOURCES[r.source] ?? r.source}</strong>
               <p>
                 Rezerwacja zniknęła z kalendarza Bookingu{r.cancelled_at ? ` (${formatShort(r.cancelled_at.slice(0, 10))})` : ''}.
-                Jeśli gość przyjeżdża mimo to (np. rezerwuje u Ciebie bezpośrednio), zamień ją — dane gościa zostaną.
+                Jeśli gość przyjeżdża mimo to (np. rezerwuje u Ciebie prywatnie), zamień ją — dane gościa zostaną.
               </p>
               {conflicts.length > 0 && (
                 <>
@@ -104,7 +104,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               <div className="cancel-actions">
                 {conflicts.length > 0
                   ? <button type="button" className="btn danger" disabled={busy} onClick={() => convert(true)}>Zamień mimo to</button>
-                  : <button type="button" className="btn primary" disabled={busy} onClick={() => convert()}>Zamień na rezerwację bezpośrednią</button>}
+                  : <button type="button" className="btn primary" disabled={busy} onClick={() => convert()}>Zamień na rezerwację prywatną</button>}
                 {!r.cancel_reviewed && (
                   <button type="button" className="btn" disabled={busy} onClick={review}>Gość nie przyjeżdża — ukryj</button>
                 )}

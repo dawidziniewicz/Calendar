@@ -350,7 +350,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     return c.json(updated);
   });
 
-  // ---- Odwołane na Bookingu: do przejrzenia / zamiany na bezpośrednią ----
+  // ---- Odwołane na Bookingu: do przejrzenia / zamiany na prywatną ----
   api.get('/booking-cancellations', (c) => c.json(all(`SELECT * FROM reservations
     WHERE external_uid IS NOT NULL AND status = 'cancelled' AND cancelled_at IS NOT NULL AND cancel_reviewed = 0
     ORDER BY check_in`)));

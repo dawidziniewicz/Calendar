@@ -29,7 +29,7 @@ export type Reservation = {
 export type Draft = Omit<Reservation, 'id' | 'feed_id' | 'external_uid' | 'external_summary'> & { id?: number; feed_id?: number | null; external_summary?: string | null };
 
 export const SOURCES: Record<string, string> = {
-  direct: 'Bezpośrednio',
+  direct: 'Prywatne',
   booking: 'Booking.com',
   airbnb: 'Airbnb',
   other: 'Inne',

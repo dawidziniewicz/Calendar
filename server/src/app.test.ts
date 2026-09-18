@@ -121,7 +121,7 @@ test('synchronizacja dodaje, aktualizuje i anuluje, zachowując dane gościa', a
   }
 });
 
-test('odwołana na Bookingu → zamiana na rezerwację bezpośrednią', async () => {
+test('odwołana na Bookingu → zamiana na rezerwację prywatną', async () => {
   const { db, call, login } = setup();
   await login();
   let body = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:x1\nDTSTART;VALUE=DATE:20300901\nDTEND;VALUE=DATE:20300904\nEND:VEVENT\nEND:VCALENDAR';
