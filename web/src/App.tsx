@@ -8,6 +8,8 @@ import Settings from './components/Settings';
 import ReservationSheet from './components/ReservationSheet';
 import Login from './components/Login';
 import ReservationView from './components/ReservationView';
+import ConflictMark from './components/ConflictMark';
+import { conflictIds } from './conflicts';
 
 type Tab = 'calendar' | 'agenda' | 'settings';
 
@@ -67,6 +69,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const [editing, setEditing] = useState<Draft | null>(null);
   const [viewing, setViewing] = useState<Reservation | null>(null);
   const [cancellations, setCancellations] = useState<Reservation[]>([]);
+  const [conflictCount, setConflictCount] = useState(0);
   const [version, setVersion] = useState(0); // podbijane po zapisie — widoki przeładowują rezerwacje
 
   const loadProperties = useCallback(() => {
@@ -87,6 +90,11 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   useEffect(() => {
     if (!readOnly) api.bookingCancellations().then(setCancellations).catch(() => {});
   }, [version, readOnly]);
+
+  // Czy w bieżących i przyszłych rezerwacjach jest konflikt → czerwony „!” na zakładce Aktualności
+  useEffect(() => {
+    api.reservations(addDays(today(), -1), '9999-12-31').then((r) => setConflictCount(conflictIds(r).size)).catch(() => {});
+  }, [version]);
 
   // Po powrocie do aplikacji na telefonie odśwież dane.
   useEffect(() => {
@@ -118,7 +126,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
           {tabs.map((t) => (
             <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
               {t.label}
-              {t.id === 'agenda' && cancellations.length > 0 && <span className="tab-badge">{cancellations.length}</span>}
+              {t.id === 'agenda' && <TabBadges cancellations={cancellations.length} conflicts={conflictCount} />}
             </button>
           ))}
         </nav>
@@ -147,7 +155,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         {tabs.map((t) => (
           <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={t.icon} /></svg>
-            {t.id === 'agenda' && cancellations.length > 0 && <span className="tab-badge">{cancellations.length}</span>}
+            {t.id === 'agenda' && <TabBadges cancellations={cancellations.length} conflicts={conflictCount} />}
             <span>{t.label}</span>
           </button>
         ))}
@@ -179,6 +187,17 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         />
       )}
     </div>
+  );
+}
+
+// Znaczki na zakładce Aktualności: „!” = konflikt terminów, liczba = odwołania z Bookingu do przejrzenia
+function TabBadges({ cancellations, conflicts }: { cancellations: number; conflicts: number }) {
+  if (!cancellations && !conflicts) return null;
+  return (
+    <span className="tab-badges">
+      {conflicts > 0 && <ConflictMark />}
+      {cancellations > 0 && <span className="tab-badge">{cancellations}</span>}
+    </span>
   );
 }
 

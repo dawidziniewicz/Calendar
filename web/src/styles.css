@@ -319,7 +319,10 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 /* ---- Odwołane na Bookingu ---- */
 .tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 0.7rem; font-weight: 700; line-height: 1; }
 .tabs-mobile button:not(.fab) { position: relative; } /* plusik zostaje pozycjonowany absolutnie, poza układem zakładek */
-.tabs-mobile .tab-badge { position: absolute; top: 6px; left: calc(50% + 6px); margin: 0; }
+.tab-badges { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; }
+.tab-badges .tab-badge { margin-left: 0; }
+.tab-badges .conflict-mark { width: 18px; height: 18px; margin: 0; font-size: 0.72rem; }
+.tabs-mobile .tab-badges { position: absolute; top: 5px; left: calc(50% + 6px); margin: 0; }
 .count.danger { background: var(--danger); color: #fff; }
 .small { font-size: 0.85rem; margin: -4px 0 8px; }
 .guest-card.kind-cancel { border-left: 4px solid var(--danger); opacity: 0.95; }
