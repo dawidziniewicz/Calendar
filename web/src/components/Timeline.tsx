@@ -3,6 +3,8 @@ import { api } from '../api';
 import type { Property, Reservation } from '../types';
 import { SOURCES } from '../types';
 import { getPrefs } from '../prefs';
+import { conflictIds } from '../conflicts';
+import ConflictMark from './ConflictMark';
 import { addDays, addMonths, diffDays, formatMonth, formatShort, formatWeekday, fromIso, isWeekend, today } from '../dates';
 
 type Props = {
@@ -74,15 +76,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
   }, [byUnit]);
 
   // Rezerwacje nakładające się w tym samym obiekcie (np. Booking + wpis ręczny) oznaczamy na czerwono.
-  const overlapping = useMemo(() => {
-    const ids = new Set<number>();
-    for (const list of byUnit.values()) {
-      for (const a of list) for (const b of list) {
-        if (a.id < b.id && a.check_in < b.check_out && b.check_in < a.check_out) { ids.add(a.id); ids.add(b.id); }
-      }
-    }
-    return ids;
-  }, [byUnit]);
+  const overlapping = useMemo(() => conflictIds(reservations), [reservations]);
 
   const occupiedToday = reservations.filter((r) => r.check_in <= now && r.check_out > now).length;
   const totalUnits = properties.reduce((n, p) => n + p.units.length, 0);
@@ -165,7 +159,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                           onClick={() => onSelect(r)}
                           title={`${arrivesToday ? 'Przyjazd dziś · ' : ''}${reservationLabel(r)} · ${formatShort(r.check_in)} – ${formatShort(r.check_out)}`}
                         >
-                          <span>{reservationLabel(r)}</span>
+                          <span>{overlapping.has(r.id) && <ConflictMark />}{reservationLabel(r)}</span>
                         </button>
                       );
                     })}
@@ -182,7 +176,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
         <span><i className="src-booking" /> Booking.com</span>
         <span><i className="src-airbnb" /> Airbnb</span>
         <span><i className="st-tentative" /> Wstępna</span>
-        <span><i className="conflict" /> Konflikt</span>
+        <span><ConflictMark /> Konflikt</span>
         <span><i className="arrival-today" /> Przyjazd dziś</span>
       </div>
     </section>

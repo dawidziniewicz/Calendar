@@ -2,6 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Property, Reservation, Unit } from '../types';
 import { SOURCES } from '../types';
+import { conflictIds } from '../conflicts';
+import ConflictMark from './ConflictMark';
 import { addDays, diffDays, formatLong, formatMonth, formatShort, nightsLabel, today } from '../dates';
 
 type Props = { properties: Property[]; version: number; cancellations: Reservation[]; onSelect: (r: Reservation) => void };
@@ -26,6 +28,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
     return map;
   }, [properties]);
 
+  const conflicts = useMemo(() => conflictIds(reservations), [reservations]);
   const q = query.trim().toLowerCase();
   const filtered = q
     ? reservations.filter((r) => [r.guest_name, r.guest_phone, r.guest_email, r.notes, units.get(r.unit_id)?.unit.name]
@@ -55,7 +58,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
         <button className="guest-main" onClick={() => onSelect(r)}>
           <span className="unit-dot" style={{ background: info?.unit.color }} />
           <div>
-            <div className="guest-name">{r.guest_name || <em>{SOURCES[r.source] ?? r.source} – uzupełnij dane gościa</em>}</div>
+            <div className="guest-name">{conflicts.has(r.id) && <ConflictMark />}{r.guest_name || <em>{SOURCES[r.source] ?? r.source} – uzupełnij dane gościa</em>}</div>
             <div className="guest-meta">
               <strong className="guest-unit">{info?.unit.name}</strong> · {info?.property.name}
             </div>
