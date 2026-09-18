@@ -402,3 +402,5 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .tl-bar .conflict-mark { border: 1.5px solid #fff; margin-left: 1px; }
 .guest-name .conflict-mark { width: 19px; height: 19px; margin-right: 7px; vertical-align: 2px; }
 .legend .conflict-mark { width: 15px; height: 15px; font-size: 0.68rem; margin-right: 4px; }
+.load-more { display: flex; width: 100%; min-height: 48px; margin: 4px 0 12px; color: var(--primary); font-size: 0.95rem; }
+.end-note { text-align: center; margin: 8px 0 16px; }

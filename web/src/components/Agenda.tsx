@@ -8,6 +8,7 @@ import { addDays, diffDays, formatLong, formatMonth, formatShort, nightsLabel, t
 
 type Props = { properties: Property[]; version: number; cancellations: Reservation[]; onSelect: (r: Reservation) => void };
 
+const PAGE_DAYS = 14;
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function Agenda({ properties, version, cancellations, onSelect }: Props) {
@@ -15,6 +16,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [stayingOpen, setStayingOpen] = useState(false);
+  const [visibleDays, setVisibleDays] = useState(PAGE_DAYS);
   const now = today();
 
   useEffect(() => {
@@ -36,13 +38,13 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
     : reservations;
 
   const staying = filtered.filter((r) => r.check_in < now && r.check_out > now);
-  // Dziś i jutro zawsze; dalej tylko dni, w których ktoś przyjeżdża lub wyjeżdża — aż do ostatniego gościa.
-  const eventDates = new Set<string>([now, addDays(now, 1)]);
-  for (const r of filtered) {
-    if (r.check_in >= now) eventDates.add(r.check_in);
-    if (r.check_out >= now) eventDates.add(r.check_out);
-  }
-  const days = [...eventDates].sort().map((d) => ({
+  // Bez wyszukiwania: kolejne dni po 14 („Załaduj więcej”). Przy wyszukiwaniu: tylko dni z wynikami, bez limitu.
+  const lastDate = filtered.reduce((max, r) => (r.check_out > max ? r.check_out : max), now);
+  const dayDates = q
+    ? [...new Set(filtered.flatMap((r) => [r.check_in, r.check_out]).filter((d) => d >= now))].sort()
+    : Array.from({ length: visibleDays }, (_, i) => addDays(now, i));
+  const hasMore = !q && addDays(now, visibleDays - 1) < lastDate;
+  const days = dayDates.map((d) => ({
     date: d,
     arrivals: filtered.filter((r) => r.check_in === d),
     departures: filtered.filter((r) => r.check_out === d),
@@ -123,6 +125,12 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
         </div>
         </Fragment>
       ))}
+      {hasMore && (
+        <button type="button" className="btn load-more" onClick={() => setVisibleDays((n) => n + PAGE_DAYS)}>
+          Załaduj więcej
+        </button>
+      )}
+      {!q && !hasMore && days.length > 0 && <p className="empty end-note">To wszystkie zaplanowane rezerwacje.</p>}
     </section>
   );
 }
