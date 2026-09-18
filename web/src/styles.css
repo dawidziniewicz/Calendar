@@ -356,7 +356,6 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 
 /* ---- Dzisiejsze przyjazdy w kalendarzu ---- */
 .tl-bar.arrival-today { box-shadow: 0 0 0 2px var(--accent), 0 0 12px 2px color-mix(in srgb, var(--accent) 55%, transparent); z-index: 3; }
-.bar-flag { display: inline-block; margin-right: 6px; padding: 1px 5px; border-radius: 5px; background: var(--accent); color: #fff; font-size: 0.62rem; font-weight: 800; letter-spacing: 0.04em; vertical-align: 1px; }
 .legend i.arrival-today { background: transparent; box-shadow: 0 0 0 2px var(--accent), 0 0 6px var(--accent); }
 .guest-unit { color: var(--ink); font-weight: 700; }
 

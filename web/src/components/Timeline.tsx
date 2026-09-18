@@ -165,7 +165,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                           onClick={() => onSelect(r)}
                           title={`${arrivesToday ? 'Przyjazd dziś · ' : ''}${reservationLabel(r)} · ${formatShort(r.check_in)} – ${formatShort(r.check_out)}`}
                         >
-                          <span>{arrivesToday && <b className="bar-flag">DZIŚ</b>}{reservationLabel(r)}</span>
+                          <span>{reservationLabel(r)}</span>
                         </button>
                       );
                     })}
