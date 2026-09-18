@@ -393,7 +393,9 @@ fieldset p { margin: 0; font-size: 0.85rem; }
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 17px; height: 17px; margin-right: 5px; border-radius: 50%;
   background: var(--danger); color: #fff; font-size: 0.75rem; font-weight: 900; line-height: 1;
-  vertical-align: 1px; box-shadow: 0 0 0 1.5px #fff;
+  vertical-align: 1px; box-sizing: border-box;
 }
-.guest-name .conflict-mark { width: 19px; height: 19px; margin-right: 7px; vertical-align: 2px; box-shadow: none; }
-.legend .conflict-mark { width: 15px; height: 15px; font-size: 0.68rem; margin-right: 4px; box-shadow: none; }
+/* Na pasku w kalendarzu: białe obramowanie w środku kółka (cień był przycinany przez krawędź paska) */
+.tl-bar .conflict-mark { border: 1.5px solid #fff; margin-left: 1px; }
+.guest-name .conflict-mark { width: 19px; height: 19px; margin-right: 7px; vertical-align: 2px; }
+.legend .conflict-mark { width: 15px; height: 15px; font-size: 0.68rem; margin-right: 4px; }
