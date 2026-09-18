@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Property, Reservation, Unit } from '../types';
 import { SOURCES } from '../types';
-import { addDays, diffDays, formatLong, formatShort, nightsLabel, today } from '../dates';
+import { addDays, diffDays, formatLong, formatMonth, formatShort, nightsLabel, today } from '../dates';
 
 type Props = { properties: Property[]; version: number; cancellations: Reservation[]; onSelect: (r: Reservation) => void };
 
-const RANGE = 14;
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function Agenda({ properties, version, cancellations, onSelect }: Props) {
@@ -17,7 +16,8 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
   const now = today();
 
   useEffect(() => {
-    api.reservations(addDays(now, -1), addDays(now, RANGE + 1)).then(setReservations).catch((e) => setError(e.message));
+    // Wszystko od dziś do ostatniego przyszłego gościa
+    api.reservations(addDays(now, -1), '9999-12-31').then(setReservations).catch((e) => setError(e.message));
   }, [version, now]);
 
   const units = useMemo(() => {
@@ -33,7 +33,13 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
     : reservations;
 
   const staying = filtered.filter((r) => r.check_in < now && r.check_out > now);
-  const days = Array.from({ length: RANGE }, (_, i) => addDays(now, i)).map((d) => ({
+  // Dziś i jutro zawsze; dalej tylko dni, w których ktoś przyjeżdża lub wyjeżdża — aż do ostatniego gościa.
+  const eventDates = new Set<string>([now, addDays(now, 1)]);
+  for (const r of filtered) {
+    if (r.check_in >= now) eventDates.add(r.check_in);
+    if (r.check_out >= now) eventDates.add(r.check_out);
+  }
+  const days = [...eventDates].sort().map((d) => ({
     date: d,
     arrivals: filtered.filter((r) => r.check_in === d),
     departures: filtered.filter((r) => r.check_out === d),
@@ -95,8 +101,13 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
         </div>
       )}
 
-      {days.map(({ date, arrivals, departures }) => (
-        <div key={date} className={`agenda-day ${date === now ? 'is-today' : ''}`}>
+      {days.map(({ date, arrivals, departures }, i) => (
+        <Fragment key={date}>
+          {/* nagłówek miesiąca przy dalszych dniach, gdy zmienia się miesiąc */}
+          {i >= 2 && date.slice(0, 7) !== days[i - 1].date.slice(0, 7) && (
+            <div className="agenda-month">{capitalize(formatMonth(date))}</div>
+          )}
+        <div className={`agenda-day ${date === now ? 'is-today' : ''}`}>
           <h2>
             {date === now ? 'Dziś ' : date === addDays(now, 1) ? 'Jutro ' : ''}
             <span className="muted">{date === now || date === addDays(now, 1) ? formatLong(date) : capitalize(formatLong(date))}</span>
@@ -107,6 +118,7 @@ export default function Agenda({ properties, version, cancellations, onSelect }:
           {departures.length > 0 && <h3>Wyjazdy</h3>}
           {departures.map((r) => card(r, 'out'))}
         </div>
+        </Fragment>
       ))}
     </section>
   );

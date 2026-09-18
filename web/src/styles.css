@@ -374,3 +374,5 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .agenda-day.is-today > h2 { color: var(--accent); }
 .agenda-day.is-today > h2 .muted { color: var(--ink); }
 .agenda-day.is-today h3 { color: color-mix(in srgb, var(--accent) 70%, var(--ink)); }
+
+.agenda-month { margin: 26px 0 12px; padding-bottom: 6px; border-bottom: 2px solid var(--line); font-size: 1.05rem; font-weight: 750; color: var(--primary); }

@@ -4,7 +4,7 @@ Prywatna aplikacja do zarządzania rezerwacjami domków i apartamentów z [odmor
 Osada Jantar (5 domków), Apartament Sopot, Apartamenty Karpatka (2), Agroturystyka Karszewo (2).
 
 - **Kalendarz** – oś czasu wszystkich domków; stuknięcie w wolny dzień tworzy rezerwację, w pasek otwiera ją.
-- **Aktualności** – kto dziś jest w obiektach, kto przyjeżdża i wyjeżdża przez 14 dni, wyszukiwarka, dzwonienie jednym dotknięciem.
+- **Aktualności** – kto dziś jest w obiektach, kto przyjeżdża i wyjeżdża aż do ostatniej rezerwacji, wyszukiwarka, dzwonienie jednym dotknięciem.
 - **Obiekty** – edycja domków, podłączenie kalendarzy Booking.com / Airbnb i adresy eksportu.
 - Ostrzeżenie o nakładających się terminach, podpowiedzi stałych gości, cena i wpłaty, notatki.
 - Instalowana na iPhonie jak zwykła aplikacja (PWA), działa też w przeglądarce na komputerze.
