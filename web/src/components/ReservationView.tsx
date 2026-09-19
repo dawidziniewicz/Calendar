@@ -17,6 +17,16 @@ type Conflict = { id: number; check_in: string; check_out: string; guest_name: s
 const money = (v: number) => `${v.toLocaleString('pl-PL', { maximumFractionDigits: 2 })} zł`;
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
+/** Link do czatu WhatsApp. Numer bez kierunkowego (9 cyfr) traktujemy jako polski (+48). */
+function whatsappHref(phone: string): string | null {
+  let digits = phone.trim().replace(/[^\d+]/g, '');
+  if (digits.startsWith('+')) digits = digits.slice(1);
+  else if (digits.startsWith('00')) digits = digits.slice(2);
+  else if (digits.length === 9) digits = `48${digits}`;
+  digits = digits.replace(/\D/g, '');
+  return digits.length >= 10 ? `https://wa.me/${digits}` : null;
+}
+
 export default function ReservationView({ reservation: r, properties, readOnly, onClose, onEdit, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -153,6 +163,14 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
                     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 5h16v11H9l-5 4z" /></svg>
                     <span><small>SMS</small></span>
                   </a>
+                  {whatsappHref(r.guest_phone) && (
+                    <a className="contact whatsapp" href={whatsappHref(r.guest_phone)!} target="_blank" rel="noopener noreferrer">
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden>
+                        <path d="M12 2.2A9.8 9.8 0 0 0 3.6 17l-1.4 4.8 4.9-1.3A9.8 9.8 0 1 0 12 2.2Zm0 17.8a8 8 0 0 1-4.1-1.1l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 1 1 12 20Zm4.4-6c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.8 1c-.1.2-.3.2-.5.1a6.6 6.6 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.1 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.5-.4h-.5c-.2 0-.4.1-.6.3-.2.2-.8.8-.8 1.9s.8 2.2.9 2.4c.1.1 1.6 2.5 4 3.5 1.5.6 2 .7 2.8.6.4-.1 1.4-.6 1.6-1.1.2-.6.2-1 .1-1.1l-.1-.1Z" />
+                      </svg>
+                      <span><small>WhatsApp</small></span>
+                    </a>
+                  )}
                 </>
               )}
               {r.guest_email && (

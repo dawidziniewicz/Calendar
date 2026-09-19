@@ -447,3 +447,9 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .check-row input { width: 20px !important; height: 20px; min-height: 0 !important; accent-color: var(--primary); }
 .password-reset .row { margin: 0; }
 .delete-user { align-self: flex-start; }
+
+.contact.whatsapp { color: #1fa855; }
+.contact.whatsapp small { color: #1fa855; }
+/* Kontakt: „Zadzwoń” w pierwszym rzędzie, pozostałe (SMS, WhatsApp, e-mail) równo pod spodem */
+.contact.call-main { flex: 1 1 100%; }
+.contact:not(.call-main) { flex: 1 1 0; justify-content: center; min-width: 0; }
