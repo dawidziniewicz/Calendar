@@ -174,7 +174,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
                 </>
               )}
               {r.guest_email && (
-                <a className="contact" href={`mailto:${r.guest_email}`}>
+                <a className="contact email" href={`mailto:${r.guest_email}`}>
                   <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 6h18v12H3zM3 6l9 7 9-7" /></svg>
                   <span><small>E-mail</small>{r.guest_email}</span>
                 </a>

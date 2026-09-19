@@ -453,3 +453,7 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 /* Kontakt: „Zadzwoń” w pierwszym rzędzie, pozostałe (SMS, WhatsApp, e-mail) równo pod spodem */
 .contact.call-main { flex: 1 1 100%; }
 .contact:not(.call-main) { flex: 1 1 0; justify-content: center; min-width: 0; }
+/* E-mail w osobnym, pełnym wierszu (długie adresy z Bookingu) */
+.contact.email { flex: 1 1 100%; justify-content: flex-start; }
+.contact.email span { min-width: 0; overflow-wrap: anywhere; font-size: 0.92rem; }
+.contact svg { flex: none; }
