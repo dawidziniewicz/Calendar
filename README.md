@@ -189,6 +189,8 @@ To samo możesz zrobić z Airbnb („Kopiuj dla Airbnb” oraz import linku iCal
 
 ## Krok 7. Instalacja na iPhonie
 
+W aplikacji: *Ustawienia* → **Aplikacja na telefonie** – na Androidzie (Chrome) przycisk **Zainstaluj aplikację**, na iPhonie instrukcja krok po kroku (Apple nie pozwala instalować przyciskiem). Panel znika, gdy aplikacja jest otwarta z ikony.
+
 1. Otwórz **Safari** → `https://kalendarz.odmorzadogor.pl` → zaloguj się loginem i hasłem.
 2. Przycisk **Udostępnij** (kwadrat ze strzałką) → **Do ekranu początkowego** → *Dodaj*.
 3. Ikona „Kalendarz” działa jak aplikacja – na pełnym ekranie, bez paska adresu.

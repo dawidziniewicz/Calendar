@@ -4,6 +4,7 @@ import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
 import Notifications from './Notifications';
 import CalendarPrefs from './CalendarPrefs';
+import InstallApp from './InstallApp';
 
 type Props = {
   user: string; readOnly: boolean; scope: string[] | null; canManageUsers: boolean;
@@ -46,6 +47,7 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
   if (readOnly || scope) {
     return (
       <section className="settings">
+        <InstallApp />
         <div className="panel access-info">
           {scope && <p>Dostęp do obiektów: <b>{scope.join(', ')}</b></p>}
           {readOnly && <p className="muted">To konto ma dostęp tylko do podglądu rezerwacji.</p>}
@@ -63,6 +65,7 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
 
   return (
     <section className="settings">
+      <InstallApp />
       <div className="panel sync-panel">
         <div>
           <h2>Synchronizacja z Booking.com</h2>

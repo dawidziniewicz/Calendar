@@ -121,8 +121,12 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
               Wyjazd
               <input type="date" required value={r.check_out} min={addDays(r.check_in, 1)} onChange={(e) => e.target.value && set('check_out', e.target.value)} />
             </label>
+            <div className="field nights-field">
+              Liczba nocy
+              <Stepper label="Liczba nocy" min={1} max={365} value={nights} onChange={(n) => set('check_out', addDays(r.check_in, n))} />
+            </div>
             <div className="full chips">
-              {[1, 2, 3, 4, 5, 7, 14].map((n) => (
+              {[1, 2, 3, 4, 5, 6, 7, 14].map((n) => (
                 <button type="button" key={n} className={`chip ${nights === n ? 'active' : ''}`} onClick={() => set('check_out', addDays(r.check_in, n))}>
                   {nightsLabel(n)}
                 </button>
@@ -216,14 +220,15 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
   );
 }
 
-function Stepper({ value, onChange, label }: { value: number; onChange: (v: number) => void; label: string }) {
+function Stepper({ value, onChange, label, min = 0, max = 999 }: { value: number; onChange: (v: number) => void; label: string; min?: number; max?: number }) {
   // Tekst trzymany lokalnie, żeby dało się skasować pole i wpisać nową liczbę z klawiatury.
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
+  const clamp = (v: number) => Math.min(max, Math.max(min, v));
 
   return (
     <div className="stepper">
-      <button type="button" onClick={() => onChange(Math.max(0, value - 1))} aria-label={`${label}: mniej`}>−</button>
+      <button type="button" onClick={() => onChange(clamp(value - 1))} disabled={value <= min} aria-label={`${label}: mniej`}>−</button>
       <input
         type="text"
         inputMode="numeric"
@@ -234,11 +239,11 @@ function Stepper({ value, onChange, label }: { value: number; onChange: (v: numb
         onChange={(e) => {
           const digits = e.target.value.replace(/\D/g, '').slice(0, 3);
           setText(digits);
-          if (digits !== '') onChange(Number(digits));
+          if (digits !== '' && Number(digits) >= min) onChange(clamp(Number(digits)));
         }}
-        onBlur={() => { if (text === '') { setText('0'); onChange(0); } }}
+        onBlur={() => { if (text === '' || Number(text) < min || Number(text) > max) { setText(String(value)); } }}
       />
-      <button type="button" onClick={() => onChange(value + 1)} aria-label={`${label}: więcej`}>+</button>
+      <button type="button" onClick={() => onChange(clamp(value + 1))} disabled={value >= max} aria-label={`${label}: więcej`}>+</button>
     </div>
   );
 }
