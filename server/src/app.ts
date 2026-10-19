@@ -104,14 +104,14 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
         const list = units.filter((u) => u.property_id === p.id).map(({ id }) => {
           const u = unitPricing(db, id)!;
           const prices = nights(db, u, today, end).map((n) => n.price).filter((v): v is number => v != null);
-          return { id, name: u.name, type_name: u.type_name, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null };
+          return { id, name: u.name, type_name: u.type_name, type_name_en: u.type_name_en, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null };
         });
         // Typy: domki z tym samym typem pokazujemy jako jedną opcję („Mały domek · 3 domki”), pozostałe osobno
-        const types: { key: string; name: string; unit_ids: number[]; count: number; capacity: number; min_nights: number; price_from: number | null }[] = [];
+        const types: { key: string; name: string; name_en: string; unit_ids: number[]; count: number; capacity: number; min_nights: number; price_from: number | null }[] = [];
         for (const u of list) {
           const key = u.type_name ? `t:${u.type_name.toLowerCase()}` : `u:${u.id}`;
           const t = types.find((x) => x.key === key);
-          if (!t) types.push({ key, name: u.type_name || u.name, unit_ids: [u.id], count: 1, capacity: u.capacity, min_nights: u.min_nights, price_from: u.price_from });
+          if (!t) types.push({ key, name: u.type_name || u.name, name_en: (u.type_name && u.type_name_en) || u.type_name || u.name, unit_ids: [u.id], count: 1, capacity: u.capacity, min_nights: u.min_nights, price_from: u.price_from });
           else {
             t.unit_ids.push(u.id);
             t.count++;
@@ -121,7 +121,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
             if (t.price_from === Infinity) t.price_from = null;
           }
         }
-        return { units: list.map(({ type_name: _, ...u }) => u), types };
+        return { units: list.map(({ type_name: _, type_name_en: __, ...u }) => u), types };
       })(),
     })).filter((p) => p.units.length));
   });
@@ -213,9 +213,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   });
 
   // ---- Prośba gościa o anulację (link z e-maila z potwierdzeniem: /anulacja/?t=KOD) ----
-  type CancelRow = RequestRow & { status: string; cancel_requested_at: string | null; cancel_status: string | null; property_name: string; unit_type: string; unit_name: string };
+  type CancelRow = RequestRow & { status: string; cancel_requested_at: string | null; cancel_status: string | null; property_name: string; unit_type: string; unit_type_en: string; unit_name: string };
   const byCancelToken = (token: string) => (/^[a-f0-9]{48}$/.test(token)
-    ? get(`SELECT r.*, p.name AS property_name, u.type_name AS unit_type, u.name AS unit_name FROM booking_requests r
+    ? get(`SELECT r.*, p.name AS property_name, u.type_name AS unit_type, u.type_name_en AS unit_type_en, u.name AS unit_name FROM booking_requests r
         JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id WHERE r.cancel_token = ?`, token) as CancelRow | undefined
     : undefined);
   const cancelState = (r: CancelRow) => {
@@ -231,7 +231,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     c.header('Cache-Control', 'no-store');
     // tylko to, co gość i tak ma w e-mailu — bez telefonu i adresu e-mail
     return c.json({
-      property: r.property_name, unit: r.unit_type || r.unit_name, check_in: r.check_in, check_out: r.check_out,
+      property: r.property_name, unit: (r.lang === 'en' && r.unit_type_en) || r.unit_type || r.unit_name, check_in: r.check_in, check_out: r.check_out,
       guest: r.guest_name.split(/\s+/)[0], state: cancelState(r), requested_at: r.cancel_requested_at, lang: r.lang,
     });
   });
@@ -769,7 +769,8 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     run('UPDATE units SET base_price = ?, min_nights = ?, bookable = ? WHERE id = ?', price, Math.min(60, Math.max(1, int(b.min_nights) || 1)), b.bookable === false ? 0 : 1, id);
     if (weekday) run('UPDATE units SET weekday_prices = ? WHERE id = ?', weekday.some((v) => v != null) ? JSON.stringify(weekday) : null, id);
     if (b.type_name !== undefined) run('UPDATE units SET type_name = ? WHERE id = ?', str(b.type_name, 60), id);
-    return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices, type_name FROM units WHERE id = ?', id));
+    if (b.type_name_en !== undefined) run('UPDATE units SET type_name_en = ? WHERE id = ?', str(b.type_name_en, 60), id);
+    return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices, type_name, type_name_en FROM units WHERE id = ?', id));
   });
 
   // ---- Zamknięcie obiektu (remont, poza sezonem…) — konto ograniczone może zamykać swoje obiekty ----

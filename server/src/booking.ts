@@ -17,7 +17,7 @@ export const nightsPl = (n: number) => (n === 1 ? '1 noc' : `${n} ${n % 10 >= 2 
 export const zl = (n: number) => `${n.toLocaleString('pl-PL', { maximumFractionDigits: 2 }).replace(/ /g, ' ')} zł`;
 
 type UnitPricing = {
-  id: number; property_id: number; name: string; type_name: string; sort: number;
+  id: number; property_id: number; name: string; type_name: string; type_name_en: string; sort: number;
   base_price: number | null; min_nights: number; bookable: number; capacity: number; weekday_prices: string | null;
 };
 export type Night = { date: string; price: number | null; min_nights: number; closed: boolean; booked: boolean; propertyClosed?: boolean };
@@ -32,7 +32,7 @@ export const closedOn = (c: Closure | null, date: string) =>
   !!c && (!c.closed_from || date >= c.closed_from) && (!c.closed_to || date <= c.closed_to);
 
 export function unitPricing(db: DatabaseSync, unitId: number) {
-  return db.prepare(`SELECT id, property_id, name, type_name, sort, base_price, min_nights, bookable, capacity, weekday_prices
+  return db.prepare(`SELECT id, property_id, name, type_name, type_name_en, sort, base_price, min_nights, bookable, capacity, weekday_prices
     FROM units WHERE id = ?`).get(unitId) as UnitPricing | undefined;
 }
 
@@ -191,13 +191,13 @@ export function extrasLines(list: ChosenExtra[], lang: Lang = 'pl') {
   });
 }
 
-type UnitInfo = { unit: string; type: string; property: string; location: string; address: string };
+type UnitInfo = { unit: string; type: string; type_en: string; property: string; location: string; address: string };
 function unitInfo(db: DatabaseSync, unitId: number): UnitInfo {
-  return (db.prepare(`SELECT u.name AS unit, u.type_name AS type, p.name AS property, p.location, p.address FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`)
-    .get(unitId) as UnitInfo | undefined) ?? { unit: '', type: '', property: '', location: '', address: '' };
+  return (db.prepare(`SELECT u.name AS unit, u.type_name AS type, u.type_name_en AS type_en, p.name AS property, p.location, p.address FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`)
+    .get(unitId) as UnitInfo | undefined) ?? { unit: '', type: '', type_en: '', property: '', location: '', address: '' };
 }
-/** Gość widzi typ domku (np. „Mały domek”), a nie wewnętrzną nazwę konkretnego domku. */
-const guestUnitName = (u: UnitInfo) => u.type || u.unit;
+/** Gość widzi typ domku (np. „Mały domek” / „Small cottage”), a nie wewnętrzną nazwę konkretnego domku. */
+const guestUnitName = (u: UnitInfo, lang: Lang = 'pl') => (lang === 'en' && u.type_en) || u.type || u.unit;
 const groupSize = (r: RequestRow) => { try { return r.group_unit_ids ? (JSON.parse(r.group_unit_ids) as number[]).length : 1; } catch { return 1; } };
 
 const TXT = {
@@ -257,7 +257,7 @@ function stayRows(db: DatabaseSync, r: RequestRow, price: number | null, t = TXT
   const u = unitInfo(db, r.unit_id);
   const n = nightsBetween(r.check_in, r.check_out);
   return [
-    [t.property, `${u.property}\n${guestUnitName(u)}`],
+    [t.property, `${u.property}\n${guestUnitName(u, t === TXT.en ? 'en' : 'pl')}`],
     [t.arrival, longDate(r.check_in, t.locale)],
     [t.departure, longDate(r.check_out, t.locale)],
     [t.length, t.nights(n)],
