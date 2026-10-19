@@ -87,7 +87,7 @@ export default function PriceSheet({ properties, unitId, from: initialFrom, to: 
             <legend>Cena za noc</legend>
             <label className="full">Nowa cena (zł)
               <input inputMode="decimal" placeholder={unit?.base_price != null ? `podstawowa: ${unit.base_price} zł` : 'np. 450'} value={price}
-                disabled={resetPrice} onChange={(e) => setPrice(e.target.value)} autoFocus />
+                disabled={resetPrice} onChange={(e) => setPrice(e.target.value)} />
             </label>
             <label className="check-row full">
               <input type="checkbox" checked={resetPrice} onChange={(e) => setResetPrice(e.target.checked)} />
