@@ -615,3 +615,5 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .closure-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .tl-cell.prop-closed, .legend i.prop-closed { background-image: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--danger) 16%, transparent) 0 4px, transparent 4px 9px); }
 .legend i.prop-closed { border: 1px solid var(--line); }
+.request-card.decided.st-expired { border-left-color: var(--line); opacity: .75; }
+.archive-note { margin: -2px 0 10px; }

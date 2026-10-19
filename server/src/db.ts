@@ -27,6 +27,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 10) migrateV10(db);
   if (user_version < 11) migrateV11(db);
   if (user_version < 12) migrateV12(db);
+  if (user_version < 13) migrateV13(db);
+}
+
+// Zapytania, których data przyjazdu minęła bez decyzji, trafiają do archiwum (expired_at) — nie wiszą wśród nowych.
+function migrateV13(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE booking_requests ADD COLUMN expired_at TEXT;
+    PRAGMA user_version = 13;
+    COMMIT;
+  `);
 }
 
 // Typ domku (np. „Mały domek”): domki tego samego typu w obiekcie strona pokazuje razem, a zapytanie

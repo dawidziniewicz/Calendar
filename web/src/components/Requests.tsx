@@ -52,13 +52,16 @@ export default function Requests({ version, readOnly, focusId, onChanged, onOpen
       ))}
 
       <button className="collapse-head decided-head" onClick={() => setShowDecided(!showDecided)} aria-expanded={showDecided}>
-        <h2>Rozpatrzone</h2><span className="chev">{showDecided ? '▴' : '▾'}</span>
+        <h2>Rozpatrzone i archiwum</h2><span className="chev">{showDecided ? '▴' : '▾'}</span>
       </button>
+      <p className="muted small-note archive-note">Zapytania bez decyzji, których data przyjazdu minęła, trafiają tu automatycznie.</p>
       {showDecided && (decided.length ? decided.map((r) => (
-        <div key={r.id} className={`request-card decided st-${r.status}`}>
+        <div key={r.id} className={`request-card decided st-${r.status === 'pending' ? 'expired' : r.status}`}>
           <div className="request-top">
-            <span className={`pill pill-${r.status}`}>{r.status === 'accepted' ? 'Zaakceptowane' : 'Odrzucone'}</span>
-            <span className="muted small-meta">{r.decided_by} · {r.decided_at && when(r.decided_at)}</span>
+            {r.status === 'pending'
+              ? <span className="pill">Wygasłe — termin minął</span>
+              : <span className={`pill pill-${r.status}`}>{r.status === 'accepted' ? 'Zaakceptowane' : 'Odrzucone'}</span>}
+            <span className="muted small-meta">{r.status === 'pending' ? `wysłane ${when(r.created_at)}` : <>{r.decided_by} · {r.decided_at && when(r.decided_at)}</>}</span>
           </div>
           <div className="request-guest">{r.guest_name}</div>
           <div className="muted">{r.unit_name} · {r.property_name} · {formatShort(r.check_in)} – {formatShort(r.check_out)}</div>
