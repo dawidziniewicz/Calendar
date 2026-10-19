@@ -3,8 +3,13 @@ export type Unit = {
   id: number; property_id: number; name: string; capacity: number; color: string; sort: number; export_token: string; feeds: Feed[];
   base_price: number | null; min_nights: number; bookable: number; // cennik i rezerwacje ze strony www
   weekday_prices: string | null; // JSON: 7 cen od niedzieli, null = cena podstawowa
+  type_name: string; // typ na stronie (np. „Mały domek”) — takie same domki rezerwowane razem
 };
-export type Property = { id: number; name: string; location: string; address: string; sort: number; units: Unit[] };
+export type Property = {
+  id: number; name: string; location: string; address: string; sort: number; units: Unit[];
+  // zamknięcie obiektu: bez dat = do odwołania
+  closed: number; closed_from: string | null; closed_to: string | null; closed_note: string; closed_note_en: string;
+};
 export type Status = 'confirmed' | 'tentative' | 'cancelled';
 
 export type Reservation = {
@@ -57,6 +62,8 @@ export type BookingRequest = {
   decided_by: string | null; decided_at: string | null; decision_note: string; reservation_id: number | null;
   created_at: string; lang: string;
   extras: string | null; // JSON: wybrane opcje płatne [{ name, price, per, qty, total }]
+  group_units: { id: number; name: string; type_name: string; free: boolean }[]; // domki typu do przydziału (pierwszy = proponowany)
+  assign_mode?: 'auto' | 'manual';
   conflicts: { id: number; check_in: string; check_out: string; guest_name: string; source: string }[];
 };
 

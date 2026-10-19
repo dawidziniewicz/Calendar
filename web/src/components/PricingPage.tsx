@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import type { Property, Rate, Unit } from '../types';
+import { type BookingSettings } from '../api';
 import { addDays, formatShort, nightsLabel, today } from '../dates';
 import { WEEKDAYS, weekdayPrices } from '../pricing';
 import PriceSheet from './PriceSheet';
@@ -41,10 +42,14 @@ export default function PricingPage({ properties, canEditHorizon, onBack, reload
       {properties.map((p) => (
         <div key={p.id} className="pricing-property">
           <h2 className="pricing-property-name">{p.name}</h2>
+          <ClosurePanel property={p} onSaved={reload} />
+          <datalist id={`types-${p.id}`}>{[...new Set(p.units.map((u) => u.type_name).filter(Boolean))].map((t) => <option key={t} value={t} />)}</datalist>
           {p.units.map((u) => (
             <UnitPricingCard
               key={u.id}
               unit={u}
+              siblings={p.units.filter((x) => x.id !== u.id)}
+              typesListId={`types-${p.id}`}
               rates={rates.filter((r) => r.unit_id === u.id)}
               onSaved={reload}
               onAddDays={() => setSheet({ unitId: u.id, from: today(), to: addDays(today(), 6) })}
@@ -70,22 +75,26 @@ export default function PricingPage({ properties, canEditHorizon, onBack, reload
 }
 
 function HorizonPanel({ canEdit }: { canEdit: boolean }) {
-  const [saved, setSaved] = useState<number | null>(null);
+  const [settings, setSettings] = useState<BookingSettings | null>(null);
   const [days, setDays] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => { api.bookingSettings().then((s) => { setSaved(s.horizon_days); setDays(String(s.horizon_days)); }).catch(() => {}); }, []);
-  if (saved == null) return null;
+  useEffect(() => { api.bookingSettings().then((s) => { setSettings(s); setDays(String(s.horizon_days)); }).catch(() => {}); }, []);
+  if (settings == null) return null;
+  const saved = settings.horizon_days;
   const n = Number(days);
   const save = async (value = n) => {
     setMsg(null);
     try {
-      const s = await api.saveBookingSettings(value);
-      setSaved(s.horizon_days);
+      const s = await api.saveBookingSettings({ horizon_days: value });
+      setSettings(s);
       setDays(String(s.horizon_days));
       setMsg({ ok: true, text: `Zapisano — strona pokazuje ceny i przyjmuje zapytania do ${formatShort(addDays(today(), s.horizon_days))}.` });
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     }
+  };
+  const setAssign = async (mode: 'auto' | 'manual') => {
+    try { setSettings(await api.saveBookingSettings({ assign_mode: mode })); } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
   };
   return (
     <div className="panel">
@@ -109,6 +118,64 @@ function HorizonPanel({ canEdit }: { canEdit: boolean }) {
         </>
       ) : <p className="muted small-note">Zmienić to może administrator z dostępem do wszystkich obiektów.</p>}
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
+
+      <h3 className="assign-title">Przydział domku przy akceptacji</h3>
+      <p className="muted notif-desc">Dotyczy domków tego samego typu (np. 3 × Mały domek) — gość wybiera typ, a Ty decydujesz, do którego domku trafi.</p>
+      <div className="segmented">
+        <button type="button" disabled={!canEdit} className={`chip ${settings.assign_mode === 'auto' ? 'active' : ''}`} onClick={() => setAssign('auto')}>Automatycznie — pierwszy wolny (można zmienić)</button>
+        <button type="button" disabled={!canEdit} className={`chip ${settings.assign_mode === 'manual' ? 'active' : ''}`} onClick={() => setAssign('manual')}>Zawsze wybieram ręcznie</button>
+      </div>
+    </div>
+  );
+}
+
+// Zamknięcie obiektu (remont, poza sezonem): do odwołania albo w terminie, z komunikatem dla gości
+function ClosurePanel({ property: p, onSaved }: { property: Property; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'range' | 'indefinite'>(p.closed_from || p.closed_to ? 'range' : 'indefinite');
+  const [from, setFrom] = useState(p.closed_from ?? today());
+  const [to, setTo] = useState(p.closed_to ?? addDays(today(), 30));
+  const [note, setNote] = useState(p.closed_note);
+  const [noteEn, setNoteEn] = useState(p.closed_note_en);
+  const [error, setError] = useState('');
+  const isClosed = !!p.closed && (!p.closed_to || p.closed_to >= today());
+  const save = async (closed: boolean) => {
+    setError('');
+    try {
+      await api.saveClosure(p.id, { closed, from: closed && mode === 'range' ? from : null, to: closed && mode === 'range' ? to : null, note, note_en: noteEn });
+      setOpen(false);
+      onSaved();
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <div className={`closure ${isClosed ? 'is-closed' : ''}`}>
+      <div className="closure-line">
+        <span className={`badge ${isClosed ? 'bad' : 'ok'}`}>{isClosed ? 'Obiekt zamknięty' : 'Otwarty'}</span>
+        {isClosed && <span className="muted">{p.closed_from || p.closed_to ? `${p.closed_from ? formatShort(p.closed_from) : '…'} – ${p.closed_to ? formatShort(p.closed_to) : 'do odwołania'}` : 'do odwołania'}</span>}
+        <button type="button" className="link" onClick={() => setOpen(!open)}>{open ? 'Anuluj' : isClosed ? 'Zmień' : 'Zamknij obiekt'}</button>
+      </div>
+      {open && (
+        <div className="closure-form">
+          <div className="segmented">
+            <button type="button" className={`chip ${mode === 'range' ? 'active' : ''}`} onClick={() => setMode('range')}>W terminie</button>
+            <button type="button" className={`chip ${mode === 'indefinite' ? 'active' : ''}`} onClick={() => setMode('indefinite')}>Do odwołania</button>
+          </div>
+          {mode === 'range' && (
+            <div className="row">
+              <label>Od nocy<input type="date" value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} /></label>
+              <label>Do nocy (włącznie)<input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} /></label>
+            </div>
+          )}
+          <label>Komunikat dla gości (opcjonalnie)<input maxLength={300} placeholder="np. Zapraszamy ponownie od 1 maja" value={note} onChange={(e) => setNote(e.target.value)} /></label>
+          <label>Komunikat po angielsku<input maxLength={300} placeholder="e.g. We reopen on 1 May" value={noteEn} onChange={(e) => setNoteEn(e.target.value)} /></label>
+          <p className="muted small-note">Zamknięte dni są na stronie niedostępne (do odwołania — zamiast kalendarza wyświetla się komunikat). Istniejące rezerwacje zostają.</p>
+          {error && <div className="banner error">{error}</div>}
+          <div className="row">
+            <button className="btn danger small" onClick={() => save(true)}>{isClosed ? 'Zapisz zamknięcie' : 'Zamknij obiekt'}</button>
+            {isClosed && <button className="btn primary small" onClick={() => save(false)}>Otwórz obiekt</button>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -126,9 +193,12 @@ function groupRanges(rates: Rate[]): Range[] {
   return out;
 }
 
-function UnitPricingCard({ unit: u, rates, onSaved, onAddDays, onEditRange, onRatesChanged }: {
-  unit: Unit; rates: Rate[]; onSaved: () => void; onAddDays: () => void; onEditRange: (from: string, to: string) => void; onRatesChanged: () => void;
+function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAddDays, onEditRange, onRatesChanged }: {
+  unit: Unit; siblings: Unit[]; typesListId: string; rates: Rate[]; onSaved: () => void; onAddDays: () => void; onEditRange: (from: string, to: string) => void; onRatesChanged: () => void;
 }) {
+  const [typeName, setTypeName] = useState(u.type_name);
+  const sameType = typeName.trim() ? siblings.filter((x) => x.type_name.trim().toLowerCase() === typeName.trim().toLowerCase()) : [];
+  const [applyToType, setApplyToType] = useState(true);
   const initialWeek = useMemo(() => weekdayPrices(u).map((v) => (v == null ? '' : String(v))), [u]);
   const [base, setBase] = useState(u.base_price == null ? '' : String(u.base_price));
   const [week, setWeek] = useState<string[]>(initialWeek);
@@ -140,7 +210,7 @@ function UnitPricingCard({ unit: u, rates, onSaved, onAddDays, onEditRange, onRa
   const ranges = groupRanges(rates);
 
   const dirty = base !== (u.base_price == null ? '' : String(u.base_price)) || week.some((v, i) => v !== initialWeek[i])
-    || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable;
+    || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable || typeName !== u.type_name;
 
   const setDay = (dow: number, value: string) => setWeek(week.map((v, i) => (i === dow ? value : v)));
   const weekendShortcut = () => {
@@ -155,8 +225,11 @@ function UnitPricingCard({ unit: u, rates, onSaved, onAddDays, onEditRange, onRa
     setBusy(true);
     setMsg(null);
     try {
-      await api.saveUnitPricing(u.id, { base_price: basePrice, min_nights: minNights, bookable, weekday_prices: weekPrices });
-      setMsg({ ok: true, text: 'Zapisano cennik.' });
+      const pricing = { base_price: basePrice, min_nights: minNights, bookable, weekday_prices: weekPrices, type_name: typeName.trim() };
+      await api.saveUnitPricing(u.id, pricing);
+      // te same ceny dla pozostałych domków tego typu (każdy zachowuje swoją widoczność)
+      if (applyToType) for (const x of sameType) await api.saveUnitPricing(x.id, { ...pricing, bookable: !!x.bookable });
+      setMsg({ ok: true, text: applyToType && sameType.length ? `Zapisano cennik dla ${sameType.length + 1} domków typu „${typeName.trim()}”.` : 'Zapisano cennik.' });
       onSaved();
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
@@ -185,6 +258,10 @@ function UnitPricingCard({ unit: u, rates, onSaved, onAddDays, onEditRange, onRa
         {!u.bookable && <span className="badge">ukryty na stronie</span>}
       </div>
 
+      <label className="type-field">Typ na stronie <small className="muted">— takie same domki strona pokazuje jako jeden (np. „Mały domek · 3 domki”)</small>
+        <input list={typesListId} maxLength={60} placeholder="np. Mały domek (puste = osobno)" value={typeName} onChange={(e) => setTypeName(e.target.value)} />
+      </label>
+      {sameType.length > 0 && <p className="muted small-note type-note">Ten sam typ: {sameType.map((x) => x.name).join(', ')}</p>}
       <div className="row">
         <label>Cena podstawowa za noc (zł)<input inputMode="decimal" placeholder="np. 300" value={base} onChange={(e) => setBase(e.target.value)} /></label>
         <label className="narrow">Min. nocy<input type="number" min={1} max={60} value={minNights} onChange={(e) => setMinNights(Math.max(1, Number(e.target.value) || 1))} /></label>
@@ -207,6 +284,9 @@ function UnitPricingCard({ unit: u, rates, onSaved, onAddDays, onEditRange, onRa
         <input type="checkbox" checked={bookable} onChange={(e) => setBookable(e.target.checked)} />
         <span><b>Widoczny na stronie</b><small>Goście widzą ceny i wolne terminy i mogą wysłać zapytanie przyciskiem „Zarezerwuj”</small></span>
       </label>
+      {dirty && sameType.length > 0 && (
+        <label className="check-row"><input type="checkbox" checked={applyToType} onChange={(e) => setApplyToType(e.target.checked)} /> Te same ceny dla wszystkich domków typu „{typeName.trim()}” ({sameType.length + 1})</label>
+      )}
       {dirty && <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Zapisywanie…' : 'Zapisz cennik'}</button>}
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
 

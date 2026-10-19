@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, HORIZON_KEY, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
+  DEFAULT_HORIZON, HORIZON_KEY, chooseUnit, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
 } from './booking.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -93,19 +93,43 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const end = horizonEnd(db);
     return c.json(properties.map((p) => ({
       ...p,
+      // zamknięcie obiektu: from/to = null przy zamknięciu do odwołania
+      closed: (() => {
+        const cl = propertyClosure(db, p.id);
+        return cl && (!cl.closed_to || cl.closed_to >= today)
+          ? { from: cl.closed_from, to: cl.closed_to, note: cl.closed_note, note_en: cl.closed_note_en || cl.closed_note } : null;
+      })(),
       extras: extrasFor(db, p.id).map((e) => ({ id: e.id, name: e.name, name_en: e.name_en || e.name, description: e.description, price: e.price, per: e.per, max_qty: e.max_qty })),
-      units: units.filter((u) => u.property_id === p.id).map(({ id }) => {
-        const u = unitPricing(db, id)!;
-        const prices = nights(db, u, today, end).map((n) => n.price).filter((v): v is number => v != null);
-        const name = (get('SELECT name FROM units WHERE id = ?', id) as { name: string }).name;
-        return { id, name, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null };
-      }),
+      ...(() => {
+        const list = units.filter((u) => u.property_id === p.id).map(({ id }) => {
+          const u = unitPricing(db, id)!;
+          const prices = nights(db, u, today, end).map((n) => n.price).filter((v): v is number => v != null);
+          return { id, name: u.name, type_name: u.type_name, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null };
+        });
+        // Typy: domki z tym samym typem pokazujemy jako jedną opcję („Mały domek · 3 domki”), pozostałe osobno
+        const types: { key: string; name: string; unit_ids: number[]; count: number; capacity: number; min_nights: number; price_from: number | null }[] = [];
+        for (const u of list) {
+          const key = u.type_name ? `t:${u.type_name.toLowerCase()}` : `u:${u.id}`;
+          const t = types.find((x) => x.key === key);
+          if (!t) types.push({ key, name: u.type_name || u.name, unit_ids: [u.id], count: 1, capacity: u.capacity, min_nights: u.min_nights, price_from: u.price_from });
+          else {
+            t.unit_ids.push(u.id);
+            t.count++;
+            t.capacity = Math.min(t.capacity, u.capacity);
+            t.min_nights = Math.min(t.min_nights, u.min_nights);
+            t.price_from = [t.price_from, u.price_from].filter((v): v is number => v != null).reduce((a, b) => Math.min(a, b), Infinity);
+            if (t.price_from === Infinity) t.price_from = null;
+          }
+        }
+        return { units: list.map(({ type_name: _, ...u }) => u), types };
+      })(),
     })).filter((p) => p.units.length));
   });
 
-  // Kalendarz jednego domku: ?unit=ID&from=RRRR-MM-DD&to=RRRR-MM-DD (maks. 15 miesięcy)
+  // Kalendarz: ?unit=ID (jeden domek) albo ?units=1,2,3 (typ domku) &from=RRRR-MM-DD&to=RRRR-MM-DD (maks. 15 miesięcy)
   pub.get('/calendar', (c) => {
-    const unit = unitPricing(db, int(c.req.query('unit')));
+    const group = c.req.query('units') ? unitGroup(db, c.req.query('units')) : null;
+    const unit = group ? group[0] : unitPricing(db, int(c.req.query('unit')));
     if (!unit || !unit.bookable) return c.json({ error: 'Nie znaleziono domku' }, 404);
     const today = warsawToday();
     let from = str(c.req.query('from'), 10);
@@ -116,8 +140,17 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     // dalej niż horyzont ustawiony w aplikacji strona nie pokazuje cen ani wolnych dni
     const end = horizonEnd(db);
     if (to > end) to = end > from ? end : from;
-    const list = nights(db, unit, from, to);
     c.header('Cache-Control', 'no-store');
+    if (group) {
+      // dla każdego dnia: ceny i min. nocy każdego domku + maska zajętości (bit j = domek j zajęty/zamknięty)
+      const lists = group.map((u) => nights(db, u, from, to));
+      return c.json({
+        unit_ids: group.map((u) => u.id), from, to, capacity: Math.min(...group.map((u) => u.capacity)),
+        days: lists[0].map((n, i) => [n.date, lists.map((l) => l[i].price), lists.map((l) => l[i].min_nights),
+          lists.reduce((mask, l, j) => mask | (l[i].booked || l[i].closed ? 1 << j : 0), 0)]),
+      });
+    }
+    const list = nights(db, unit, from, to);
     return c.json({
       unit_id: unit.id, from, to, capacity: unit.capacity,
       // zwięźle: [data, cena|null, min. nocy, 1 = zajęte/zamknięte]
@@ -143,8 +176,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     }
     const en = b.lang === 'en';
     const t = (pl: string, eng: string) => (en ? eng : pl);
-    const unit = unitPricing(db, int(b.unit_id));
-    if (!unit || !unit.bookable) bad(t('Wybierz domek lub apartament', 'Please choose a cottage or apartment'));
+    // unit_ids = typ domku (kilka takich samych domków), unit_id = jeden konkretny
+    const group = unitGroup(db, Array.isArray(b.unit_ids) ? b.unit_ids : [b.unit_id]);
+    if (!group) bad(t('Wybierz domek lub apartament', 'Please choose a cottage or apartment'));
     const r = {
       check_in: str(b.check_in, 10), check_out: str(b.check_out, 10),
       guest_name: str(b.name, 120), guest_phone: str(b.phone, 40), guest_email: str(b.email, 200).toLowerCase(),
@@ -157,17 +191,22 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!isEmail(r.guest_email)) bad(t('Podaj poprawny adres e-mail', 'Please enter a valid e-mail address'));
     if (r.guest_phone && !/^[+\d][\d\s()-]{6,}$/.test(r.guest_phone)) bad(t('Podaj poprawny numer telefonu', 'Please enter a valid phone number'));
     if (r.adults < 1) bad(t('Podaj liczbę dorosłych', 'Please enter the number of adults'));
-    if (unit.capacity && r.adults + r.children > unit.capacity) bad(t(`Ten obiekt mieści maksymalnie ${unit.capacity} osób`, `This property sleeps up to ${unit.capacity} guests`));
+    // domki, które pomieszczą gości (w typie zwykle wszystkie mają tę samą pojemność)
+    const fits = group.filter((u) => !u.capacity || r.adults + r.children <= u.capacity);
+    const maxCap = Math.max(...group.map((u) => u.capacity || 0));
+    if (!fits.length) bad(t(`Ten obiekt mieści maksymalnie ${maxCap} osób`, `This property sleeps up to ${maxCap} guests`));
     if (b.consent !== true) bad(t('Zaakceptuj zgodę na przetwarzanie danych, żebyśmy mogli odpowiedzieć', 'Please accept the data processing consent so we can reply'));
-    const q = quote(db, unit, r.check_in, r.check_out, en ? 'en' : 'pl');
-    if (!q.available) return c.json({ error: q.reason, code: 'unavailable' }, 409);
-    const propertyId = (get('SELECT property_id FROM units WHERE id = ?', unit.id) as { property_id: number }).property_id;
+    const pick = chooseUnit(db, fits, r.check_in, r.check_out, en ? 'en' : 'pl');
+    if (!pick.unit || !pick.q) return c.json({ error: pick.reason, code: 'unavailable' }, 409);
+    const unit = pick.unit, q = pick.q;
+    const propertyId = unit.property_id;
     const extras = priceExtras(db, propertyId, b.extras, q.nights);
     const extrasTotal = extras.reduce((s, e) => s + e.total, 0);
     const total = q.total == null ? null : q.total + extrasTotal;
-    const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang, extras)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unit.id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.message, total, ip.slice(0, 64), b.lang === 'en' ? 'en' : 'pl', extras.length ? JSON.stringify(extras) : null);
+    const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang, extras, group_unit_ids)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unit.id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+      r.adults, r.children, r.message, total, ip.slice(0, 64), b.lang === 'en' ? 'en' : 'pl', extras.length ? JSON.stringify(extras) : null,
+      group.length > 1 ? JSON.stringify(fits.map((u) => u.id)) : null);
     const row = get('SELECT * FROM booking_requests WHERE id = ?', res.lastInsertRowid) as RequestRow;
     announceRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o zapytaniu nie powiodło się', err));
     return c.json({ ok: true, id: row.id, quoted_price: total, extras_total: extrasTotal, nights: q.nights }, 201);
@@ -690,7 +729,23 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (weekday?.some((v) => v != null && v > 1_000_000)) bad('Nieprawidłowa cena');
     run('UPDATE units SET base_price = ?, min_nights = ?, bookable = ? WHERE id = ?', price, Math.min(60, Math.max(1, int(b.min_nights) || 1)), b.bookable === false ? 0 : 1, id);
     if (weekday) run('UPDATE units SET weekday_prices = ? WHERE id = ?', weekday.some((v) => v != null) ? JSON.stringify(weekday) : null, id);
-    return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices FROM units WHERE id = ?', id));
+    if (b.type_name !== undefined) run('UPDATE units SET type_name = ? WHERE id = ?', str(b.type_name, 60), id);
+    return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices, type_name FROM units WHERE id = ?', id));
+  });
+
+  // ---- Zamknięcie obiektu (remont, poza sezonem…) — konto ograniczone może zamykać swoje obiekty ----
+  api.put('/rates/property/:id/closure', async (c) => {
+    const id = int(c.req.param('id'));
+    if (!get('SELECT 1 FROM properties WHERE id = ?', id)) return c.json({ error: 'Nie znaleziono' }, 404);
+    const user = c.get('user');
+    if (user.properties && !user.properties.includes(id)) throw new HTTPException(403, { message: 'Brak dostępu do tego obiektu' });
+    const b = await c.req.json();
+    const from = b.from ? str(b.from, 10) : null, to = b.to ? str(b.to, 10) : null;
+    if ((from && !DATE_RE.test(from)) || (to && !DATE_RE.test(to))) bad('Nieprawidłowe daty');
+    if (from && to && to < from) bad('Data końca musi być po dacie początku');
+    run('UPDATE properties SET closed = ?, closed_from = ?, closed_to = ?, closed_note = ?, closed_note_en = ? WHERE id = ?',
+      b.closed ? 1 : 0, from, to, str(b.note, 300), str(b.note_en, 300), id);
+    return c.json(get('SELECT id, closed, closed_from, closed_to, closed_note, closed_note_en FROM properties WHERE id = ?', id));
   });
 
   // ---- Opcje płatne (parking, zwierzę, łóżeczko…) ----
@@ -729,15 +784,22 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     return c.json({ ok: true });
   });
 
-  // Na ile dni do przodu strona pokazuje ceny i przyjmuje zapytania
-  api.get('/settings/booking', (c) => c.json({ horizon_days: bookingHorizon(db), default_days: DEFAULT_HORIZON }));
+  // Na ile dni do przodu strona pokazuje ceny i przyjmuje zapytania; jak przydzielać domek przy akceptacji
+  const ASSIGN_KEY = 'assign_mode';
+  const assignMode = () => ((get('SELECT value FROM settings WHERE key = ?', ASSIGN_KEY) as { value: string } | undefined)?.value === 'manual' ? 'manual' : 'auto');
+  const bookingSettings = () => ({ horizon_days: bookingHorizon(db), default_days: DEFAULT_HORIZON, assign_mode: assignMode() });
+  const setSetting = (key: string, value: string) => run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value);
+  api.get('/settings/booking', (c) => c.json(bookingSettings()));
   api.put('/settings/booking', async (c) => {
     requireFullAdmin(c.get('user'));
     const b = await c.req.json();
-    const days = int(b.horizon_days);
-    if (days < 7 || days > 730) bad('Podaj liczbę dni od 7 do 730');
-    run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', HORIZON_KEY, String(days));
-    return c.json({ horizon_days: bookingHorizon(db), default_days: DEFAULT_HORIZON });
+    if (b.horizon_days !== undefined) {
+      const days = int(b.horizon_days);
+      if (days < 7 || days > 730) bad('Podaj liczbę dni od 7 do 730');
+      setSetting(HORIZON_KEY, String(days));
+    }
+    if (b.assign_mode !== undefined) setSetting(ASSIGN_KEY, b.assign_mode === 'manual' ? 'manual' : 'auto');
+    return c.json(bookingSettings());
   });
 
   // ---- Zapytania o rezerwację ze strony www ----
@@ -751,9 +813,23 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
       WHERE ${where} ${unitScope(c.get('user')).replace('unit_id', 'r.unit_id')}
       ORDER BY ${status === 'pending' ? 'r.created_at' : 'COALESCE(r.decided_at, r.created_at) DESC'} LIMIT 200`) as (RequestRow & Record<string, unknown>)[];
-    // Czy termin w międzyczasie się zajął (np. rezerwacja z Bookingu)
-    return c.json(rows.map((r) => ({ ...r, conflicts: r.status === 'pending' ? conflicts({ ...r, status: 'confirmed' }, 0) : [] })));
+    // Czy termin w międzyczasie się zajął (np. rezerwacja z Bookingu) + które domki z typu są wolne do przydziału
+    return c.json(rows.map((r) => {
+      if (r.status !== 'pending') return { ...r, conflicts: [], group_units: [] };
+      const groupUnits = requestGroup(r).map((id) => {
+        const u = get('SELECT id, name, type_name FROM units WHERE id = ?', id) as { id: number; name: string; type_name: string } | undefined;
+        return u && { ...u, free: !conflicts({ unit_id: id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0).length };
+      }).filter(Boolean);
+      return { ...r, conflicts: conflicts({ ...r, status: 'confirmed' }, 0), group_units: groupUnits, assign_mode: assignMode() };
+    }));
   });
+
+  /** Domki, do których można przydzielić zapytanie (typ domku); najpierw proponowany. */
+  const requestGroup = (r: RequestRow): number[] => {
+    let ids: number[] = [];
+    try { ids = r.group_unit_ids ? JSON.parse(r.group_unit_ids) : []; } catch { ids = []; }
+    return [r.unit_id, ...ids.filter((id) => id !== r.unit_id)];
+  };
 
   const pendingRequest = (user: User, id: number) => {
     const r = requestRow(id);
@@ -766,7 +842,18 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const user = c.get('user');
     const r = pendingRequest(user, int(c.req.param('id')));
     const b = await c.req.json().catch(() => ({}));
-    const found = conflicts({ unit_id: r.unit_id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0);
+    // Przydział domku: wybrany przez admina albo automatycznie pierwszy wolny z typu (proponowany ma pierwszeństwo)
+    const groupIds = requestGroup(r);
+    const isFree = (id: number) => !conflicts({ unit_id: id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0).length;
+    let unitId: number;
+    if (b.unit_id !== undefined && b.unit_id !== null && b.unit_id !== '') {
+      unitId = int(b.unit_id);
+      if (!groupIds.includes(unitId)) bad('Wybierz domek z listy');
+    } else {
+      if (groupIds.length > 1 && assignMode() === 'manual') bad('Wybierz domek, do którego przydzielić rezerwację');
+      unitId = groupIds.find(isFree) ?? r.unit_id;
+    }
+    const found = conflicts({ unit_id: unitId, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const price = b.price === undefined ? r.quoted_price : money(b.price);
     const note = str(b.note, 3000);
@@ -777,10 +864,10 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     let created: Record<string, unknown>;
     try {
       const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes)
-        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?)`, r.unit_id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
         r.adults, r.children, price, notes);
-      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ? WHERE id = ?`,
-        user.username, note, res.lastInsertRowid, r.id);
+      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ? WHERE id = ?`,
+        user.username, note, res.lastInsertRowid, unitId, r.id);
       created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
       db.exec('COMMIT');
     } catch (err) {
@@ -788,7 +875,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       throw err;
     }
     notify([{ kind: 'created', row: created, by: user.username }], user.id);
-    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, decision_note: note }, true, price)
+    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note }, true, price)
       .catch((err) => { console.error('E-mail z potwierdzeniem nie wysłany', err); return false; });
     return c.json({ request: requestRow(r.id), reservation: created, emailed });
   });

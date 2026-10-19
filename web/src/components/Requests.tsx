@@ -78,13 +78,23 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
   const [error, setError] = useState('');
   const [force, setForce] = useState(false);
   const nights = diffDays(r.check_in, r.check_out);
+  // Typ domku: kilka takich samych domków — wybór, do którego przydzielić (auto = pierwszy wolny)
+  const group = r.group_units ?? [];
+  const isGroup = group.length > 1;
+  const manual = r.assign_mode === 'manual';
+  const [unitChoice, setUnitChoice] = useState<string>('');
+  const autoUnit = group.find((g) => g.free) ?? group[0];
 
   const submit = async () => {
     setBusy(true);
     setError('');
     try {
       if (mode === 'accept') {
-        const res = await api.acceptRequest(r.id, { price: price.trim() === '' ? null : Number(price.replace(',', '.')), note, email: sendEmail, force });
+        if (isGroup && manual && !unitChoice) { setBusy(false); return setError('Wybierz domek, do którego przydzielić rezerwację'); }
+        const res = await api.acceptRequest(r.id, {
+          price: price.trim() === '' ? null : Number(price.replace(',', '.')), note, email: sendEmail, force,
+          ...(unitChoice ? { unit_id: Number(unitChoice) } : {}),
+        });
         onDone();
         onOpenReservation(res.reservation);
       } else {
@@ -107,7 +117,9 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
         <span className="muted small-meta">wysłane {when(r.created_at)}</span>
       </div>
       <div className="request-guest">{r.guest_name}</div>
-      <div className="request-unit">{r.unit_name} <span className="muted">· {r.property_name}</span></div>
+      <div className="request-unit">
+        {isGroup ? <>{group[0].type_name || r.unit_name} <span className="muted">· {r.property_name} · proponowany: {r.unit_name}</span></> : <>{r.unit_name} <span className="muted">· {r.property_name}</span></>}
+      </div>
 
       <dl className="request-facts">
         <div><dt>Termin</dt><dd>{formatShort(r.check_in)} – {formatShort(r.check_out)}</dd></div>
@@ -145,6 +157,14 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
       {mode !== 'idle' && (
         <div className="decision">
           <h3>{mode === 'accept' ? 'Akceptacja — rezerwacja trafi do kalendarza' : 'Odrzucenie zapytania'}</h3>
+          {mode === 'accept' && isGroup && (
+            <label>Przydziel do domku
+              <select value={unitChoice} onChange={(e) => setUnitChoice(e.target.value)}>
+                <option value="" disabled={manual}>{manual ? 'Wybierz domek…' : `Automatycznie — ${autoUnit?.name ?? ''}${autoUnit?.free ? ' (wolny)' : ''}`}</option>
+                {group.map((g) => <option key={g.id} value={g.id}>{g.name} — {g.free ? 'wolny' : 'zajęty w tym terminie'}</option>)}
+              </select>
+            </label>
+          )}
           {mode === 'accept' && (
             <label>Cena za cały pobyt (zł)
               <input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="np. 1500" />

@@ -724,3 +724,82 @@ test('opcje płatne: admin ustawia, gość wybiera, cena dolicza się do wyceny 
   assert.equal((await call('DELETE', `/api/extras/${pet.id}`)).status, 200);
   assert.equal((await (await call('GET', '/api/extras')).json()).length, 3);
 });
+
+test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przydziela automatycznie lub ręcznie', async () => {
+  const { call, login, db } = setupWithMail();
+  await login();
+  // Jantar: 3 małe (id 1–3) i 2 duże (id 4–5)
+  for (const id of [1, 2, 3]) await call('PUT', `/api/rates/unit/${id}`, { base_price: 400, min_nights: 1, type_name: 'Mały domek' });
+  await call('PUT', '/api/rates/unit/2', { base_price: 350, min_nights: 1, type_name: 'Mały domek' }); // najtańszy
+  const jantar = (await (await call('GET', '/public/catalog')).json())[0];
+  const small = jantar.types.find((t: { name: string }) => t.name === 'Mały domek');
+  assert.deepEqual(small.unit_ids, [1, 2, 3]);
+  assert.equal(small.count, 3);
+  assert.equal(small.price_from, 350);
+  assert.equal(jantar.types.filter((t: { count: number }) => t.count === 1).length, 2); // duże bez typu — osobno
+
+  // domki 2 i 3 zajęte w tym terminie → wolny tylko 1
+  const [a, b] = [inDays(15), inDays(18)];
+  for (const id of [2, 3]) db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (?, ?, ?)').run(id, a, b);
+  const cal = await (await call('GET', `/public/calendar?units=1,2,3&from=${a}&to=${b}`)).json();
+  assert.deepEqual(cal.unit_ids, [1, 2, 3]);
+  assert.deepEqual(cal.days[0][3], 0b110); // bit 1 i 2 = zajęte
+  const req = async (ip: string) => (await call('POST', '/public/requests', {
+    unit_ids: [1, 2, 3], check_in: a, check_out: b, name: 'Grupa Test', email: 'g@example.com', adults: 2, consent: true,
+  }, { 'x-client-ip': ip })).json();
+  const r1 = await req('5.5.5.1');
+  assert.equal(r1.quoted_price, 1200); // jedyny wolny: domek 1 (3 × 400)
+  let pending = (await (await call('GET', '/api/requests?status=pending')).json())[0];
+  assert.equal(pending.unit_id, 1);
+  assert.deepEqual(pending.group_units.map((u: { id: number; free: boolean }) => [u.id, u.free]), [[1, true], [2, false], [3, false]]);
+
+  // wszystkie zajęte → zapytanie odrzucone od razu
+  db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (1, ?, ?)').run(inDays(30), inDays(32));
+  for (const id of [2, 3]) db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (?, ?, ?)').run(id, inDays(30), inDays(32));
+  assert.equal((await call('POST', '/public/requests', { unit_ids: [1, 2, 3], check_in: inDays(30), check_out: inDays(32), name: 'Ktoś Nowy', email: 'k@example.com', adults: 2, consent: true }, { 'x-client-ip': '5.5.5.2' })).status, 409);
+
+  // admin wybiera domek spoza grupy → błąd; ręcznie wybrany domek 1 → OK
+  assert.equal((await call('POST', `/api/requests/${r1.id}/accept`, { unit_id: 4 })).status, 400);
+  // tryb ręczny: bez wyboru nie da się zaakceptować
+  await call('PUT', '/api/settings/booking', { assign_mode: 'manual' });
+  assert.equal((await call('POST', `/api/requests/${r1.id}/accept`, {})).status, 400);
+  const acc = await (await call('POST', `/api/requests/${r1.id}/accept`, { unit_id: 1 })).json();
+  assert.equal(acc.reservation.unit_id, 1);
+
+  // tryb automatyczny: proponowany domek zajęty w międzyczasie → wybierany inny wolny
+  await call('PUT', '/api/settings/booking', { assign_mode: 'auto' });
+  const [c1, c2] = [inDays(40), inDays(42)];
+  const r2 = await (await call('POST', '/public/requests', { unit_ids: [1, 2, 3], check_in: c1, check_out: c2, name: 'Auto Test', email: 'a@example.com', adults: 2, consent: true }, { 'x-client-ip': '5.5.5.3' })).json();
+  pending = (await (await call('GET', '/api/requests?status=pending')).json()).find((x: { id: number }) => x.id === r2.id);
+  assert.equal(pending.unit_id, 2); // najtańszy
+  db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (2, ?, ?)').run(c1, c2);
+  const auto = await (await call('POST', `/api/requests/${r2.id}/accept`, {})).json();
+  assert.equal(auto.reservation.unit_id, 1);
+});
+
+test('obiekt zamknięty: w terminie (dni zajęte) i do odwołania (komunikat, brak zapytań)', async () => {
+  const { call, login } = setupWithMail();
+  await login();
+  await call('PUT', '/api/rates/unit/1', { base_price: 400, min_nights: 1 });
+  const [from, to] = [inDays(10), inDays(12)]; // zamknięte noce 10, 11, 12
+  assert.equal((await call('PUT', '/api/rates/property/1/closure', { closed: true, from: to, to: from })).status, 400);
+  await call('PUT', '/api/rates/property/1/closure', { closed: true, from, to, note: 'Remont basenu', note_en: 'Pool renovation' });
+  const cat = (await (await call('GET', '/public/catalog')).json())[0];
+  assert.deepEqual(cat.closed, { from, to, note: 'Remont basenu', note_en: 'Pool renovation' });
+  const cal = await (await call('GET', `/public/calendar?unit=1&from=${inDays(9)}&to=${inDays(14)}`)).json();
+  assert.deepEqual(cal.days.map((d: unknown[]) => d[3]), [0, 1, 1, 1, 0]);
+  const ask = (a: string, b: string, ip: string) => call('POST', '/public/requests', { unit_id: 1, check_in: a, check_out: b, name: 'Jan Test', email: 'j@example.com', adults: 2, consent: true }, { 'x-client-ip': ip });
+  const blocked = await ask(inDays(11), inDays(14), '6.6.6.1');
+  assert.equal(blocked.status, 409);
+  assert.match((await blocked.json()).error, /zamknięty/);
+  assert.equal((await ask(inDays(13), inDays(15), '6.6.6.2')).status, 201); // po zamknięciu — OK
+
+  // do odwołania: wszystkie dni zamknięte
+  await call('PUT', '/api/rates/property/1/closure', { closed: true, note: 'Zapraszamy od maja' });
+  assert.deepEqual((await (await call('GET', '/public/catalog')).json())[0].closed, { from: null, to: null, note: 'Zapraszamy od maja', note_en: 'Zapraszamy od maja' });
+  assert.equal((await ask(inDays(50), inDays(52), '6.6.6.3')).status, 409);
+  // otwarcie
+  await call('PUT', '/api/rates/property/1/closure', { closed: false });
+  assert.equal((await (await call('GET', '/public/catalog')).json())[0].closed, null);
+  assert.equal((await ask(inDays(50), inDays(52), '6.6.6.4')).status, 201);
+});
