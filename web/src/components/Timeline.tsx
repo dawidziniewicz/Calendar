@@ -169,7 +169,9 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                   </div>
                   <div className="tl-row" style={{ ['--lanes' as string]: lanes.countOf.get(u.id) ?? 1 }}>
                     {days.map((d) => {
-                      const cls = `tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''}`;
+                      // obiekt zamknięty (Cennik → zamknięcie) — dni zakreskowane
+                      const propClosed = !!p.closed && (!p.closed_from || d >= p.closed_from) && (!p.closed_to || d <= p.closed_to);
+                      const cls = `tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''} ${propClosed ? 'prop-closed' : ''}`;
                       if (priceMode) {
                         const rate = rates.get(`${u.id}:${d}`);
                         const price = nightPrice(u, d, rate);
@@ -235,6 +237,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
         <span><i className="st-tentative" /> Wstępna</span>
         <span><ConflictMark /> Konflikt</span>
         <span><i className="arrival-today" /> Przyjazd dziś</span>
+        {properties.some((p) => p.closed) && <span><i className="prop-closed" /> Obiekt zamknięty</span>}
       </div>
       )}
 

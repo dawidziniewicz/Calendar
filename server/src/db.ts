@@ -26,6 +26,25 @@ function migrate(db: DatabaseSync) {
   if (user_version < 9) migrateV9(db);
   if (user_version < 10) migrateV10(db);
   if (user_version < 11) migrateV11(db);
+  if (user_version < 12) migrateV12(db);
+}
+
+// Typ domku (np. „Mały domek”): domki tego samego typu w obiekcie strona pokazuje razem, a zapytanie
+// dostaje listę pasujących domków (group_unit_ids) — przy akceptacji wybierany jest wolny (automatycznie albo ręcznie).
+// Zamknięcie obiektu: do odwołania (bez dat) albo w terminie closed_from–closed_to (ostatnia zamknięta noc), z komunikatem dla gości.
+function migrateV12(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE units ADD COLUMN type_name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE booking_requests ADD COLUMN group_unit_ids TEXT;
+    ALTER TABLE properties ADD COLUMN closed INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE properties ADD COLUMN closed_from TEXT;
+    ALTER TABLE properties ADD COLUMN closed_to TEXT;
+    ALTER TABLE properties ADD COLUMN closed_note TEXT NOT NULL DEFAULT '';
+    ALTER TABLE properties ADD COLUMN closed_note_en TEXT NOT NULL DEFAULT '';
+    PRAGMA user_version = 12;
+    COMMIT;
+  `);
 }
 
 // Ceny wg dni tygodnia (JSON: 7 cen od niedzieli do soboty, null = cena podstawowa), np. drożej w weekendy.

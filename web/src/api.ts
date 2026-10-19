@@ -35,6 +35,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export type PushSettings = { time: string; changes: boolean; requests: boolean };
+export type BookingSettings = { horizon_days: number; default_days: number; assign_mode: 'auto' | 'manual' };
 export type ExtraInput = { name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: number[] | null; active: boolean };
 export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | null; from: string | null; emails: string };
 /** price/min_nights: liczba = ustaw, null = przywróć ustawienie domku, brak = bez zmian */
@@ -86,14 +87,15 @@ export const api = {
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
   rates: (from: string, to: string) => request<Rate[]>('GET', `/rates?from=${from}&to=${to}`),
   saveRates: (patch: RatePatch) => request<{ changed: number }>('PUT', '/rates', patch),
-  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean; weekday_prices?: (number | null)[] }) => request('PUT', `/rates/unit/${id}`, p),
+  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean; weekday_prices?: (number | null)[]; type_name?: string }) => request('PUT', `/rates/unit/${id}`, p),
+  saveClosure: (propertyId: number, c: { closed: boolean; from: string | null; to: string | null; note: string; note_en: string }) => request('PUT', `/rates/property/${propertyId}/closure`, c),
   extras: () => request<Extra[]>('GET', '/extras'),
   saveExtra: (e: ExtraInput, id?: number) => (id ? request<Extra>('PUT', `/extras/${id}`, e) : request<Extra>('POST', '/extras', e)),
   deleteExtra: (id: number) => request('DELETE', `/extras/${id}`),
-  bookingSettings: () => request<{ horizon_days: number; default_days: number }>('GET', '/settings/booking'),
-  saveBookingSettings: (horizon_days: number) => request<{ horizon_days: number; default_days: number }>('PUT', '/settings/booking', { horizon_days }),
+  bookingSettings: () => request<BookingSettings>('GET', '/settings/booking'),
+  saveBookingSettings: (patch: Partial<Pick<BookingSettings, 'horizon_days' | 'assign_mode'>>) => request<BookingSettings>('PUT', '/settings/booking', patch),
   requests: (status: 'pending' | 'decided') => request<BookingRequest[]>('GET', `/requests?status=${status}`),
-  acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean }) =>
+  acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean; unit_id?: number }) =>
     request<{ request: BookingRequest; reservation: Reservation; emailed: boolean }>('POST', `/requests/${id}/accept`, body),
   rejectRequest: (id: number, body: { note?: string; email?: boolean }) => request<{ request: BookingRequest; emailed: boolean }>('POST', `/requests/${id}/reject`, body),
   emailSettings: () => request<EmailSettings>('GET', '/settings/email'),

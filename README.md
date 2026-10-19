@@ -239,6 +239,9 @@ Strona [odmorzadogor.pl](https://github.com/dawidziniewicz/osadajantar) pobiera 
   - **na ile dni do przodu** strona pokazuje ceny i przyjmuje zapytania (domyślnie 365),
   - **opcje płatne** — parking, zwierzę, łóżeczko… z ceną za pobyt albo za noc, ilością i wyborem obiektów; gość zaznacza je w formularzu, a cena dolicza się do wyceny.
   - Kolejność ceny nocy: cena na konkretny dzień → cena dnia tygodnia → cena podstawowa.
+  - **Typ domku** (np. „Mały domek”): domki tego samego typu strona pokazuje jako jedną opcję („3 × Mały domek”). Termin jest wolny, jeśli którykolwiek z nich jest wolny przez cały pobyt; przy zapisie cennika można ustawić te same ceny dla wszystkich domków typu.
+  - **Przydział domku**: zapytanie przychodzi z proponowanym wolnym domkiem; przy akceptacji wybierasz domek z listy (wolny / zajęty) albo zostawiasz automatyczny wybór. W trybie „Zawsze wybieram ręcznie” bez wyboru nie da się zaakceptować.
+  - **Obiekt zamknięty**: do odwołania (strona pokazuje komunikat zamiast kalendarza) albo w terminie (dni niedostępne, komunikat nad kalendarzem); na osi czasu w aplikacji dni są zakreskowane.
 - **Zapytanie** od gościa: powiadomienie push („Zapytania ze strony www” w *Powiadomieniach*), e-mail na adresy z *Ustawienia → Powiadomienia e-mail*, a gość dostaje e-mail „Otrzymaliśmy Twoje zapytanie”. Zapytania ze strony angielskiej dostają e-maile po angielsku.
 - **Akceptacja** tworzy rezerwację „Strona www” (można poprawić cenę i dopisać informację dla gościa, np. o zaliczce). Gdy termin w międzyczasie się zajął, aplikacja ostrzeże.
 

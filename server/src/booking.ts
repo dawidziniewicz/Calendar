@@ -16,11 +16,49 @@ export const nightsBetween = (from: string, to: string) => Math.round((Date.pars
 export const nightsPl = (n: number) => (n === 1 ? '1 noc' : `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'noce' : 'nocy'}`);
 export const zl = (n: number) => `${n.toLocaleString('pl-PL', { maximumFractionDigits: 2 }).replace(/ /g, ' ')} zł`;
 
-type UnitPricing = { id: number; base_price: number | null; min_nights: number; bookable: number; capacity: number; weekday_prices: string | null };
-export type Night = { date: string; price: number | null; min_nights: number; closed: boolean; booked: boolean };
+type UnitPricing = {
+  id: number; property_id: number; name: string; type_name: string; sort: number;
+  base_price: number | null; min_nights: number; bookable: number; capacity: number; weekday_prices: string | null;
+};
+export type Night = { date: string; price: number | null; min_nights: number; closed: boolean; booked: boolean; propertyClosed?: boolean };
+
+export type Closure = { closed: number; closed_from: string | null; closed_to: string | null; closed_note: string; closed_note_en: string };
+export function propertyClosure(db: DatabaseSync, propertyId: number): Closure | null {
+  const c = db.prepare('SELECT closed, closed_from, closed_to, closed_note, closed_note_en FROM properties WHERE id = ?').get(propertyId) as Closure | undefined;
+  return c && c.closed ? c : null;
+}
+/** Czy noc `date` wypada w zamknięciu obiektu (bez dat = do odwołania; daty włącznie). */
+export const closedOn = (c: Closure | null, date: string) =>
+  !!c && (!c.closed_from || date >= c.closed_from) && (!c.closed_to || date <= c.closed_to);
 
 export function unitPricing(db: DatabaseSync, unitId: number) {
-  return db.prepare('SELECT id, base_price, min_nights, bookable, capacity, weekday_prices FROM units WHERE id = ?').get(unitId) as UnitPricing | undefined;
+  return db.prepare(`SELECT id, property_id, name, type_name, sort, base_price, min_nights, bookable, capacity, weekday_prices
+    FROM units WHERE id = ?`).get(unitId) as UnitPricing | undefined;
+}
+
+/** Grupa domków do rezerwacji: wszystkie muszą istnieć, być widoczne na stronie i należeć do jednego obiektu. */
+export function unitGroup(db: DatabaseSync, ids: unknown): UnitPricing[] | null {
+  const list = (Array.isArray(ids) ? ids : String(ids ?? '').split(',')).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const uniq = [...new Set(list)].slice(0, 30);
+  if (!uniq.length) return null;
+  const units = uniq.map((id) => unitPricing(db, id));
+  if (units.some((u) => !u || !u.bookable)) return null;
+  const ok = units as UnitPricing[];
+  return ok.every((u) => u.property_id === ok[0].property_id) ? ok.sort((a, b) => a.sort - b.sort || a.id - b.id) : null;
+}
+
+/**
+ * Najlepszy wolny domek z grupy na cały pobyt: najpierw ze znaną ceną, potem najtańszy, potem wg kolejności.
+ * Zwraca też powód, jeśli żaden nie pasuje (pierwszy napotkany — np. minimalny pobyt).
+ */
+export function chooseUnit(db: DatabaseSync, units: UnitPricing[], checkIn: string, checkOut: string, lang: Lang = 'pl') {
+  const quotes = units.map((u) => ({ unit: u, q: quote(db, u, checkIn, checkOut, lang) }));
+  const ok = quotes.filter((x) => x.q.available)
+    .sort((a, b) => (a.q.total == null ? 1 : 0) - (b.q.total == null ? 1 : 0) || (a.q.total ?? 0) - (b.q.total ?? 0) || a.unit.sort - b.unit.sort);
+  if (ok.length) return { unit: ok[0].unit, q: ok[0].q, free: ok.map((x) => x.unit.id) };
+  // wolny domek, ale np. za krótki pobyt — ten komunikat jest ważniejszy niż „zajęte”
+  const reason = quotes.find((x) => !/zajęty|booked/.test(x.q.reason ?? ''))?.q.reason ?? quotes[0]?.q.reason;
+  return { unit: null, q: null, free: [], reason };
 }
 
 /** Ceny wg dni tygodnia: tablica 7 pozycji (0 = niedziela … 6 = sobota), null = cena podstawowa. */
@@ -54,6 +92,7 @@ export function nights(db: DatabaseSync, unit: UnitPricing, from: string, to: st
   const stays = db.prepare(`SELECT check_in, check_out FROM reservations WHERE unit_id = ? AND status != 'cancelled' AND check_out > ? AND check_in < ?`)
     .all(unit.id, from, to) as { check_in: string; check_out: string }[];
   const weekday = parseWeekdayPrices(unit.weekday_prices);
+  const closure = propertyClosure(db, unit.property_id);
   const out: Night[] = [];
   for (let d = from; d < to; d = addDays(d, 1)) {
     const r = rates.get(d);
@@ -62,7 +101,8 @@ export function nights(db: DatabaseSync, unit: UnitPricing, from: string, to: st
       // kolejność: cena ustawiona na ten dzień → cena dnia tygodnia → cena podstawowa
       price: r?.price ?? weekday[new Date(`${d}T12:00:00Z`).getUTCDay()] ?? unit.base_price ?? null,
       min_nights: r?.min_nights ?? unit.min_nights ?? 1,
-      closed: !!r?.closed,
+      closed: !!r?.closed || closedOn(closure, d),
+      propertyClosed: closedOn(closure, d),
       booked: stays.some((s) => s.check_in <= d && s.check_out > d),
     });
   }
@@ -85,6 +125,9 @@ export function quote(db: DatabaseSync, unit: UnitPricing, checkIn: string, chec
   if (checkOut > addDays(warsawToday(), days)) {
     return { ...base, available: false, reason: en ? `Online booking is open up to ${days} days ahead — please call us about later dates` : `Rezerwacje online przyjmujemy do ${days} dni do przodu — w sprawie późniejszych terminów zadzwoń do nas` };
   }
+  if (list.some((n) => n.propertyClosed)) {
+    return { ...base, available: false, reason: en ? 'The property is closed on these dates' : 'Obiekt jest zamknięty w wybranym terminie' };
+  }
   if (list.some((n) => n.booked)) return { ...base, available: false, reason: en ? 'These dates are already booked' : 'Wybrany termin jest już zajęty' };
   if (list.some((n) => n.closed)) {
     return { ...base, available: false, reason: en ? 'Online booking is closed for these dates — please call us' : 'W wybranym terminie nie przyjmujemy rezerwacji online — zadzwoń do nas' };
@@ -100,7 +143,7 @@ export function quote(db: DatabaseSync, unit: UnitPricing, checkIn: string, chec
 export type RequestRow = {
   id: number; unit_id: number; check_in: string; check_out: string; guest_name: string; guest_phone: string; guest_email: string;
   adults: number; children: number; message: string; quoted_price: number | null; status: string; decision_note: string;
-  reservation_id: number | null; created_at: string; lang?: string; extras?: string | null;
+  reservation_id: number | null; created_at: string; lang?: string; extras?: string | null; group_unit_ids?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -147,11 +190,14 @@ export function extrasLines(list: ChosenExtra[], lang: Lang = 'pl') {
   });
 }
 
-type UnitInfo = { unit: string; property: string; location: string; address: string };
+type UnitInfo = { unit: string; type: string; property: string; location: string; address: string };
 function unitInfo(db: DatabaseSync, unitId: number): UnitInfo {
-  return (db.prepare(`SELECT u.name AS unit, p.name AS property, p.location, p.address FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`)
-    .get(unitId) as UnitInfo | undefined) ?? { unit: '', property: '', location: '', address: '' };
+  return (db.prepare(`SELECT u.name AS unit, u.type_name AS type, p.name AS property, p.location, p.address FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`)
+    .get(unitId) as UnitInfo | undefined) ?? { unit: '', type: '', property: '', location: '', address: '' };
 }
+/** Gość widzi typ domku (np. „Mały domek”), a nie wewnętrzną nazwę konkretnego domku. */
+const guestUnitName = (u: UnitInfo) => u.type || u.unit;
+const groupSize = (r: RequestRow) => { try { return r.group_unit_ids ? (JSON.parse(r.group_unit_ids) as number[]).length : 1; } catch { return 1; } };
 
 const TXT = {
   pl: {
@@ -198,7 +244,7 @@ function stayRows(db: DatabaseSync, r: RequestRow, price: number | null, t = TXT
   const u = unitInfo(db, r.unit_id);
   const n = nightsBetween(r.check_in, r.check_out);
   return [
-    [t.property, `${u.property}\n${u.unit}`],
+    [t.property, `${u.property}\n${guestUnitName(u)}`],
     [t.arrival, longDate(r.check_in, t.locale)],
     [t.departure, longDate(r.check_out, t.locale)],
     [t.length, t.nights(n)],
@@ -232,7 +278,7 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
   if (push) {
     const users = db.prepare(`SELECT DISTINCT u.id FROM users u JOIN push_subscriptions p ON p.user_id = u.id WHERE u.notify_requests = 1`).all() as { id: number }[];
     const msg = {
-      title: `Nowe zapytanie · ${u.unit} · ${u.property}`,
+      title: `Nowe zapytanie · ${guestUnitName(u)} · ${u.property}`,
       body: `${r.guest_name} · ${range} (${nightsPl(n)}) · ${r.adults + r.children} os.${r.quoted_price != null ? ` · ${zl(r.quoted_price)}` : ''}`,
       url: `/?tab=requests&request=${r.id}`,
       tag: `request-${r.id}`,
@@ -249,7 +295,7 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
       const m = renderMail({
         preheader: `${r.guest_name} · ${u.property} · ${range}`,
         title: 'Nowe zapytanie o rezerwację',
-        intro: [`${r.guest_name} chce zarezerwować ${u.unit} (${u.property}). Zaakceptuj albo odrzuć zapytanie w aplikacji — gość dostanie e-mail z odpowiedzią.`
+        intro: [`${r.guest_name} chce zarezerwować ${guestUnitName(u)} (${u.property})${groupSize(r) > 1 ? ` — proponowany wolny domek: ${u.unit}` : ''}. Zaakceptuj albo odrzuć zapytanie w aplikacji — gość dostanie e-mail z odpowiedzią.`
           + (r.lang === 'en' ? ' Zapytanie ze strony angielskiej — gość dostanie odpowiedź po angielsku.' : '')],
         rows: [...stayRows(db, r, r.quoted_price, TXT.pl, 'Wycena wg cennika'), ['Telefon', r.guest_phone || '—'], ['E-mail', r.guest_email]],
         note: r.message ? { label: 'Wiadomość od gościa', text: r.message } : undefined,

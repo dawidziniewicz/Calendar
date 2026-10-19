@@ -603,3 +603,15 @@ fieldset p { margin: 0; font-size: 0.85rem; }
   .weekday-grid { gap: 4px; }
   .weekday-grid input { font-size: 15px !important; }
 }
+
+/* ---- Typy domków, zamknięcie obiektu ---- */
+.type-field { margin-bottom: 4px; }
+.type-note { margin: 0 0 8px; }
+.assign-title { margin-top: 18px; }
+.closure { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.closure.is-closed { border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.closure-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.closure-line .link { margin-left: auto; }
+.closure-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.tl-cell.prop-closed, .legend i.prop-closed { background-image: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--danger) 16%, transparent) 0 4px, transparent 4px 9px); }
+.legend i.prop-closed { border: 1px solid var(--line); }
