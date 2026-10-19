@@ -617,3 +617,6 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .legend i.prop-closed { border: 1px solid var(--line); }
 .request-card.decided.st-expired { border-left-color: var(--line); opacity: .75; }
 .archive-note { margin: -2px 0 10px; }
+.cancel-section { margin-bottom: 22px; }
+.cancel-head { display: flex; align-items: center; gap: 8px; color: var(--danger); }
+.request-card.cancel-card { border-left-color: var(--danger); }

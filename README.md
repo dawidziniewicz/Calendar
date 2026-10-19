@@ -243,6 +243,7 @@ Strona [odmorzadogor.pl](https://github.com/dawidziniewicz/osadajantar) pobiera 
   - **Przydział domku**: zapytanie przychodzi z proponowanym wolnym domkiem; przy akceptacji wybierasz domek z listy (wolny / zajęty) albo zostawiasz automatyczny wybór. W trybie „Zawsze wybieram ręcznie” bez wyboru nie da się zaakceptować.
   - **Obiekt zamknięty**: do odwołania (strona pokazuje komunikat zamiast kalendarza) albo w terminie (dni niedostępne, komunikat nad kalendarzem); na osi czasu w aplikacji dni są zakreskowane.
 - **Zapytanie** od gościa: powiadomienie push („Zapytania ze strony www” w *Powiadomieniach*), e-mail na adresy z *Ustawienia → Powiadomienia e-mail*, a gość dostaje e-mail „Otrzymaliśmy Twoje zapytanie”. Zapytania ze strony angielskiej dostają e-maile po angielsku.
+- **Anulacja przez gościa**: e-mail z potwierdzeniem ma link „Poproś o anulację” (`odmorzadogor.pl/anulacja/?t=…`, unikalny kod). Gość podaje powód, Ty dostajesz push i e-mail, a w *Zapytania* pojawia się „Prośby o anulację”: **Potwierdź anulację** (rezerwacja anulowana, termin wolny, e-mail do gościa) albo **Odrzuć prośbę** (rezerwacja zostaje, e-mail z Twoją wiadomością).
 - **Akceptacja** tworzy rezerwację „Strona www” (można poprawić cenę i dopisać informację dla gościa, np. o zaliczce). Gdy termin w międzyczasie się zajął, aplikacja ostrzeże.
 
 ### E-maile (do ustawienia w `.env` na serwerze w domu)

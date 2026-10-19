@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, HORIZON_KEY, chooseUnit, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
+  DEFAULT_HORIZON, HORIZON_KEY, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
 } from './booking.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -210,6 +210,45 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const row = get('SELECT * FROM booking_requests WHERE id = ?', res.lastInsertRowid) as RequestRow;
     announceRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o zapytaniu nie powiodło się', err));
     return c.json({ ok: true, id: row.id, quoted_price: total, extras_total: extrasTotal, nights: q.nights }, 201);
+  });
+
+  // ---- Prośba gościa o anulację (link z e-maila z potwierdzeniem: /anulacja/?t=KOD) ----
+  type CancelRow = RequestRow & { status: string; cancel_requested_at: string | null; cancel_status: string | null; property_name: string; unit_type: string; unit_name: string };
+  const byCancelToken = (token: string) => (/^[a-f0-9]{48}$/.test(token)
+    ? get(`SELECT r.*, p.name AS property_name, u.type_name AS unit_type, u.name AS unit_name FROM booking_requests r
+        JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id WHERE r.cancel_token = ?`, token) as CancelRow | undefined
+    : undefined);
+  const cancelState = (r: CancelRow) => {
+    const res = r.reservation_id ? get('SELECT status FROM reservations WHERE id = ?', r.reservation_id) as { status: string } | undefined : undefined;
+    if (!res || res.status === 'cancelled' || r.cancel_status === 'confirmed') return 'cancelled';
+    if (r.check_in < warsawToday()) return 'past';
+    if (r.cancel_status === 'requested') return 'requested';
+    return 'active';
+  };
+  pub.get('/cancel', (c) => {
+    const r = byCancelToken(str(c.req.query('t'), 64));
+    if (!r) return c.json({ error: 'Nieprawidłowy lub nieaktualny link', code: 'not_found' }, 404);
+    c.header('Cache-Control', 'no-store');
+    // tylko to, co gość i tak ma w e-mailu — bez telefonu i adresu e-mail
+    return c.json({
+      property: r.property_name, unit: r.unit_type || r.unit_name, check_in: r.check_in, check_out: r.check_out,
+      guest: r.guest_name.split(/\s+/)[0], state: cancelState(r), requested_at: r.cancel_requested_at, lang: r.lang,
+    });
+  });
+  pub.post('/cancel', async (c) => {
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const en = b.lang === 'en';
+    if (!allowHit(`cancel:${c.req.header('x-client-ip') || 'unknown'}`, 10)) return c.json({ error: en ? 'Too many attempts — please call us.' : 'Za dużo prób — zadzwoń do nas.' }, 429);
+    const r = byCancelToken(str(b.t, 64));
+    if (!r) return c.json({ error: en ? 'Invalid or expired link' : 'Nieprawidłowy lub nieaktualny link', code: 'not_found' }, 404);
+    const state = cancelState(r);
+    if (state === 'cancelled') bad(en ? 'This booking has already been cancelled' : 'Ta rezerwacja jest już anulowana');
+    if (state === 'past') bad(en ? 'The stay has already started — please call us' : 'Pobyt już się rozpoczął — zadzwoń do nas');
+    if (state === 'requested') return c.json({ ok: true, state });
+    run(`UPDATE booking_requests SET cancel_status = 'requested', cancel_requested_at = datetime('now'), cancel_reason = ?, cancel_note = '' WHERE id = ?`, str(b.reason, 1000), r.id);
+    const row = get('SELECT * FROM booking_requests WHERE id = ?', r.id) as RequestRow;
+    announceCancelRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o anulacji nie powiodło się', err));
+    return c.json({ ok: true, state: 'requested' });
   });
 
   app.route('/public', pub);
@@ -867,14 +906,16 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const chosen = parseChosenExtras(r.extras);
     const notes = [r.message && `Wiadomość od gościa: ${r.message}`, chosen.length && `Opcje dodatkowe: ${extrasLines(chosen).join('; ')}`,
       `Rezerwacja ze strony www (zapytanie #${r.id}).`].filter(Boolean).join('\n');
+    // kod do linku „Poproś o anulację” w e-mailu z potwierdzeniem
+    const cancelToken = newToken();
     db.exec('BEGIN');
     let created: Record<string, unknown>;
     try {
       const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes)
         VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
         r.adults, r.children, price, notes);
-      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ? WHERE id = ?`,
-        user.username, note, res.lastInsertRowid, unitId, r.id);
+      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ?,
+        cancel_token = ? WHERE id = ?`, user.username, note, res.lastInsertRowid, unitId, cancelToken, r.id);
       created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
       db.exec('COMMIT');
     } catch (err) {
@@ -882,9 +923,49 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       throw err;
     }
     notify([{ kind: 'created', row: created, by: user.username }], user.id);
-    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note }, true, price)
+    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note, cancel_token: cancelToken }, true, price)
       .catch((err) => { console.error('E-mail z potwierdzeniem nie wysłany', err); return false; });
     return c.json({ request: requestRow(r.id), reservation: created, emailed });
+  });
+
+  // ---- Prośby o anulację od gości ----
+  api.get('/cancellations', (c) => c.json(all(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
+    JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
+    WHERE r.cancel_status = 'requested' ${unitScope(c.get('user')).replace('unit_id', 'r.unit_id')} ORDER BY r.cancel_requested_at`)));
+
+  const cancelRequested = (user: User, id: number) => {
+    const r = requestRow(id);
+    if (!r || !canSee(user, r.unit_id)) throw new HTTPException(404, { message: 'Nie znaleziono' });
+    if ((r as Record<string, unknown>).cancel_status !== 'requested') bad('Ta prośba o anulację została już rozpatrzona');
+    return r;
+  };
+
+  api.post('/requests/:id/cancel-confirm', async (c) => {
+    const user = c.get('user');
+    const r = cancelRequested(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const note = str(b.note, 3000);
+    const before = r.reservation_id ? get('SELECT * FROM reservations WHERE id = ?', r.reservation_id) as Record<string, unknown> | undefined : undefined;
+    if (before) {
+      const line = `Anulowana na prośbę gościa (${new Date().toLocaleDateString('pl-PL', { timeZone: 'Europe/Warsaw' })})${r.cancel_reason ? `: ${r.cancel_reason}` : ''}.`;
+      run(`UPDATE reservations SET status = 'cancelled', notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END, updated_at = datetime('now') WHERE id = ?`, line, line, before.id as number);
+      notify([{ kind: 'updated', before, after: get('SELECT * FROM reservations WHERE id = ?', before.id as number) as Record<string, unknown>, by: user.username }], user.id);
+    }
+    run(`UPDATE booking_requests SET cancel_status = 'confirmed', cancel_note = ? WHERE id = ?`, note, r.id);
+    const emailed = b.email === false ? false : await mailCancelDecision(db, mailer, { ...r, cancel_note: note }, true)
+      .catch((err) => { console.error('E-mail o anulacji nie wysłany', err); return false; });
+    return c.json({ ok: true, emailed });
+  });
+
+  api.post('/requests/:id/cancel-decline', async (c) => {
+    const user = c.get('user');
+    const r = cancelRequested(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const note = str(b.note, 3000);
+    run(`UPDATE booking_requests SET cancel_status = 'declined', cancel_note = ? WHERE id = ?`, note, r.id);
+    const emailed = b.email === false ? false : await mailCancelDecision(db, mailer, { ...r, cancel_note: note }, false)
+      .catch((err) => { console.error('E-mail o anulacji nie wysłany', err); return false; });
+    return c.json({ ok: true, emailed });
   });
 
   api.post('/requests/:id/reject', async (c) => {

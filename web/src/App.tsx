@@ -96,7 +96,9 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   }, []);
 
   useEffect(() => {
-    api.requests('pending').then((r) => setPendingRequests(r.length)).catch(() => {});
+    // licznik na zakładce: nowe zapytania + prośby o anulację
+    Promise.all([api.requests('pending'), api.cancellations().catch(() => [])])
+      .then(([r, c]) => setPendingRequests(r.length + c.length)).catch(() => {});
   }, [version]);
 
   const loadProperties = useCallback(() => {

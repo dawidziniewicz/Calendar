@@ -65,6 +65,8 @@ export type MailContent = {
   note?: { label: string; text: string };
   button?: { label: string; url: string };
   outro?: string[];
+  /** Dyskretny link pod treścią (np. „Poproś o anulację”) */
+  link?: { text: string; label: string; url: string };
 };
 
 export function renderMail(c: MailContent, lang: 'pl' | 'en' = 'pl'): { html: string; text: string } {
@@ -90,6 +92,7 @@ export function renderMail(c: MailContent, lang: 'pl' | 'en' = 'pl'): { html: st
     <tr><td style="background:#ffffff;border-radius:18px;padding:30px 28px 12px;border-top:5px solid #577267">
       <h1 style="margin:0 0 16px;font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:25px;line-height:1.25;color:#1f2a25">${esc(c.title)}</h1>
       ${c.intro.map(p).join('')}${rows}${note}${button}${(c.outro ?? []).map(p).join('')}
+      ${c.link ? `<p style="margin:4px 0 18px;padding-top:14px;border-top:1px solid #ece6dd;font-size:13px;line-height:1.6;color:#6b776f">${esc(c.link.text)} <a href="${esc(c.link.url)}" style="color:#577267;font-weight:600">${esc(c.link.label)}</a></p>` : ''}
     </td></tr>
     <tr><td style="padding:18px 6px;font-size:12px;line-height:1.6;color:#7d877f">
       Od Morza do Gór · <a href="https://odmorzadogor.pl${lang === 'en' ? '/en/' : ''}" style="color:#577267">odmorzadogor.pl</a> · tel. +48 510 248 693<br>
@@ -106,6 +109,7 @@ export function renderMail(c: MailContent, lang: 'pl' | 'en' = 'pl'): { html: st
     ...(c.note ? [`${c.note.label}:`, c.note.text, ''] : []),
     ...(c.button ? [`${c.button.label}: ${c.button.url}`, ''] : []),
     ...(c.outro ?? []).flatMap((t) => [t, '']),
+    ...(c.link ? [`${c.link.text} ${c.link.label}: ${c.link.url}`, ''] : []),
     '--', 'Od Morza do Gór · https://odmorzadogor.pl · tel. +48 510 248 693',
   ].join('\n');
   return { html, text };

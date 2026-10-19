@@ -144,6 +144,7 @@ export type RequestRow = {
   id: number; unit_id: number; check_in: string; check_out: string; guest_name: string; guest_phone: string; guest_email: string;
   adults: number; children: number; message: string; quoted_price: number | null; status: string; decision_note: string;
   reservation_id: number | null; created_at: string; lang?: string; extras?: string | null; group_unit_ids?: string | null;
+  cancel_token?: string | null; cancel_reason?: string; cancel_note?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -216,6 +217,12 @@ const TXT = {
     noIntro: (p: string) => `dziękujemy za zainteresowanie obiektem ${p}. Niestety nie możemy przyjąć rezerwacji w wybranym terminie.`,
     noOutro: ['Chętnie pomożemy znaleźć inny termin lub obiekt — wystarczy odpowiedzieć na tę wiadomość.', 'Pozdrawiamy,\nzespół Od Morza do Gór'],
     noSubject: (p: string) => `Odpowiedź na zapytanie — ${p}`, msgFromUs: 'Wiadomość od nas', otherDates: 'Sprawdź inne terminy', site: '',
+    cancelText: 'Plany się zmieniły?', cancelLabel: 'Poproś o anulację rezerwacji', cancelPath: '/anulacja/',
+    cxTitle: 'Rezerwacja anulowana', cxPre: (p: string, d: string) => `Anulowaliśmy rezerwację: ${p}, ${d}`, cxIntro: 'zgodnie z Twoją prośbą anulowaliśmy rezerwację. Szkoda, że tym razem się nie zobaczymy — zapraszamy w innym terminie!',
+    cxSubject: (p: string, d: string) => `Rezerwacja anulowana — ${p}, ${d}`,
+    cdTitle: 'Odpowiedź na prośbę o anulację', cdPre: (p: string) => `Odpowiedź na prośbę o anulację — ${p}`, cdIntro: 'otrzymaliśmy Twoją prośbę o anulację. Rezerwacja pozostaje aktywna — szczegóły poniżej.',
+    cdSubject: (p: string) => `Odpowiedź na prośbę o anulację — ${p}`,
+    cxOutro: ['W razie pytań odpowiedz na tę wiadomość albo zadzwoń: +48 510 248 693.', 'Pozdrawiamy,\nzespół Od Morza do Gór'],
   },
   en: {
     property: 'Property', arrival: 'Check-in', departure: 'Check-out', length: 'Length of stay', guests: 'Guests', price: 'Price for the stay', estimate: 'Estimated price',
@@ -233,6 +240,12 @@ const TXT = {
     noIntro: (p: string) => `thank you for your interest in ${p}. Unfortunately we are unable to accept a booking for the selected dates.`,
     noOutro: ['We will gladly help you find other dates or another property — just reply to this e-mail.', 'Kind regards,\nthe Od Morza do Gór team'],
     noSubject: (p: string) => `Reply to your enquiry — ${p}`, msgFromUs: 'Message from us', otherDates: 'Check other dates', site: '/en/',
+    cancelText: 'Plans changed?', cancelLabel: 'Request a cancellation', cancelPath: '/en/cancel/',
+    cxTitle: 'Booking cancelled', cxPre: (p: string, d: string) => `Your booking has been cancelled: ${p}, ${d}`, cxIntro: 'as requested, we have cancelled your booking. We are sorry we will not see you this time — you are welcome any other time!',
+    cxSubject: (p: string, d: string) => `Booking cancelled — ${p}, ${d}`,
+    cdTitle: 'Reply to your cancellation request', cdPre: (p: string) => `Reply to your cancellation request — ${p}`, cdIntro: 'we have received your cancellation request. Your booking remains active — see the details below.',
+    cdSubject: (p: string) => `Reply to your cancellation request — ${p}`,
+    cxOutro: ['If you have any questions, just reply to this e-mail or call +48 510 248 693.', 'Kind regards,\nthe Od Morza do Gór team'],
   },
 };
 const txt = (r: RequestRow) => TXT[r.lang === 'en' ? 'en' : 'pl'];
@@ -334,6 +347,7 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
         rows: [...stayRows(db, r, price, t), ...(u.address ? [[t.address, u.address] as MailRow] : [])],
         note: r.decision_note ? { label: t.fromUs, text: r.decision_note } : undefined,
         outro: t.okOutro,
+        link: r.cancel_token ? { text: t.cancelText, label: t.cancelLabel, url: `${siteUrl()}${t.cancelPath}?t=${r.cancel_token}` } : undefined,
       }, lang)
     : renderMail({
         preheader: t.noPre(u.property, range),
@@ -345,6 +359,54 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
         outro: t.noOutro,
       }, lang);
   await mailer.send({ to: [r.guest_email], subject: accepted ? t.okSubject(u.property, range) : t.noSubject(u.property), ...m, replyTo: adminEmails(db)[0] });
+  return true;
+}
+
+/** Prośba gościa o anulację: push dla obsługi i e-mail do właściciela. */
+export async function announceCancelRequest(db: DatabaseSync, push: Sender | undefined, mailer: Mailer | undefined, r: RequestRow) {
+  const u = unitInfo(db, r.unit_id);
+  const range = dateRange(r.check_in, r.check_out);
+  const jobs: Promise<unknown>[] = [];
+  if (push) {
+    const users = db.prepare(`SELECT DISTINCT u.id FROM users u JOIN push_subscriptions p ON p.user_id = u.id WHERE u.notify_requests = 1`).all() as { id: number }[];
+    const msg = { title: `Prośba o anulację · ${u.unit} · ${u.property}`, body: `${r.guest_name} · ${range}${r.cancel_reason ? ` · „${r.cancel_reason.slice(0, 80)}”` : ''}`, url: `/?tab=requests&request=${r.id}`, tag: `cancel-${r.id}` };
+    for (const user of users) {
+      const allowed = allowedUnitIds(db, { properties: propertyIdsOf(db, user.id) });
+      if (!allowed || allowed.has(r.unit_id)) jobs.push(sendToSubscriptions(db, push, user.id, msg));
+    }
+  }
+  const admins = adminEmails(db);
+  if (mailer && admins.length) {
+    const m = renderMail({
+      preheader: `${r.guest_name} prosi o anulację · ${u.property} · ${range}`,
+      title: 'Prośba o anulację rezerwacji',
+      intro: [`${r.guest_name} prosi o anulację rezerwacji ${u.unit} (${u.property}). Potwierdź anulację albo odrzuć prośbę w aplikacji — gość dostanie e-mail z odpowiedzią.`],
+      rows: [...stayRows(db, r, null, TXT.pl, 'Cena').filter(([k]) => k !== 'Cena'), ['Telefon', r.guest_phone || '—'] as MailRow, ['E-mail', r.guest_email] as MailRow],
+      note: r.cancel_reason ? { label: 'Powód podany przez gościa', text: r.cancel_reason } : undefined,
+      button: { label: 'Otwórz w kalendarzu', url: `${appUrl()}/?tab=requests&request=${r.id}` },
+    });
+    jobs.push(mailer.send({ to: admins, subject: `Prośba o anulację: ${u.property} · ${range} · ${r.guest_name}`, ...m, replyTo: r.guest_email }));
+  }
+  for (const res of await Promise.allSettled(jobs)) if (res.status === 'rejected') console.error('Powiadomienie o anulacji nie powiodło się:', res.reason);
+}
+
+/** Odpowiedź do gościa na prośbę o anulację. */
+export async function mailCancelDecision(db: DatabaseSync, mailer: Mailer | undefined, r: RequestRow, confirmed: boolean) {
+  if (!mailer) return false;
+  const u = unitInfo(db, r.unit_id);
+  const t = txt(r);
+  const lang = r.lang === 'en' ? 'en' : 'pl';
+  const range = dateRange(r.check_in, r.check_out);
+  const m = renderMail({
+    preheader: confirmed ? t.cxPre(u.property, range) : t.cdPre(u.property),
+    title: confirmed ? t.cxTitle : t.cdTitle,
+    intro: [t.hello(firstName(r.guest_name)), confirmed ? t.cxIntro : t.cdIntro],
+    rows: stayRows(db, r, null, t).filter(([k]) => k !== t.price),
+    note: r.cancel_note ? { label: t.msgFromUs, text: r.cancel_note } : undefined,
+    button: confirmed ? { label: t.otherDates, url: siteUrl() + t.site } : undefined,
+    outro: t.cxOutro,
+  }, lang);
+  await mailer.send({ to: [r.guest_email], subject: confirmed ? t.cxSubject(u.property, range) : t.cdSubject(u.property), ...m, replyTo: adminEmails(db)[0] });
   return true;
 }
 

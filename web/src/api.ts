@@ -97,6 +97,9 @@ export const api = {
   requests: (status: 'pending' | 'decided') => request<BookingRequest[]>('GET', `/requests?status=${status}`),
   acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean; unit_id?: number }) =>
     request<{ request: BookingRequest; reservation: Reservation; emailed: boolean }>('POST', `/requests/${id}/accept`, body),
+  cancellations: () => request<BookingRequest[]>('GET', '/cancellations'),
+  cancelConfirm: (id: number, body: { note?: string; email?: boolean }) => request<{ ok: boolean; emailed: boolean }>('POST', `/requests/${id}/cancel-confirm`, body),
+  cancelDecline: (id: number, body: { note?: string; email?: boolean }) => request<{ ok: boolean; emailed: boolean }>('POST', `/requests/${id}/cancel-decline`, body),
   rejectRequest: (id: number, body: { note?: string; email?: boolean }) => request<{ request: BookingRequest; emailed: boolean }>('POST', `/requests/${id}/reject`, body),
   emailSettings: () => request<EmailSettings>('GET', '/settings/email'),
   saveEmailSettings: (emails: string) => request<EmailSettings>('PUT', '/settings/email', { emails }),

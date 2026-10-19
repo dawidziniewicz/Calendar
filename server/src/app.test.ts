@@ -817,3 +817,43 @@ test('zapytanie z minioną datą przyjazdu trafia do archiwum', async () => {
   assert.ok(archived[0].expired_at);
   assert.equal((await call('POST', `/api/requests/${ok.id}/accept`, {})).status, 400);
 });
+
+test('prośba o anulację: link w e-mailu, prośba gościa, potwierdzenie lub odrzucenie przez admina', async () => {
+  const { call, login, sent, app } = setupWithMail();
+  await login();
+  await call('PUT', '/api/rates/unit/1', { base_price: 400, min_nights: 1 });
+  const book = async (from: number, ip: string) => {
+    const r = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(from), check_out: inDays(from + 2), name: 'Ewa Lis', email: 'ewa@example.com', adults: 2, consent: true }, { 'x-client-ip': ip })).json();
+    await call('POST', `/api/requests/${r.id}/accept`, {});
+    const mail = sent.at(-1)!;
+    const token = mail.text.match(/anulacja\/\?t=([a-f0-9]{48})/)?.[1];
+    assert.ok(token, 'link anulacji w e-mailu z potwierdzeniem');
+    return { id: r.id as number, token: token! };
+  };
+  const pub = (method: string, path: string, body?: unknown) =>
+    app.request(path, { method, headers: { 'x-api-key': KEY, 'content-type': 'application/json', 'x-client-ip': '8.8.8.8' }, body: body ? JSON.stringify(body) : undefined });
+
+  const a = await book(10, '8.1.1.1');
+  assert.equal((await pub('GET', '/public/cancel?t=' + 'f'.repeat(48))).status, 404);
+  const info = await (await pub('GET', `/public/cancel?t=${a.token}`)).json();
+  assert.equal(info.state, 'active');
+  assert.equal(info.guest, 'Ewa');
+  assert.equal(JSON.stringify(info).includes('ewa@example.com'), false);
+  assert.equal((await pub('POST', '/public/cancel', { t: a.token, reason: 'Choroba w rodzinie' })).status, 200);
+  await flush();
+  assert.match(sent.find((m) => m.to[0] === 'wlasciciel@x.pl' && /Prośba o anulację/.test(m.subject))!.text, /Choroba w rodzinie/);
+  assert.equal((await (await call('GET', '/api/cancellations')).json()).length, 1);
+  assert.equal((await (await call('POST', `/api/requests/${a.id}/cancel-confirm`, { note: 'Zwrot zaliczki w 7 dni' })).json()).ok, true);
+  assert.match(sent.at(-1)!.text, /Zwrot zaliczki w 7 dni/);
+  assert.equal((await (await pub('GET', `/public/cancel?t=${a.token}`)).json()).state, 'cancelled');
+  assert.equal((await (await call('GET', '/api/cancellations')).json()).length, 0);
+  // termin znowu wolny na stronie
+  assert.equal((await (await call('GET', `/public/calendar?unit=1&from=${inDays(10)}&to=${inDays(11)}`)).json()).days[0][3], 0);
+
+  // odrzucenie prośby — rezerwacja zostaje
+  const b = await book(20, '8.1.1.2');
+  await pub('POST', '/public/cancel', { t: b.token });
+  await call('POST', `/api/requests/${b.id}/cancel-decline`, { note: 'Zaliczka bezzwrotna' });
+  assert.equal((await (await pub('GET', `/public/cancel?t=${b.token}`)).json()).state, 'active');
+  assert.equal((await call('POST', `/api/requests/${b.id}/cancel-decline`, {})).status, 400);
+});
