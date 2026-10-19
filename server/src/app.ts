@@ -806,16 +806,22 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   const requestRow = (id: number) => get(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
     JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id WHERE r.id = ?`, id) as (RequestRow & Record<string, unknown>) | undefined;
 
+  // Nierozpatrzone zapytania z minioną datą przyjazdu → archiwum („wygasłe”)
+  const expireRequests = () => run(`UPDATE booking_requests SET expired_at = datetime('now')
+    WHERE status = 'pending' AND expired_at IS NULL AND check_in < ?`, warsawToday());
+
   api.get('/requests', (c) => {
+    expireRequests();
     const status = c.req.query('status');
-    const where = status === 'pending' ? "r.status = 'pending'" : status === 'decided' ? "r.status != 'pending'" : '1';
+    const where = status === 'pending' ? "r.status = 'pending' AND r.expired_at IS NULL"
+      : status === 'decided' ? "(r.status != 'pending' OR r.expired_at IS NOT NULL)" : '1';
     const rows = all(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
       JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
       WHERE ${where} ${unitScope(c.get('user')).replace('unit_id', 'r.unit_id')}
-      ORDER BY ${status === 'pending' ? 'r.created_at' : 'COALESCE(r.decided_at, r.created_at) DESC'} LIMIT 200`) as (RequestRow & Record<string, unknown>)[];
+      ORDER BY ${status === 'pending' ? 'r.created_at' : 'COALESCE(r.decided_at, r.expired_at, r.created_at) DESC'} LIMIT 200`) as (RequestRow & Record<string, unknown>)[];
     // Czy termin w międzyczasie się zajął (np. rezerwacja z Bookingu) + które domki z typu są wolne do przydziału
     return c.json(rows.map((r) => {
-      if (r.status !== 'pending') return { ...r, conflicts: [], group_units: [] };
+      if (r.status !== 'pending' || r.expired_at) return { ...r, conflicts: [], group_units: [] };
       const groupUnits = requestGroup(r).map((id) => {
         const u = get('SELECT id, name, type_name FROM units WHERE id = ?', id) as { id: number; name: string; type_name: string } | undefined;
         return u && { ...u, free: !conflicts({ unit_id: id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0).length };
@@ -835,6 +841,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const r = requestRow(id);
     if (!r || !canSee(user, r.unit_id)) throw new HTTPException(404, { message: 'Nie znaleziono zapytania' });
     if (r.status !== 'pending') bad('To zapytanie zostało już rozpatrzone');
+    if (r.check_in < warsawToday()) bad('Termin przyjazdu z tego zapytania już minął — zapytanie jest w archiwum');
     return r;
   };
 
