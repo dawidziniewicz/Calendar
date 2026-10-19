@@ -29,6 +29,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 12) migrateV12(db);
   if (user_version < 13) migrateV13(db);
   if (user_version < 14) migrateV14(db);
+  if (user_version < 15) migrateV15(db);
+}
+
+// Angielska nazwa typu domku (np. „Small cottage”) — dla angielskiej wersji strony i e-maili.
+function migrateV15(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE units ADD COLUMN type_name_en TEXT NOT NULL DEFAULT '';
+    PRAGMA user_version = 15;
+    COMMIT;
+  `);
 }
 
 // Prośba gościa o anulację (link z e-maila z potwierdzeniem): losowy kod w linku, data i powód prośby, decyzja admina.

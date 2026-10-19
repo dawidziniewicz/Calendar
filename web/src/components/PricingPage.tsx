@@ -197,6 +197,13 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
   unit: Unit; siblings: Unit[]; typesListId: string; rates: Rate[]; onSaved: () => void; onAddDays: () => void; onEditRange: (from: string, to: string) => void; onRatesChanged: () => void;
 }) {
   const [typeName, setTypeName] = useState(u.type_name);
+  const [typeNameEn, setTypeNameEn] = useState(u.type_name_en);
+  // wpisanie istniejącego typu podpowiada jego angielską nazwę z innego domku
+  const changeType = (v: string) => {
+    setTypeName(v);
+    const match = siblings.find((x) => x.type_name.trim().toLowerCase() === v.trim().toLowerCase() && x.type_name_en);
+    if (match && !typeNameEn) setTypeNameEn(match.type_name_en);
+  };
   const sameType = typeName.trim() ? siblings.filter((x) => x.type_name.trim().toLowerCase() === typeName.trim().toLowerCase()) : [];
   const [applyToType, setApplyToType] = useState(true);
   const initialWeek = useMemo(() => weekdayPrices(u).map((v) => (v == null ? '' : String(v))), [u]);
@@ -210,7 +217,7 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
   const ranges = groupRanges(rates);
 
   const dirty = base !== (u.base_price == null ? '' : String(u.base_price)) || week.some((v, i) => v !== initialWeek[i])
-    || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable || typeName !== u.type_name;
+    || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable || typeName !== u.type_name || typeNameEn !== u.type_name_en;
 
   const setDay = (dow: number, value: string) => setWeek(week.map((v, i) => (i === dow ? value : v)));
   const weekendShortcut = () => {
@@ -225,7 +232,7 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
     setBusy(true);
     setMsg(null);
     try {
-      const pricing = { base_price: basePrice, min_nights: minNights, bookable, weekday_prices: weekPrices, type_name: typeName.trim() };
+      const pricing = { base_price: basePrice, min_nights: minNights, bookable, weekday_prices: weekPrices, type_name: typeName.trim(), type_name_en: typeName.trim() ? typeNameEn.trim() : '' };
       await api.saveUnitPricing(u.id, pricing);
       // te same ceny dla pozostałych domków tego typu (każdy zachowuje swoją widoczność)
       if (applyToType) for (const x of sameType) await api.saveUnitPricing(x.id, { ...pricing, bookable: !!x.bookable });
@@ -259,8 +266,13 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
       </div>
 
       <label className="type-field">Typ na stronie <small className="muted">— takie same domki strona pokazuje jako jeden (np. „Mały domek · 3 domki”)</small>
-        <input list={typesListId} maxLength={60} placeholder="np. Mały domek (puste = osobno)" value={typeName} onChange={(e) => setTypeName(e.target.value)} />
+        <input list={typesListId} maxLength={60} placeholder="np. Mały domek (puste = osobno)" value={typeName} onChange={(e) => changeType(e.target.value)} />
       </label>
+      {typeName.trim() && (
+        <label className="type-field">Typ po angielsku <small className="muted">— na angielskiej wersji strony i w e-mailach do gości z zagranicy</small>
+          <input maxLength={60} placeholder="np. Small cottage (puste = jak po polsku)" value={typeNameEn} onChange={(e) => setTypeNameEn(e.target.value)} />
+        </label>
+      )}
       {sameType.length > 0 && <p className="muted small-note type-note">Ten sam typ: {sameType.map((x) => x.name).join(', ')}</p>}
       <div className="row">
         <label>Cena podstawowa za noc (zł)<input inputMode="decimal" placeholder="np. 300" value={base} onChange={(e) => setBase(e.target.value)} /></label>

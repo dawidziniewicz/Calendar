@@ -857,3 +857,17 @@ test('prośba o anulację: link w e-mailu, prośba gościa, potwierdzenie lub od
   assert.equal((await (await pub('GET', `/public/cancel?t=${b.token}`)).json()).state, 'active');
   assert.equal((await call('POST', `/api/requests/${b.id}/cancel-decline`, {})).status, 400);
 });
+
+test('angielska nazwa typu domku: katalog i e-mail do gościa ze strony EN', async () => {
+  const { call, login, sent } = setupWithMail();
+  await login();
+  for (const id of [1, 2]) await call('PUT', `/api/rates/unit/${id}`, { base_price: 400, min_nights: 1, type_name: 'Mały domek', type_name_en: 'Small cottage' });
+  const t = (await (await call('GET', '/public/catalog')).json())[0].types.find((x: { count: number }) => x.count === 2);
+  assert.equal(t.name, 'Mały domek');
+  assert.equal(t.name_en, 'Small cottage');
+  await call('POST', '/public/requests', { unit_ids: [1, 2], check_in: inDays(10), check_out: inDays(12), name: 'John Smith', email: 'john@example.com', adults: 2, consent: true, lang: 'en' }, { 'x-client-ip': '9.1.1.1' });
+  await flush();
+  const guest = sent.find((m) => m.to[0] === 'john@example.com')!;
+  assert.match(guest.text, /Small cottage/);
+  assert.doesNotMatch(guest.text, /Mały domek/);
+});

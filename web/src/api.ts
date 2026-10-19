@@ -87,7 +87,7 @@ export const api = {
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
   rates: (from: string, to: string) => request<Rate[]>('GET', `/rates?from=${from}&to=${to}`),
   saveRates: (patch: RatePatch) => request<{ changed: number }>('PUT', '/rates', patch),
-  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean; weekday_prices?: (number | null)[]; type_name?: string }) => request('PUT', `/rates/unit/${id}`, p),
+  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean; weekday_prices?: (number | null)[]; type_name?: string; type_name_en?: string }) => request('PUT', `/rates/unit/${id}`, p),
   saveClosure: (propertyId: number, c: { closed: boolean; from: string | null; to: string | null; note: string; note_en: string }) => request('PUT', `/rates/property/${propertyId}/closure`, c),
   extras: () => request<Extra[]>('GET', '/extras'),
   saveExtra: (e: ExtraInput, id?: number) => (id ? request<Extra>('PUT', `/extras/${id}`, e) : request<Extra>('POST', '/extras', e)),

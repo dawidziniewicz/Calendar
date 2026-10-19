@@ -4,6 +4,7 @@ export type Unit = {
   base_price: number | null; min_nights: number; bookable: number; // cennik i rezerwacje ze strony www
   weekday_prices: string | null; // JSON: 7 cen od niedzieli, null = cena podstawowa
   type_name: string; // typ na stronie (np. „Mały domek”) — takie same domki rezerwowane razem
+  type_name_en: string; // ten sam typ po angielsku (np. „Small cottage”)
 };
 export type Property = {
   id: number; name: string; location: string; address: string; sort: number; units: Unit[];
