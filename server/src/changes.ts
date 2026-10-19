@@ -12,7 +12,7 @@ export type ChangeEvent =
   | { kind: 'updated'; before: Row; after: Row; by: string }
   | { kind: 'sync'; change: SyncChange; row: Row };
 
-const SOURCE_LABELS: Record<string, string> = { direct: 'Prywatne', booking: 'Booking.com', airbnb: 'Airbnb', other: 'Inne' };
+const SOURCE_LABELS: Record<string, string> = { direct: 'Prywatne', website: 'Strona www', booking: 'Booking.com', airbnb: 'Airbnb', other: 'Inne' };
 const STATUS_LABELS: Record<string, string> = { confirmed: 'potwierdzona', tentative: 'wstępna', cancelled: 'anulowana' };
 const MAX_SEPARATE = 5; // więcej zmian naraz → jedno zbiorcze powiadomienie
 

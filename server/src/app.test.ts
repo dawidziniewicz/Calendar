@@ -290,7 +290,7 @@ test('powiadomienia o przyjazdach: osobne na każdy przyjazd, o godzinie każdeg
   saveSubscription(db, 2, { endpoint: 'https://push.example/jozek', keys });
 
   // ustawienia godziny
-  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00', changes: true });
+  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00', changes: true, requests: true });
   assert.equal((await call('PUT', '/api/push/settings', { time: '25:00' })).status, 400);
   assert.equal((await call('PUT', '/api/push/settings', { time: '10:15' })).status, 200);
 
@@ -524,4 +524,135 @@ test('zarządzanie użytkownikami: admin dodaje, zmienia uprawnienia i hasło, u
 
   assert.equal((await dawid('DELETE', `/api/users/${jantarUser.id}`)).status, 200);
   assert.equal((await dawid('GET', '/api/users').then((r) => r.json())).length, 3);
+});
+
+// ---- Strona www: cennik, dostępność, zapytania o rezerwację ----
+
+function setupWithMail() {
+  const db = openDb(':memory:');
+  const sent: { to: string[]; subject: string; text: string }[] = [];
+  const mailer = { from: 'test@x.pl', kind: 'resend' as const, send: async (m: { to: string[]; subject: string; text: string }) => { sent.push(m); } };
+  const app = createApp(db, KEY, undefined, mailer);
+  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('dawid', hashPassword('tajne-haslo-123'));
+  db.prepare("INSERT INTO settings (key, value) VALUES ('notify_emails', 'wlasciciel@x.pl')").run();
+  let cookie = '';
+  const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
+    const res = await app.request(path, {
+      method,
+      headers: { 'x-api-key': KEY, 'content-type': 'application/json', cookie, ...headers },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const set = res.headers.get('set-cookie');
+    if (set) cookie = set.split(';')[0];
+    return res;
+  };
+  const login = () => call('POST', '/api/auth/login', { username: 'dawid', password: 'tajne-haslo-123' });
+  return { db, app, call, login, sent };
+}
+
+const inDays = (n: number) => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const flush = () => new Promise((r) => setTimeout(r, 20));
+
+test('cennik: cena podstawowa, nadpisania dni i dni tygodnia', async () => {
+  const { call, login, app } = setupWithMail();
+  assert.equal((await app.request('/public/catalog')).status, 403); // bez klucza API
+  await login();
+  assert.equal((await call('PUT', '/api/rates/unit/1', { base_price: 400, min_nights: 2 })).status, 200);
+  const from = inDays(10), to = inDays(16);
+  assert.equal((await call('PUT', '/api/rates', { unit_ids: [1], from, to: from, price: 650 })).status, 200);
+  const cal = await (await call('GET', `/public/calendar?unit=1&from=${from}&to=${to}`)).json();
+  assert.equal(cal.days.length, 6);
+  assert.deepEqual(cal.days[0], [from, 650, 2, 0]);
+  assert.equal(cal.days[1][1], 400);
+  // powrót do ceny podstawowej
+  await call('PUT', '/api/rates', { unit_ids: [1], from, to: from, price: null });
+  assert.equal((await (await call('GET', `/public/calendar?unit=1&from=${from}&to=${to}`)).json()).days[0][1], 400);
+  const catalog = await (await call('GET', '/public/catalog')).json();
+  assert.equal(catalog[0].units[0].price_from, 400);
+  assert.equal(catalog[0].units[1].price_from, null);
+  // ukryty domek znika ze strony
+  await call('PUT', '/api/rates/unit/2', { base_price: null, min_nights: 1, bookable: false });
+  assert.equal((await (await call('GET', '/public/catalog')).json())[0].units.some((u: { id: number }) => u.id === 2), false);
+});
+
+test('zapytanie ze strony → akceptacja tworzy rezerwację i wysyła e-maile', async () => {
+  const { call, login, sent, db } = setupWithMail();
+  await login();
+  await call('PUT', '/api/rates/unit/1', { base_price: 500, min_nights: 1 });
+  const body = { unit_id: 1, check_in: inDays(20), check_out: inDays(23), name: 'Jan Kowalski', phone: '+48 600 100 200', email: 'Jan@Example.com', adults: 2, children: 1, message: 'Przyjedziemy z psem', consent: true };
+  const res = await call('POST', '/public/requests', body, { 'x-client-ip': '1.1.1.1' });
+  assert.equal(res.status, 201);
+  const { id, quoted_price } = await res.json();
+  assert.equal(quoted_price, 1500);
+  await flush();
+  assert.deepEqual(sent.map((m) => m.to[0]).sort(), ['jan@example.com', 'wlasciciel@x.pl']);
+  assert.match(sent.find((m) => m.to[0] === 'wlasciciel@x.pl')!.text, /Jan Kowalski/);
+
+  const pending = await (await call('GET', '/api/requests?status=pending')).json();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].unit_name, 'Mały domek 1');
+
+  const acc = await call('POST', `/api/requests/${id}/accept`, { note: 'Zaliczka 30% na konto' });
+  assert.equal(acc.status, 200);
+  const out = await acc.json();
+  assert.equal(out.reservation.source, 'website');
+  assert.equal(out.reservation.price, 1500);
+  assert.equal(out.emailed, true);
+  assert.match(sent.at(-1)!.text, /Zaliczka 30%/);
+  assert.equal((await call('POST', `/api/requests/${id}/accept`)).status, 400); // już rozpatrzone
+
+  // termin jest teraz zajęty — kolejne zapytanie odrzucone od razu
+  const again = await call('POST', '/public/requests', body, { 'x-client-ip': '1.1.1.2' });
+  assert.equal(again.status, 409);
+  const cal = await (await call('GET', `/public/calendar?unit=1&from=${inDays(20)}&to=${inDays(24)}`)).json();
+  assert.deepEqual(cal.days.map((d: unknown[]) => d[3]), [1, 1, 1, 0]);
+  // dane gości nie wyciekają na stronę
+  assert.equal(JSON.stringify(cal).includes('Kowalski'), false);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM reservations WHERE source = 'website'").get() as { n: number }).n, 1);
+});
+
+test('odrzucenie zapytania, walidacja i ochrona przed spamem', async () => {
+  const { call, login, sent } = setupWithMail();
+  await login();
+  const base = { unit_id: 1, check_in: inDays(5), check_out: inDays(7), name: 'Anna Nowak', email: 'anna@example.com', adults: 2, consent: true };
+  assert.equal((await call('POST', '/public/requests', { ...base, email: 'zly-adres' })).status, 400);
+  assert.equal((await call('POST', '/public/requests', { ...base, consent: false })).status, 400);
+  assert.equal((await call('POST', '/public/requests', { ...base, adults: 20 })).status, 400);
+  assert.equal((await call('POST', '/public/requests', { ...base, check_in: inDays(-3) })).status, 400);
+  // pole-pułapka: udany wynik, ale nic nie zapisane
+  const bot = await call('POST', '/public/requests', { ...base, website: 'http://spam' });
+  assert.equal((await bot.json()).id, 0);
+  // minimalny pobyt
+  await call('PUT', '/api/rates', { unit_ids: [1], from: inDays(5), to: inDays(5), min_nights: 3 });
+  assert.equal((await call('POST', '/public/requests', base, { 'x-client-ip': '2.2.2.2' })).status, 409);
+  await call('PUT', '/api/rates', { unit_ids: [1], from: inDays(5), to: inDays(5), min_nights: null });
+
+  const ok = await call('POST', '/public/requests', base, { 'x-client-ip': '2.2.2.2' });
+  assert.equal(ok.status, 201);
+  const { id } = await ok.json();
+  await flush();
+  const rej = await (await call('POST', `/api/requests/${id}/reject`, { note: 'Termin zarezerwowany telefonicznie' })).json();
+  assert.equal(rej.request.status, 'rejected');
+  assert.match(sent.at(-1)!.text, /zarezerwowany telefonicznie/);
+  assert.equal((await (await call('GET', '/api/requests?status=pending')).json()).length, 0);
+
+  // limit na adres IP
+  for (let i = 0; i < 3; i++) await call('POST', '/public/requests', { ...base, unit_id: 2 }, { 'x-client-ip': '2.2.2.2' });
+  assert.equal((await call('POST', '/public/requests', { ...base, unit_id: 3 }, { 'x-client-ip': '2.2.2.2' })).status, 429);
+});
+
+test('ustawienia e-mail i konto podglądu', async () => {
+  const { call, login, db } = setupWithMail();
+  await login();
+  assert.equal((await call('PUT', '/api/settings/email', { emails: 'nie-email' })).status, 400);
+  const saved = await (await call('PUT', '/api/settings/email', { emails: 'a@x.pl; b@y.pl' })).json();
+  assert.equal(saved.emails, 'a@x.pl, b@y.pl');
+  assert.equal((await call('POST', '/api/settings/email/test')).status, 200);
+  db.prepare("UPDATE users SET role = 'viewer'").run();
+  assert.equal((await call('PUT', '/api/rates', { unit_ids: [1], from: inDays(1), to: inDays(2), price: 1 })).status, 403);
+  assert.equal((await call('GET', '/api/requests')).status, 200);
 });

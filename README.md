@@ -5,7 +5,9 @@ Osada Jantar (5 domków), Apartament Sopot, Apartamenty Karpatka (2), Agroturyst
 
 - **Kalendarz** – oś czasu wszystkich domków; stuknięcie w wolny dzień tworzy rezerwację, w pasek otwiera ją.
 - **Aktualności** – kto dziś jest w obiektach, kto przyjeżdża i wyjeżdża (po 14 dni, przycisk „Załaduj więcej”), wyszukiwarka, dzwonienie jednym dotknięciem.
-- **Obiekty** – edycja domków, podłączenie kalendarzy Booking.com / Airbnb i adresy eksportu.
+- **Zapytania** – rezerwacje wysłane przyciskiem „Zarezerwuj” na odmorzadogor.pl: **Akceptuj** (rezerwacja trafia do kalendarza, gość dostaje e-mail z potwierdzeniem) albo **Odrzuć** (gość dostaje e-mail z odmową).
+- **Ceny** – przycisk *Ceny* w kalendarzu: cena każdej nocy widoczna na osi czasu, zaznaczasz zakres dni i ustawiasz cenę, minimalny pobyt lub blokadę rezerwacji online — goście od razu widzą to na stronie.
+- **Obiekty** – edycja domków, cena podstawowa i widoczność na stronie, podłączenie kalendarzy Booking.com / Airbnb i adresy eksportu.
 - Ostrzeżenie o nakładających się terminach, podpowiedzi stałych gości, cena i wpłaty, notatki.
 - Instalowana na iPhonie jak zwykła aplikacja (PWA), działa też w przeglądarce na komputerze.
 
@@ -214,6 +216,40 @@ Codziennie o wybranej godzinie (domyślnie **9:00**, czas polski) serwer wysyła
 
 Każda osoba włącza je na swoim telefonie i sama ustawia godzinę w tym samym panelu (**Godzina powiadomienia** → *Zapisz godzinę*).
 Klucze do powiadomień serwer generuje sam przy pierwszym uruchomieniu (zapisane w bazie).
+
+---
+
+## Strona www: ceny i rezerwacje online
+
+Strona [odmorzadogor.pl](https://github.com/dawidziniewicz/osadajantar) pobiera z kalendarza ceny i wolne terminy, a zapytania o rezerwację wysyła tutaj.
+
+```
+ odmorzadogor.pl (przeglądarka gościa)
+        │  https://kalendarz.odmorzadogor.pl/public/…   (funkcja web/functions/public — bez logowania, tylko ceny i zajęte dni)
+        ▼
+ Cloudflare Pages (proxy z API_KEY + token Access) ──▶ tunel ──▶ serwer w domu
+```
+
+- Publiczne API zwraca **wyłącznie** ceny, minimalny pobyt i zajęte dni — żadnych danych gości. Zapytania chroni pole-pułapka na boty i limit (5 na godzinę z jednego adresu IP, 60 łącznie).
+- Dozwolone domeny strony (CORS): `odmorzadogor.pl`, `www.odmorzadogor.pl`, `new.odmorzadogor.pl`, podglądy `*.osadajantar.pages.dev`. Inne dodasz zmienną `PUBLIC_ORIGINS` w Cloudflare Pages (lista po przecinku).
+- **Ceny:** *Obiekty* → domek → *Cena i rezerwacje na stronie www* (cena podstawowa za noc, minimalny pobyt, widoczność na stronie). Ceny na konkretne dni: *Kalendarz* → **Ceny** → stuknij pierwszy i ostatni dzień → cena / min. nocy / zamknięcie rezerwacji online, opcjonalnie tylko wybrane dni tygodnia (np. weekendy) i kilka domków naraz.
+- **Zapytanie** od gościa: powiadomienie push („Zapytania ze strony www” w *Powiadomieniach*), e-mail na adresy z *Ustawienia → Powiadomienia e-mail*, a gość dostaje e-mail „Otrzymaliśmy Twoje zapytanie”. Zapytania ze strony angielskiej dostają e-maile po angielsku.
+- **Akceptacja** tworzy rezerwację „Strona www” (można poprawić cenę i dopisać informację dla gościa, np. o zaliczce). Gdy termin w międzyczasie się zajął, aplikacja ostrzeże.
+
+### E-maile (do ustawienia w `.env` na serwerze w domu)
+
+Bez tej konfiguracji wszystko działa, tylko bez e-maili (zostają powiadomienia push).
+
+| Zmienna | Przykład | Opis |
+|---|---|---|
+| `ADMIN_EMAIL` | `kontakt@odmorzadogor.pl` | dokąd wysyłać powiadomienia o zapytaniach (potem można zmienić w aplikacji) |
+| `MAIL_FROM` | `Od Morza do Gór <rezerwacje@odmorzadogor.pl>` | nadawca e-maili do gości |
+| `RESEND_API_KEY` | `re_…` | **wariant A (zalecany):** [resend.com](https://resend.com) → *Domains* → dodaj `odmorzadogor.pl` (rekordy DNS dodajesz w Cloudflare) → *API Keys* |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | `poczta.example.pl`, `465`, `kontakt@odmorzadogor.pl`, hasło | **wariant B:** istniejąca skrzynka pocztowa (używane, gdy `RESEND_API_KEY` jest pusty) |
+| `APP_URL` | `https://kalendarz.odmorzadogor.pl` | link „Otwórz w kalendarzu” w e-mailu |
+| `SITE_URL` | `https://new.odmorzadogor.pl` → potem `https://odmorzadogor.pl` | link do strony w e-mailach do gości |
+
+Po zmianie `.env`: `docker compose up -d` (restart kontenera). Test: *Ustawienia → Powiadomienia e-mail → Wyślij test*. W logach serwera przy starcie: `E-maile: resend, nadawca …`.
 
 ---
 

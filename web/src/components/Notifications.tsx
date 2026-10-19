@@ -22,9 +22,10 @@ export default function Notifications() {
   const [time, setTime] = useState('09:00');
   const [savedTime, setSavedTime] = useState('09:00');
   const [changes, setChanges] = useState(true);
+  const [requests, setRequests] = useState(true);
 
   useEffect(() => {
-    api.pushSettings().then((s) => { setTime(s.time); setSavedTime(s.time); setChanges(s.changes); }).catch(() => {});
+    api.pushSettings().then((s) => { setTime(s.time); setSavedTime(s.time); setChanges(s.changes); setRequests(s.requests); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -87,6 +88,12 @@ export default function Notifications() {
     setChanges(res.changes);
   });
 
+  const toggleRequests = (value: boolean) => run(async () => {
+    setRequests(value);
+    const res = await api.savePushSettings({ requests: value });
+    setRequests(res.requests);
+  });
+
   const test = () => run(async () => {
     const { sent } = await api.pushTest();
     setMsg(sent ? { ok: true, text: 'Wysłano powiadomienie testowe.' } : { ok: false, text: 'Brak aktywnych urządzeń — wyłącz i włącz powiadomienia ponownie.' });
@@ -116,6 +123,15 @@ export default function Notifications() {
           <span>
             <b>Zmiany w rezerwacjach</b>
             <small>Nowe, zmienione, usunięte i odwołane — z Bookingu oraz gdy zmieni je inna osoba</small>
+          </span>
+        </label>
+      )}
+      {state !== 'unsupported' && (
+        <label className="switch-row">
+          <input type="checkbox" checked={requests} disabled={busy} onChange={(e) => toggleRequests(e.target.checked)} />
+          <span>
+            <b>Zapytania ze strony www</b>
+            <small>Gdy ktoś kliknie „Zarezerwuj” na odmorzadogor.pl — od razu z danymi i wyceną</small>
           </span>
         </label>
       )}

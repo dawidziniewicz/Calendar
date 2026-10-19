@@ -8,6 +8,6 @@ export default defineConfig(({ mode }) => {
   const proxy = { target, changeOrigin: true, headers: { 'x-api-key': env.DEV_API_KEY ?? '' } };
   return {
     plugins: [react()],
-    server: { proxy: { '/api': proxy, '/ical': proxy } },
+    server: { proxy: { '/api': proxy, '/ical': proxy, '/public': proxy } },
   };
 });

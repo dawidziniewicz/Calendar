@@ -24,7 +24,63 @@ function migrate(db: DatabaseSync) {
   if (user_version < 7) migrateV7(db);
   if (user_version < 8) migrateV8(db);
   if (user_version < 9) migrateV9(db);
+  if (user_version < 10) migrateV10(db);
 }
+
+// Ceny za noc (domyślna dla domku + nadpisania na konkretne dni), zapytania o rezerwację ze strony www,
+// osobny przełącznik powiadomień o zapytaniach. Kolory domków z pierwszej wersji → nowa paleta.
+function migrateV10(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE units ADD COLUMN base_price REAL;
+    ALTER TABLE units ADD COLUMN min_nights INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE units ADD COLUMN bookable INTEGER NOT NULL DEFAULT 1;
+    CREATE TABLE rates (
+      unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+      date TEXT NOT NULL,
+      price REAL,
+      min_nights INTEGER,
+      closed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (unit_id, date)
+    ) WITHOUT ROWID;
+    CREATE TABLE booking_requests (
+      id INTEGER PRIMARY KEY,
+      unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+      check_in TEXT NOT NULL,
+      check_out TEXT NOT NULL,
+      guest_name TEXT NOT NULL,
+      guest_phone TEXT NOT NULL DEFAULT '',
+      guest_email TEXT NOT NULL,
+      adults INTEGER NOT NULL DEFAULT 0,
+      children INTEGER NOT NULL DEFAULT 0,
+      message TEXT NOT NULL DEFAULT '',
+      quoted_price REAL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+      decided_by TEXT,
+      decided_at TEXT,
+      decision_note TEXT NOT NULL DEFAULT '',
+      reservation_id INTEGER REFERENCES reservations(id) ON DELETE SET NULL,
+      ip TEXT NOT NULL DEFAULT '',
+      lang TEXT NOT NULL DEFAULT 'pl',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      CHECK (check_out > check_in)
+    );
+    CREATE INDEX booking_requests_status ON booking_requests(status, created_at);
+    ALTER TABLE users ADD COLUMN notify_requests INTEGER NOT NULL DEFAULT 1;
+    PRAGMA user_version = 10;
+    COMMIT;
+  `);
+  const recolor = db.prepare('UPDATE units SET color = ? WHERE lower(color) = ?');
+  for (const [from, to] of Object.entries(OLD_TO_NEW_COLORS)) recolor.run(to, from);
+}
+
+// Paleta strony: #577267 · #8CA196 · #C1B1A0 (i ich odcienie) — każdy obiekt ma swoją rodzinę kolorów.
+const OLD_TO_NEW_COLORS: Record<string, string> = {
+  '#2f7d6d': '#577267', '#3a8f7e': '#67826f', '#46a08e': '#7a9484', '#1f6f8b': '#4a6560', '#2b82a0': '#5e7a74',
+  '#8a5a9e': '#8a7a96',
+  '#b5652b': '#9a7b5f', '#c77b3f': '#ad9178',
+  '#5f7f2a': '#6f8a5a', '#76953a': '#86a070',
+};
 
 // Ograniczenie konta do wybranych obiektów: JSON z listą id obiektów, NULL = wszystkie.
 function migrateV9(db: DatabaseSync) {
@@ -191,6 +247,7 @@ function seed(db: DatabaseSync) {
       units: [
         ['Mały domek 1', 8, '#2f7d6d'], ['Mały domek 2', 8, '#3a8f7e'], ['Mały domek 3', 8, '#46a08e'],
         ['Duży domek 1', 11, '#1f6f8b'], ['Duży domek 2', 11, '#2b82a0'],
+        // (kolory z pierwszej wersji — migracja V10 zamienia je na nową paletę)
       ],
     },
     { name: 'Apartament Sopot', location: 'Sopot – morze', address: 'ul. Łokietka 19a/43, Sopot', units: [['Sopot Holiday Sauna', 8, '#8a5a9e']] },

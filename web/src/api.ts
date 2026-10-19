@@ -1,4 +1,4 @@
-import type { Draft, Property, Reservation } from './types';
+import type { BookingRequest, Draft, Property, Rate, Reservation } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -34,7 +34,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
-export type PushSettings = { time: string; changes: boolean };
+export type PushSettings = { time: string; changes: boolean; requests: boolean };
+export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | null; from: string | null; emails: string };
+/** price/min_nights: liczba = ustaw, null = przywróć ustawienie domku, brak = bez zmian */
+export type RatePatch = { unit_ids: number[]; from: string; to: string; weekdays?: number[]; price?: number | null; min_nights?: number | null; closed?: boolean };
 /** properties: nazwy obiektów, do których konto ma dostęp (null = wszystkie). */
 export type Session = { username: string; role: 'admin' | 'viewer'; properties: string[] | null; canManageUsers: boolean };
 /** properties: id obiektów (null = wszystkie). */
@@ -80,5 +83,15 @@ export const api = {
   bookingCancellations: () => request<Reservation[]>('GET', '/booking-cancellations'),
   convertToDirect: (id: number, force = false) => request<Reservation>('POST', `/reservations/${id}/convert-direct`, { force }),
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
+  rates: (from: string, to: string) => request<Rate[]>('GET', `/rates?from=${from}&to=${to}`),
+  saveRates: (patch: RatePatch) => request<{ changed: number }>('PUT', '/rates', patch),
+  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean }) => request('PUT', `/rates/unit/${id}`, p),
+  requests: (status: 'pending' | 'decided') => request<BookingRequest[]>('GET', `/requests?status=${status}`),
+  acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean }) =>
+    request<{ request: BookingRequest; reservation: Reservation; emailed: boolean }>('POST', `/requests/${id}/accept`, body),
+  rejectRequest: (id: number, body: { note?: string; email?: boolean }) => request<{ request: BookingRequest; emailed: boolean }>('POST', `/requests/${id}/reject`, body),
+  emailSettings: () => request<EmailSettings>('GET', '/settings/email'),
+  saveEmailSettings: (emails: string) => request<EmailSettings>('PUT', '/settings/email', { emails }),
+  testEmail: () => request<{ sent: number }>('POST', '/settings/email/test'),
   guests: (q: string) => request<Guest[]>('GET', `/guests?q=${encodeURIComponent(q)}`),
 };

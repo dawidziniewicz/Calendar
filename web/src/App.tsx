@@ -10,13 +10,15 @@ import Login from './components/Login';
 import ReservationView from './components/ReservationView';
 import UsersPage from './components/UsersPage';
 import ConflictMark from './components/ConflictMark';
+import Requests from './components/Requests';
 import { conflictIds } from './conflicts';
 
-type Tab = 'calendar' | 'agenda' | 'settings';
+type Tab = 'calendar' | 'agenda' | 'requests' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'calendar', label: 'Kalendarz', icon: 'M4 6h16M4 6v13a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V6M4 6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1M8 3v4m8-4v4M4 10h16' },
   { id: 'agenda', label: 'Aktualności', icon: 'M5 12h14m-6-6 6 6-6 6' },
+  { id: 'requests', label: 'Zapytania', icon: 'M4 13h4l2 3h4l2-3h4M5.5 5h13L21 13v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5z' },
   { id: 'settings', label: 'Ustawienia i obiekty', icon: 'M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6' },
 ];
 // Konto „tylko podgląd” zamiast Obiektów widzi tylko ustawienia konta.
@@ -71,8 +73,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>(() => {
     // Kliknięcie w powiadomienie otwiera /?tab=agenda
     const fromUrl = new URLSearchParams(location.search).get('tab') as Tab | null;
-    if (fromUrl && ['calendar', 'agenda', 'settings'].includes(fromUrl)) {
-      history.replaceState(null, '', '/');
+    if (fromUrl && ['calendar', 'agenda', 'requests', 'settings'].includes(fromUrl)) {
       return fromUrl;
     }
     return (sessionStorageGet('tab') as Tab) || 'calendar';
@@ -84,6 +85,16 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const [cancellations, setCancellations] = useState<Reservation[]>([]);
   const [conflictCount, setConflictCount] = useState(0);
   const [version, setVersion] = useState(0); // podbijane po zapisie — widoki przeładowują rezerwacje
+  const [pendingRequests, setPendingRequests] = useState(0);
+  // Powiadomienie o zapytaniu otwiera /?tab=requests&request=12
+  const [focusRequest] = useState(() => Number(new URLSearchParams(location.search).get('request')) || null);
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has('tab')) history.replaceState(null, '', '/');
+  }, []);
+
+  useEffect(() => {
+    api.requests('pending').then((r) => setPendingRequests(r.length)).catch(() => {});
+  }, [version]);
 
   const loadProperties = useCallback(() => {
     api.properties().then((p) => { setProperties(p); setError(''); }).catch((e) => setError(e.message));
@@ -133,14 +144,15 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <img src="/icons/icon-192.png" alt="" width={28} height={28} />
-          <span>Od Morza Do Gór</span>
+          <Logo />
+          <span>Od Morza <i>do</i> Gór</span>
         </div>
         <nav className="tabs-desktop">
           {tabs.map((t) => (
             <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
               {t.label}
               {t.id === 'agenda' && <TabBadges cancellations={cancellations.length} conflicts={conflictCount} />}
+              {t.id === 'requests' && pendingRequests > 0 && <span className="tab-badges"><span className="tab-badge new">{pendingRequests}</span></span>}
             </button>
           ))}
         </nav>
@@ -161,6 +173,9 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
 
       <main className={`content content-${page === 'users' ? 'settings' : tab}`}>
         {page === 'main' && tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={readOnly ? undefined : openNew} />}
+        {page === 'main' && tab === 'requests' && (
+          <Requests version={version} readOnly={readOnly} focusId={focusRequest} onChanged={() => setVersion((v) => v + 1)} onOpenReservation={setViewing} />
+        )}
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
         {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
@@ -171,6 +186,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
           <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => selectTab(t.id)}>
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={t.icon} /></svg>
             {t.id === 'agenda' && <TabBadges cancellations={cancellations.length} conflicts={conflictCount} />}
+            {t.id === 'requests' && pendingRequests > 0 && <span className="tab-badges"><span className="tab-badge new">{pendingRequests}</span></span>}
             <span>{t.label}</span>
           </button>
         ))}
@@ -218,4 +234,15 @@ function TabBadges({ cancellations, conflicts }: { cancellations: number; confli
 
 function sessionStorageGet(key: string) {
   try { return sessionStorage.getItem(key); } catch { return null; }
+}
+
+// Znak: fala morza pod linią gór — ta sama co na odmorzadogor.pl
+export function Logo({ size = 30 }: { size?: number }) {
+  return (
+    <svg className="logo-mark" width={size} height={size} viewBox="0 0 64 64" aria-hidden>
+      <rect width="64" height="64" rx="16" fill="#577267" />
+      <path d="M12 38 25 19l7 9 5-6 15 16" fill="none" stroke="#F5F1EA" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 46c3.3 0 3.3-3 6.6-3s3.3 3 6.6 3 3.3-3 6.6-3 3.3 3 6.6 3 3.3-3 6.6-3 3.3 3 6.6 3" fill="none" stroke="#C1B1A0" strokeWidth="3.6" strokeLinecap="round" />
+    </svg>
+  );
 }

@@ -12,6 +12,10 @@ import { buildIcal } from './ical.ts';
 import { TIME_RE, arrivalMessages, saveSubscription, sendToSubscriptions, vapidKeys, warsawDate, warsawTime, type Sender } from './push.ts';
 import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
+import { isEmail, parseEmails, type Mailer } from './mail.ts';
+import {
+  NOTIFY_EMAILS_KEY, addDays, adminEmails, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
+} from './booking.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = ['confirmed', 'tentative', 'cancelled'];
@@ -28,7 +32,13 @@ function safeEqual(a: string, b: string) {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender) {
+// Proste ograniczenie liczby zapytań ze strony (w pamięci): na adres IP i łącznie na godzinę.
+const PUBLIC_LIMIT_PER_IP = 5;
+const PUBLIC_LIMIT_TOTAL = 60;
+const HOUR = 3600_000;
+const warsawToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+
+export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender, mailer?: Mailer) {
   const app = new Hono();
   const all = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).all(...p);
   const get = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).get(...p);
@@ -57,6 +67,105 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
       'Cache-Control': 'no-store',
     });
   });
+
+  // ---- Strona www (odmorzadogor.pl): cennik, dostępność i zapytania o rezerwację ----
+  // Bez logowania, ale tylko przez proxy z kluczem API (Cloudflare Pages → tunel). Nie zwraca danych gości.
+  const pub = new Hono();
+  const hits = new Map<string, number[]>();
+  const allowHit = (key: string, limit: number) => {
+    const now = Date.now();
+    const list = (hits.get(key) ?? []).filter((t) => now - t < HOUR);
+    if (list.length >= limit) { hits.set(key, list); return false; }
+    list.push(now);
+    hits.set(key, list);
+    return true;
+  };
+  pub.use('*', async (c, next) => {
+    if (!safeEqual(c.req.header('x-api-key') ?? '', apiKey)) return c.json({ error: 'Brak autoryzacji serwera' }, 403);
+    await next();
+  });
+
+  pub.get('/catalog', (c) => {
+    const properties = all('SELECT id, name, location FROM properties ORDER BY sort, id') as { id: number; name: string; location: string }[];
+    const units = all('SELECT id, property_id, name, capacity, base_price, min_nights FROM units WHERE bookable = 1 ORDER BY sort, id') as
+      { id: number; property_id: number; name: string; capacity: number; base_price: number | null; min_nights: number }[];
+    // „Cena od” = najniższa cena za noc w najbliższym roku (podstawowa albo z cennika)
+    const minRate = db.prepare(`SELECT MIN(price) AS m FROM rates WHERE unit_id = ? AND price IS NOT NULL AND date >= ? AND date < ?`);
+    const today = warsawToday();
+    return c.json(properties.map((p) => ({
+      ...p,
+      units: units.filter((u) => u.property_id === p.id).map(({ property_id: _, ...u }) => {
+        const m = (minRate.get(u.id, today, addDays(today, 365)) as { m: number | null }).m;
+        const candidates = [u.base_price, m].filter((v): v is number => v != null);
+        return { ...u, price_from: candidates.length ? Math.min(...candidates) : null };
+      }),
+    })).filter((p) => p.units.length));
+  });
+
+  // Kalendarz jednego domku: ?unit=ID&from=RRRR-MM-DD&to=RRRR-MM-DD (maks. 15 miesięcy)
+  pub.get('/calendar', (c) => {
+    const unit = unitPricing(db, int(c.req.query('unit')));
+    if (!unit || !unit.bookable) return c.json({ error: 'Nie znaleziono domku' }, 404);
+    const today = warsawToday();
+    let from = str(c.req.query('from'), 10);
+    let to = str(c.req.query('to'), 10);
+    if (!DATE_RE.test(from) || from < today) from = today;
+    if (!DATE_RE.test(to) || to <= from) to = addDays(from, 62);
+    if (nightsBetween(from, to) > 460) to = addDays(from, 460);
+    const list = nights(db, unit, from, to);
+    c.header('Cache-Control', 'no-store');
+    return c.json({
+      unit_id: unit.id, from, to, capacity: unit.capacity,
+      // zwięźle: [data, cena|null, min. nocy, 1 = zajęte/zamknięte]
+      days: list.map((n) => [n.date, n.price, n.min_nights, n.booked || n.closed ? 1 : 0]),
+    });
+  });
+
+  pub.get('/quote', (c) => {
+    const unit = unitPricing(db, int(c.req.query('unit')));
+    const checkIn = str(c.req.query('check_in'), 10), checkOut = str(c.req.query('check_out'), 10);
+    if (!unit || !unit.bookable) return c.json({ error: 'Nie znaleziono domku' }, 404);
+    if (!DATE_RE.test(checkIn) || !DATE_RE.test(checkOut) || checkOut <= checkIn) bad('Nieprawidłowe daty');
+    return c.json(quote(db, unit, checkIn, checkOut, c.req.query('lang') === 'en' ? 'en' : 'pl'));
+  });
+
+  pub.post('/requests', async (c) => {
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    // Pole-pułapka: ludzie go nie widzą, boty wypełniają → udajemy sukces
+    if (str(b.website)) return c.json({ ok: true, id: 0 }, 201);
+    const ip = c.req.header('x-client-ip') || 'unknown';
+    if (!allowHit(`ip:${ip}`, PUBLIC_LIMIT_PER_IP) || !allowHit('total', PUBLIC_LIMIT_TOTAL)) {
+      return c.json({ error: b.lang === 'en' ? 'Too many requests. Please try again later or call +48 510 248 693.' : 'Za dużo zapytań. Spróbuj za jakiś czas albo zadzwoń: +48 510 248 693.' }, 429);
+    }
+    const en = b.lang === 'en';
+    const t = (pl: string, eng: string) => (en ? eng : pl);
+    const unit = unitPricing(db, int(b.unit_id));
+    if (!unit || !unit.bookable) bad(t('Wybierz domek lub apartament', 'Please choose a cottage or apartment'));
+    const r = {
+      check_in: str(b.check_in, 10), check_out: str(b.check_out, 10),
+      guest_name: str(b.name, 120), guest_phone: str(b.phone, 40), guest_email: str(b.email, 200).toLowerCase(),
+      adults: int(b.adults), children: int(b.children), message: str(b.message, 3000),
+    };
+    if (!DATE_RE.test(r.check_in) || !DATE_RE.test(r.check_out) || r.check_out <= r.check_in) bad(t('Wybierz daty przyjazdu i wyjazdu', 'Please choose check-in and check-out dates'));
+    if (r.check_in < warsawToday()) bad(t('Data przyjazdu już minęła', 'The check-in date is in the past'));
+    if (nightsBetween(r.check_in, r.check_out) > 60) bad(t('Pobyt może trwać maksymalnie 60 nocy — w sprawie dłuższych zadzwoń do nas', 'Stays are limited to 60 nights online — please call us about longer stays'));
+    if (r.guest_name.length < 2) bad(t('Podaj imię i nazwisko', 'Please enter your full name'));
+    if (!isEmail(r.guest_email)) bad(t('Podaj poprawny adres e-mail', 'Please enter a valid e-mail address'));
+    if (r.guest_phone && !/^[+\d][\d\s()-]{6,}$/.test(r.guest_phone)) bad(t('Podaj poprawny numer telefonu', 'Please enter a valid phone number'));
+    if (r.adults < 1) bad(t('Podaj liczbę dorosłych', 'Please enter the number of adults'));
+    if (unit.capacity && r.adults + r.children > unit.capacity) bad(t(`Ten obiekt mieści maksymalnie ${unit.capacity} osób`, `This property sleeps up to ${unit.capacity} guests`));
+    if (b.consent !== true) bad(t('Zaakceptuj zgodę na przetwarzanie danych, żebyśmy mogli odpowiedzieć', 'Please accept the data processing consent so we can reply'));
+    const q = quote(db, unit, r.check_in, r.check_out, en ? 'en' : 'pl');
+    if (!q.available) return c.json({ error: q.reason, code: 'unavailable' }, 409);
+    const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unit.id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+      r.adults, r.children, r.message, q.total, ip.slice(0, 64), b.lang === 'en' ? 'en' : 'pl');
+    const row = get('SELECT * FROM booking_requests WHERE id = ?', res.lastInsertRowid) as RequestRow;
+    announceRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o zapytaniu nie powiodło się', err));
+    return c.json({ ok: true, id: row.id, quoted_price: q.total, nights: q.nights }, 201);
+  });
+
+  app.route('/public', pub);
 
   const api = new Hono<{ Variables: { user: User } }>();
 
@@ -154,8 +263,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
   api.get('/push/public-key', (c) => c.json({ publicKey: vapidKeys(db).publicKey }));
 
   const pushSettings = (userId: number) => {
-    const row = get('SELECT notify_time, notify_changes FROM users WHERE id = ?', userId) as { notify_time: string; notify_changes: number };
-    return { time: row.notify_time, changes: row.notify_changes === 1 };
+    const row = get('SELECT notify_time, notify_changes, notify_requests FROM users WHERE id = ?', userId) as
+      { notify_time: string; notify_changes: number; notify_requests: number };
+    return { time: row.notify_time, changes: row.notify_changes === 1, requests: row.notify_requests === 1 };
   };
 
   api.get('/push/settings', (c) => c.json(pushSettings(c.get('user').id)));
@@ -170,6 +280,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
       run('UPDATE users SET notify_time = ? WHERE id = ?', b.time, user.id);
     }
     if (b.changes !== undefined) run('UPDATE users SET notify_changes = ? WHERE id = ?', b.changes ? 1 : 0, user.id);
+    if (b.requests !== undefined) run('UPDATE users SET notify_requests = ? WHERE id = ?', b.requests ? 1 : 0, user.id);
     return c.json(pushSettings(user.id));
   });
 
@@ -317,7 +428,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     if (!get('SELECT 1 FROM properties WHERE id = ?', int(b.property_id))) bad('Nieznany obiekt');
     const { m } = get('SELECT COALESCE(MAX(sort), 0) + 1 AS m FROM units WHERE property_id = ?', int(b.property_id)) as { m: number };
     const r = run('INSERT INTO units (property_id, name, capacity, color, sort, export_token) VALUES (?, ?, ?, ?, ?, ?)',
-      int(b.property_id), str(b.name, 100), int(b.capacity), /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#2f7d6d', m, newToken());
+      int(b.property_id), str(b.name, 100), int(b.capacity), /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#577267', m, newToken());
     return c.json({ id: Number(r.lastInsertRowid) }, 201);
   });
 
@@ -325,7 +436,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     const b = await c.req.json();
     if (!str(b.name)) bad('Podaj nazwę');
     run('UPDATE units SET name = ?, capacity = ?, color = ? WHERE id = ?',
-      str(b.name, 100), int(b.capacity), /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#2f7d6d', c.req.param('id'));
+      str(b.name, 100), int(b.capacity), /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#577267', c.req.param('id'));
     return c.json({ ok: true });
   });
 
@@ -497,6 +608,170 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender)
     run('DELETE FROM reservations WHERE id = ?', c.req.param('id'));
     if (row) notify([{ kind: 'deleted', row, by: c.get('user').username }], c.get('user').id);
     return c.json({ ok: true });
+  });
+
+  // ---- Ceny (cennik na stronie www) ----
+  const unitIdsIn = (user: User, raw: unknown) => {
+    const ids = Array.isArray(raw) ? [...new Set(raw.map(Number).filter(Number.isInteger))] : [];
+    if (!ids.length) bad('Wybierz domek');
+    for (const id of ids) {
+      if (!get('SELECT 1 FROM units WHERE id = ?', id)) bad('Nieznany domek');
+      requireUnit(user, id);
+    }
+    return ids;
+  };
+
+  api.get('/rates', (c) => {
+    const from = str(c.req.query('from'), 10), to = str(c.req.query('to'), 10);
+    if (!DATE_RE.test(from) || !DATE_RE.test(to)) bad('Nieprawidłowe daty');
+    return c.json(all(`SELECT unit_id, date, price, min_nights, closed FROM rates WHERE date >= ? AND date < ? ${unitScope(c.get('user'))} ORDER BY date`, from, to));
+  });
+
+  // Ustawienie ceny / min. nocy / blokady dla zakresu dni (opcjonalnie tylko wybrane dni tygodnia).
+  // price: liczba = nowa cena, null = powrót do ceny podstawowej, undefined = bez zmian (tak samo min_nights i closed).
+  api.put('/rates', async (c) => {
+    const b = await c.req.json();
+    const units = unitIdsIn(c.get('user'), b.unit_ids);
+    const from = str(b.from, 10), to = str(b.to, 10);
+    if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from) bad('Nieprawidłowy zakres dat');
+    if (nightsBetween(from, to) > 731) bad('Maksymalnie 2 lata naraz');
+    const weekdays = Array.isArray(b.weekdays) && b.weekdays.length ? new Set(b.weekdays.map(Number)) : null;
+    const price = b.price === undefined ? undefined : money(b.price);
+    if (price != null && (price < 0 || price > 1_000_000)) bad('Nieprawidłowa cena');
+    const minN = b.min_nights === undefined ? undefined : b.min_nights === null || b.min_nights === '' ? null : Math.min(60, Math.max(1, int(b.min_nights)));
+    const closed = b.closed === undefined ? undefined : b.closed ? 1 : 0;
+    const read = db.prepare('SELECT price, min_nights, closed FROM rates WHERE unit_id = ? AND date = ?');
+    const upsert = db.prepare(`INSERT INTO rates (unit_id, date, price, min_nights, closed) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(unit_id, date) DO UPDATE SET price = excluded.price, min_nights = excluded.min_nights, closed = excluded.closed`);
+    const drop = db.prepare('DELETE FROM rates WHERE unit_id = ? AND date = ?');
+    let changed = 0;
+    db.exec('BEGIN');
+    try {
+      for (const unitId of units) {
+        for (let d = from; d <= to; d = addDays(d, 1)) {
+          if (weekdays && !weekdays.has(new Date(`${d}T12:00:00Z`).getUTCDay())) continue;
+          const cur = read.get(unitId, d) as { price: number | null; min_nights: number | null; closed: number } | undefined;
+          const next = {
+            price: price === undefined ? cur?.price ?? null : price,
+            min_nights: minN === undefined ? cur?.min_nights ?? null : minN,
+            closed: closed === undefined ? cur?.closed ?? 0 : closed,
+          };
+          // Wiersz bez żadnego nadpisania jest zbędny — dzień wraca do ustawień domku
+          if (next.price == null && next.min_nights == null && !next.closed) drop.run(unitId, d);
+          else upsert.run(unitId, d, next.price, next.min_nights, next.closed);
+          changed++;
+        }
+      }
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    return c.json({ changed });
+  });
+
+  // Cena podstawowa, minimalny pobyt i widoczność domku na stronie (konto ograniczone może zmieniać swoje domki)
+  api.put('/rates/unit/:id', async (c) => {
+    const id = int(c.req.param('id'));
+    if (!get('SELECT 1 FROM units WHERE id = ?', id)) return c.json({ error: 'Nie znaleziono' }, 404);
+    requireUnit(c.get('user'), id);
+    const b = await c.req.json();
+    const price = money(b.base_price);
+    if (price != null && (price < 0 || price > 1_000_000)) bad('Nieprawidłowa cena');
+    run('UPDATE units SET base_price = ?, min_nights = ?, bookable = ? WHERE id = ?', price, Math.min(60, Math.max(1, int(b.min_nights) || 1)), b.bookable === false ? 0 : 1, id);
+    return c.json(get('SELECT id, base_price, min_nights, bookable FROM units WHERE id = ?', id));
+  });
+
+  // ---- Zapytania o rezerwację ze strony www ----
+  const requestRow = (id: number) => get(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
+    JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id WHERE r.id = ?`, id) as (RequestRow & Record<string, unknown>) | undefined;
+
+  api.get('/requests', (c) => {
+    const status = c.req.query('status');
+    const where = status === 'pending' ? "r.status = 'pending'" : status === 'decided' ? "r.status != 'pending'" : '1';
+    const rows = all(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
+      JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
+      WHERE ${where} ${unitScope(c.get('user')).replace('unit_id', 'r.unit_id')}
+      ORDER BY ${status === 'pending' ? 'r.created_at' : 'COALESCE(r.decided_at, r.created_at) DESC'} LIMIT 200`) as (RequestRow & Record<string, unknown>)[];
+    // Czy termin w międzyczasie się zajął (np. rezerwacja z Bookingu)
+    return c.json(rows.map((r) => ({ ...r, conflicts: r.status === 'pending' ? conflicts({ ...r, status: 'confirmed' }, 0) : [] })));
+  });
+
+  const pendingRequest = (user: User, id: number) => {
+    const r = requestRow(id);
+    if (!r || !canSee(user, r.unit_id)) throw new HTTPException(404, { message: 'Nie znaleziono zapytania' });
+    if (r.status !== 'pending') bad('To zapytanie zostało już rozpatrzone');
+    return r;
+  };
+
+  api.post('/requests/:id/accept', async (c) => {
+    const user = c.get('user');
+    const r = pendingRequest(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const found = conflicts({ unit_id: r.unit_id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0);
+    if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
+    const price = b.price === undefined ? r.quoted_price : money(b.price);
+    const note = str(b.note, 3000);
+    const notes = [r.message && `Wiadomość od gościa: ${r.message}`, `Rezerwacja ze strony www (zapytanie #${r.id}).`].filter(Boolean).join('\n');
+    db.exec('BEGIN');
+    let created: Record<string, unknown>;
+    try {
+      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes)
+        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?)`, r.unit_id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+        r.adults, r.children, price, notes);
+      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ? WHERE id = ?`,
+        user.username, note, res.lastInsertRowid, r.id);
+      created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+    notify([{ kind: 'created', row: created, by: user.username }], user.id);
+    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, decision_note: note }, true, price)
+      .catch((err) => { console.error('E-mail z potwierdzeniem nie wysłany', err); return false; });
+    return c.json({ request: requestRow(r.id), reservation: created, emailed });
+  });
+
+  api.post('/requests/:id/reject', async (c) => {
+    const user = c.get('user');
+    const r = pendingRequest(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const note = str(b.note, 3000);
+    run(`UPDATE booking_requests SET status = 'rejected', decided_by = ?, decided_at = datetime('now'), decision_note = ? WHERE id = ?`, user.username, note, r.id);
+    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, decision_note: note }, false, null)
+      .catch((err) => { console.error('E-mail z odmową nie wysłany', err); return false; });
+    return c.json({ request: requestRow(r.id), emailed });
+  });
+
+  // ---- Powiadomienia e-mail (adresy właściciela) ----
+  api.get('/settings/email', (c) => {
+    requireFullAdmin(c.get('user'));
+    return c.json({ configured: !!mailer, kind: mailer?.kind ?? null, from: mailer?.from ?? null, emails: adminEmails(db).join(', ') });
+  });
+
+  api.put('/settings/email', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const b = await c.req.json();
+    const raw = str(b.emails, 1000);
+    const emails = parseEmails(raw);
+    if (raw && !emails.length) bad('Podaj poprawny adres e-mail');
+    run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', NOTIFY_EMAILS_KEY, emails.join(', '));
+    return c.json({ configured: !!mailer, kind: mailer?.kind ?? null, from: mailer?.from ?? null, emails: emails.join(', ') });
+  });
+
+  api.post('/settings/email/test', async (c) => {
+    requireFullAdmin(c.get('user'));
+    if (!mailer) return c.json({ error: 'Wysyłka e-maili nie jest skonfigurowana na serwerze (RESEND_API_KEY albo SMTP_HOST w .env)' }, 503);
+    const to = adminEmails(db);
+    if (!to.length) bad('Najpierw zapisz adres e-mail');
+    try {
+      await mailTest(mailer, to);
+    } catch (err) {
+      console.error('Test e-mail nie powiódł się', err);
+      return c.json({ error: `Nie udało się wysłać: ${err instanceof Error ? err.message : err}` }, 502);
+    }
+    return c.json({ sent: to.length });
   });
 
   app.route('/api', api);
