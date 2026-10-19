@@ -25,6 +25,31 @@ function migrate(db: DatabaseSync) {
   if (user_version < 8) migrateV8(db);
   if (user_version < 9) migrateV9(db);
   if (user_version < 10) migrateV10(db);
+  if (user_version < 11) migrateV11(db);
+}
+
+// Ceny wg dni tygodnia (JSON: 7 cen od niedzieli do soboty, null = cena podstawowa), np. drożej w weekendy.
+// Opcje płatne (parking, zwierzę, łóżeczko…) wybierane przez gościa w zapytaniu ze strony.
+function migrateV11(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE units ADD COLUMN weekday_prices TEXT;
+    CREATE TABLE extras (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      name_en TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      price REAL NOT NULL DEFAULT 0,
+      per TEXT NOT NULL DEFAULT 'stay' CHECK (per IN ('stay', 'night')),
+      max_qty INTEGER NOT NULL DEFAULT 1,
+      property_ids TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      sort INTEGER NOT NULL DEFAULT 0
+    );
+    ALTER TABLE booking_requests ADD COLUMN extras TEXT;
+    PRAGMA user_version = 11;
+    COMMIT;
+  `);
 }
 
 // Ceny za noc (domyślna dla domku + nadpisania na konkretne dni), zapytania o rezerwację ze strony www,

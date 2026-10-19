@@ -8,10 +8,10 @@ import InstallApp from './InstallApp';
 
 type Props = {
   user: string; readOnly: boolean; scope: string[] | null; canManageUsers: boolean;
-  onOpenUsers: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
+  onOpenUsers: () => void; onOpenPricing: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
 };
 
-export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onLogout, properties, reload }: Props) {
+export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onOpenPricing, onLogout, properties, reload }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult[] | null>(null);
   const [error, setError] = useState('');
@@ -48,6 +48,15 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
     return (
       <section className="settings">
         <InstallApp />
+        {!readOnly && (
+          <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenPricing}>
+            <span>
+              <b>Cennik i rezerwacje online</b>
+              <small>Cena podstawowa, ceny wg dni tygodnia (np. weekendy), ceny na wybrane dni, opcje płatne, jak daleko do przodu widać ceny</small>
+            </span>
+            <span className="nav-arrow">›</span>
+          </button>
+        )}
         <div className="panel access-info">
           {scope && <p>Dostęp do obiektów: <b>{scope.join(', ')}</b></p>}
           {readOnly && <p className="muted">To konto ma dostęp tylko do podglądu rezerwacji.</p>}
@@ -66,6 +75,13 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
   return (
     <section className="settings">
       <InstallApp />
+      <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenPricing}>
+        <span>
+          <b>Cennik i rezerwacje online</b>
+          <small>Cena podstawowa, ceny wg dni tygodnia (np. weekendy), ceny na wybrane dni, opcje płatne, jak daleko do przodu widać ceny</small>
+        </span>
+        <span className="nav-arrow">›</span>
+      </button>
       <div className="panel sync-panel">
         <div>
           <h2>Synchronizacja z Booking.com</h2>
@@ -176,8 +192,6 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
           </div>
           {dirty && <button className="btn primary small" onClick={() => run(() => api.updateUnit(u.id, form))}>Zapisz zmiany</button>}
 
-          <UnitPricing unit={u} run={run} />
-
           <h4>1. Import z Booking.com / Airbnb (zajęte terminy)</h4>
           <p className="muted">W Bookingu przy eksporcie wybierz <b>„zarezerwowane i zamknięte dni”</b>, żeby widzieć też zamknięte terminy.</p>
           {u.feeds.map((f) => (
@@ -221,34 +235,6 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// Cena podstawowa za noc, minimalny pobyt i widoczność na odmorzadogor.pl (szczegóły na dni — w kalendarzu, tryb „Ceny”)
-function UnitPricing({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown>) => void }) {
-  const [price, setPrice] = useState(u.base_price == null ? '' : String(u.base_price));
-  const [minNights, setMinNights] = useState(u.min_nights || 1);
-  const [bookable, setBookable] = useState(!!u.bookable);
-  const dirty = price !== (u.base_price == null ? '' : String(u.base_price)) || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable;
-  const save = () => {
-    const n = price.trim() === '' ? null : Number(price.replace(',', '.'));
-    if (n != null && (!Number.isFinite(n) || n < 0)) return alert('Podaj poprawną cenę');
-    run(() => api.saveUnitPricing(u.id, { base_price: n, min_nights: minNights, bookable }));
-  };
-  return (
-    <div className="pricing-box">
-      <h4>Cena i rezerwacje na stronie www</h4>
-      <div className="row">
-        <label>Cena podstawowa za noc (zł)<input inputMode="decimal" placeholder="np. 450" value={price} onChange={(e) => setPrice(e.target.value)} /></label>
-        <label className="narrow">Min. nocy<input type="number" min={1} max={60} value={minNights} onChange={(e) => setMinNights(Math.max(1, Number(e.target.value) || 1))} /></label>
-      </div>
-      <label className="switch-row">
-        <input type="checkbox" checked={bookable} onChange={(e) => setBookable(e.target.checked)} />
-        <span><b>Widoczny na stronie</b><small>Goście widzą ceny i wolne terminy i mogą wysłać zapytanie przyciskiem „Zarezerwuj”</small></span>
-      </label>
-      <p className="muted small-note">Ceny na konkretne dni (sezon, weekendy, święta) ustawisz w Kalendarzu → przycisk <b>Ceny</b>.</p>
-      {dirty && <button className="btn primary small" onClick={save}>Zapisz cenę</button>}
     </div>
   );
 }

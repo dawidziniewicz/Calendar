@@ -16,12 +16,36 @@ export const nightsBetween = (from: string, to: string) => Math.round((Date.pars
 export const nightsPl = (n: number) => (n === 1 ? '1 noc' : `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'noce' : 'nocy'}`);
 export const zl = (n: number) => `${n.toLocaleString('pl-PL', { maximumFractionDigits: 2 }).replace(/ /g, ' ')} zł`;
 
-type UnitPricing = { id: number; base_price: number | null; min_nights: number; bookable: number; capacity: number };
+type UnitPricing = { id: number; base_price: number | null; min_nights: number; bookable: number; capacity: number; weekday_prices: string | null };
 export type Night = { date: string; price: number | null; min_nights: number; closed: boolean; booked: boolean };
 
 export function unitPricing(db: DatabaseSync, unitId: number) {
-  return db.prepare('SELECT id, base_price, min_nights, bookable, capacity FROM units WHERE id = ?').get(unitId) as UnitPricing | undefined;
+  return db.prepare('SELECT id, base_price, min_nights, bookable, capacity, weekday_prices FROM units WHERE id = ?').get(unitId) as UnitPricing | undefined;
 }
+
+/** Ceny wg dni tygodnia: tablica 7 pozycji (0 = niedziela … 6 = sobota), null = cena podstawowa. */
+export function parseWeekdayPrices(raw: unknown): (number | null)[] {
+  let list: unknown = raw;
+  if (typeof raw === 'string') {
+    try { list = JSON.parse(raw); } catch { list = null; }
+  }
+  const arr = Array.isArray(list) ? list : [];
+  return Array.from({ length: 7 }, (_, i) => {
+    const v = arr[i];
+    return v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : Number(v);
+  });
+}
+
+// Na ile dni do przodu strona pokazuje ceny i przyjmuje zapytania (ustawienie w aplikacji)
+export const HORIZON_KEY = 'booking_horizon_days';
+export const DEFAULT_HORIZON = 365;
+export function bookingHorizon(db: DatabaseSync): number {
+  const v = Number((db.prepare('SELECT value FROM settings WHERE key = ?').get(HORIZON_KEY) as { value: string } | undefined)?.value);
+  return Number.isInteger(v) && v >= 7 && v <= 730 ? v : DEFAULT_HORIZON;
+}
+const warsawToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+/** Pierwsza noc, której strona już nie pokazuje (dziś + horyzont). */
+export const horizonEnd = (db: DatabaseSync) => addDays(warsawToday(), bookingHorizon(db));
 
 /** Noce od `from` (włącznie) do `to` (wyłącznie) z ceną, minimalną długością pobytu i zajętością. */
 export function nights(db: DatabaseSync, unit: UnitPricing, from: string, to: string): Night[] {
@@ -29,12 +53,14 @@ export function nights(db: DatabaseSync, unit: UnitPricing, from: string, to: st
     .all(unit.id, from, to) as { date: string; price: number | null; min_nights: number | null; closed: number }[]).map((r) => [r.date, r]));
   const stays = db.prepare(`SELECT check_in, check_out FROM reservations WHERE unit_id = ? AND status != 'cancelled' AND check_out > ? AND check_in < ?`)
     .all(unit.id, from, to) as { check_in: string; check_out: string }[];
+  const weekday = parseWeekdayPrices(unit.weekday_prices);
   const out: Night[] = [];
   for (let d = from; d < to; d = addDays(d, 1)) {
     const r = rates.get(d);
     out.push({
       date: d,
-      price: r?.price ?? unit.base_price ?? null,
+      // kolejność: cena ustawiona na ten dzień → cena dnia tygodnia → cena podstawowa
+      price: r?.price ?? weekday[new Date(`${d}T12:00:00Z`).getUTCDay()] ?? unit.base_price ?? null,
       min_nights: r?.min_nights ?? unit.min_nights ?? 1,
       closed: !!r?.closed,
       booked: stays.some((s) => s.check_in <= d && s.check_out > d),
@@ -55,6 +81,10 @@ export function quote(db: DatabaseSync, unit: UnitPricing, checkIn: string, chec
   const total = list.every((n) => n.price != null) ? list.reduce((s, n) => s + (n.price ?? 0), 0) : null;
   const base = { nights: list.length, total, min_nights: min };
   const en = lang === 'en';
+  const days = bookingHorizon(db);
+  if (checkOut > addDays(warsawToday(), days)) {
+    return { ...base, available: false, reason: en ? `Online booking is open up to ${days} days ahead — please call us about later dates` : `Rezerwacje online przyjmujemy do ${days} dni do przodu — w sprawie późniejszych terminów zadzwoń do nas` };
+  }
   if (list.some((n) => n.booked)) return { ...base, available: false, reason: en ? 'These dates are already booked' : 'Wybrany termin jest już zajęty' };
   if (list.some((n) => n.closed)) {
     return { ...base, available: false, reason: en ? 'Online booking is closed for these dates — please call us' : 'W wybranym terminie nie przyjmujemy rezerwacji online — zadzwoń do nas' };
@@ -70,8 +100,52 @@ export function quote(db: DatabaseSync, unit: UnitPricing, checkIn: string, chec
 export type RequestRow = {
   id: number; unit_id: number; check_in: string; check_out: string; guest_name: string; guest_phone: string; guest_email: string;
   adults: number; children: number; message: string; quoted_price: number | null; status: string; decision_note: string;
-  reservation_id: number | null; created_at: string; lang?: string;
+  reservation_id: number | null; created_at: string; lang?: string; extras?: string | null;
 };
+
+// ---------------------------------------------------------------------------
+// Opcje płatne (parking, zwierzę…): cena za pobyt albo za noc, ilość od 1 do max_qty, dla wszystkich lub wybranych obiektów
+// ---------------------------------------------------------------------------
+export type Extra = { id: number; name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: string | null; active: number; sort: number };
+/** Zapis w zapytaniu: kopia nazwy i ceny z chwili wysłania (późniejsza zmiana cennika nie zmienia zapytania). */
+export type ChosenExtra = { id: number; name: string; name_en: string; price: number; per: 'stay' | 'night'; qty: number; total: number };
+
+export function extrasFor(db: DatabaseSync, propertyId: number, onlyActive = true): Extra[] {
+  const rows = db.prepare(`SELECT * FROM extras ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY sort, id`).all() as Extra[];
+  return rows.filter((e) => {
+    if (!e.property_ids) return true;
+    try { return (JSON.parse(e.property_ids) as number[]).includes(propertyId); } catch { return true; }
+  });
+}
+
+/** Wybór gościa [{id, qty}] → pozycje z ceną; nieznane / nieaktywne / ilość 0 są pomijane. */
+export function priceExtras(db: DatabaseSync, propertyId: number, chosen: unknown, nightsCount: number): ChosenExtra[] {
+  if (!Array.isArray(chosen)) return [];
+  const available = new Map(extrasFor(db, propertyId).map((e) => [e.id, e]));
+  const out: ChosenExtra[] = [];
+  for (const c of chosen.slice(0, 30)) {
+    const e = available.get(Number((c as { id?: unknown })?.id));
+    const qty = Math.min(e?.max_qty ?? 0, Math.max(0, Math.trunc(Number((c as { qty?: unknown })?.qty ?? 1)) || 0));
+    if (!e || !qty || out.some((x) => x.id === e.id)) continue;
+    out.push({ id: e.id, name: e.name, name_en: e.name_en, price: e.price, per: e.per, qty, total: e.price * qty * (e.per === 'night' ? nightsCount : 1) });
+  }
+  return out;
+}
+
+export function parseChosenExtras(raw: unknown): ChosenExtra[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
+/** „Parking × 2 (40 zł/noc) — 240 zł” */
+export function extrasLines(list: ChosenExtra[], lang: Lang = 'pl') {
+  const en = lang === 'en';
+  return list.map((e) => {
+    const name = (en && e.name_en) || e.name;
+    const unit = e.per === 'night' ? (en ? 'night' : 'noc') : (en ? 'stay' : 'pobyt');
+    return `${name}${e.qty > 1 ? ` × ${e.qty}` : ''} (${zl(e.price)}/${unit}) — ${zl(e.total)}`;
+  });
+}
 
 type UnitInfo = { unit: string; property: string; location: string; address: string };
 function unitInfo(db: DatabaseSync, unitId: number): UnitInfo {
@@ -129,9 +203,14 @@ function stayRows(db: DatabaseSync, r: RequestRow, price: number | null, t = TXT
     [t.departure, longDate(r.check_out, t.locale)],
     [t.length, t.nights(n)],
     [t.guests, t.people(r.adults, r.children)],
+    ...extrasRow(r, t === TXT.en ? 'en' : 'pl'),
     [priceLabel, price != null ? zl(price) : t.tbd],
   ];
 }
+const extrasRow = (r: RequestRow, lang: Lang): MailRow[] => {
+  const list = parseChosenExtras(r.extras);
+  return list.length ? [[lang === 'en' ? 'Extras' : 'Opcje dodatkowe', extrasLines(list, lang).join('\n')]] : [];
+};
 
 export const NOTIFY_EMAILS_KEY = 'notify_emails';
 export function adminEmails(db: DatabaseSync): string[] {

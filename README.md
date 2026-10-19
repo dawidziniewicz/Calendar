@@ -6,7 +6,7 @@ Osada Jantar (5 domków), Apartament Sopot, Apartamenty Karpatka (2), Agroturyst
 - **Kalendarz** – oś czasu wszystkich domków; stuknięcie w wolny dzień tworzy rezerwację, w pasek otwiera ją.
 - **Aktualności** – kto dziś jest w obiektach, kto przyjeżdża i wyjeżdża (po 14 dni, przycisk „Załaduj więcej”), wyszukiwarka, dzwonienie jednym dotknięciem.
 - **Zapytania** – rezerwacje wysłane przyciskiem „Zarezerwuj” na odmorzadogor.pl: **Akceptuj** (rezerwacja trafia do kalendarza, gość dostaje e-mail z potwierdzeniem) albo **Odrzuć** (gość dostaje e-mail z odmową).
-- **Ceny** – przycisk *Ceny* w kalendarzu: cena każdej nocy widoczna na osi czasu, zaznaczasz zakres dni i ustawiasz cenę, minimalny pobyt lub blokadę rezerwacji online — goście od razu widzą to na stronie.
+- **Ceny** – *Ustawienia → Cennik* (cena podstawowa, ceny wg dnia tygodnia, ceny na wybrane dni, opcje płatne, horyzont rezerwacji) oraz przycisk *Ceny* w kalendarzu — goście od razu widzą zmiany na stronie.
 - **Obiekty** – edycja domków, cena podstawowa i widoczność na stronie, podłączenie kalendarzy Booking.com / Airbnb i adresy eksportu.
 - Ostrzeżenie o nakładających się terminach, podpowiedzi stałych gości, cena i wpłaty, notatki.
 - Instalowana na iPhonie jak zwykła aplikacja (PWA), działa też w przeglądarce na komputerze.
@@ -232,7 +232,13 @@ Strona [odmorzadogor.pl](https://github.com/dawidziniewicz/osadajantar) pobiera 
 
 - Publiczne API zwraca **wyłącznie** ceny, minimalny pobyt i zajęte dni — żadnych danych gości. Zapytania chroni pole-pułapka na boty i limit (5 na godzinę z jednego adresu IP, 60 łącznie).
 - Dozwolone domeny strony (CORS): `odmorzadogor.pl`, `www.odmorzadogor.pl`, `new.odmorzadogor.pl`, podglądy `*.osadajantar.pages.dev`. Inne dodasz zmienną `PUBLIC_ORIGINS` w Cloudflare Pages (lista po przecinku).
-- **Ceny:** *Obiekty* → domek → *Cena i rezerwacje na stronie www* (cena podstawowa za noc, minimalny pobyt, widoczność na stronie). Ceny na konkretne dni: *Kalendarz* → **Ceny** → stuknij pierwszy i ostatni dzień → cena / min. nocy / zamknięcie rezerwacji online, opcjonalnie tylko wybrane dni tygodnia (np. weekendy) i kilka domków naraz.
+- **Cennik** (*Ustawienia → Cennik i rezerwacje online*):
+  - cena podstawowa za noc, minimalny pobyt i widoczność każdego domku na stronie,
+  - **ceny wg dnia tygodnia** — np. 300 zł w tygodniu i 600 zł w piątek i sobotę (przycisk *Ustaw weekend*),
+  - **ceny na wybrane dni** (święta, sezon) z listą i usuwaniem; to samo w *Kalendarz → Ceny* (zaznaczasz zakres na osi czasu),
+  - **na ile dni do przodu** strona pokazuje ceny i przyjmuje zapytania (domyślnie 365),
+  - **opcje płatne** — parking, zwierzę, łóżeczko… z ceną za pobyt albo za noc, ilością i wyborem obiektów; gość zaznacza je w formularzu, a cena dolicza się do wyceny.
+  - Kolejność ceny nocy: cena na konkretny dzień → cena dnia tygodnia → cena podstawowa.
 - **Zapytanie** od gościa: powiadomienie push („Zapytania ze strony www” w *Powiadomieniach*), e-mail na adresy z *Ustawienia → Powiadomienia e-mail*, a gość dostaje e-mail „Otrzymaliśmy Twoje zapytanie”. Zapytania ze strony angielskiej dostają e-maile po angielsku.
 - **Akceptacja** tworzy rezerwację „Strona www” (można poprawić cenę i dopisać informację dla gościa, np. o zaliczce). Gdy termin w międzyczasie się zajął, aplikacja ostrzeże.
 

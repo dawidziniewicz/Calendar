@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  NOTIFY_EMAILS_KEY, addDays, adminEmails, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
+  DEFAULT_HORIZON, HORIZON_KEY, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
 } from './booking.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -87,17 +87,18 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
 
   pub.get('/catalog', (c) => {
     const properties = all('SELECT id, name, location FROM properties ORDER BY sort, id') as { id: number; name: string; location: string }[];
-    const units = all('SELECT id, property_id, name, capacity, base_price, min_nights FROM units WHERE bookable = 1 ORDER BY sort, id') as
-      { id: number; property_id: number; name: string; capacity: number; base_price: number | null; min_nights: number }[];
-    // „Cena od” = najniższa cena za noc w najbliższym roku (podstawowa albo z cennika)
-    const minRate = db.prepare(`SELECT MIN(price) AS m FROM rates WHERE unit_id = ? AND price IS NOT NULL AND date >= ? AND date < ?`);
+    const units = all('SELECT id, property_id FROM units WHERE bookable = 1 ORDER BY sort, id') as { id: number; property_id: number }[];
+    // „Cena od” = najniższa cena za noc w okresie, który strona pokazuje (podstawowa, dni tygodnia i ceny na konkretne dni)
     const today = warsawToday();
+    const end = horizonEnd(db);
     return c.json(properties.map((p) => ({
       ...p,
-      units: units.filter((u) => u.property_id === p.id).map(({ property_id: _, ...u }) => {
-        const m = (minRate.get(u.id, today, addDays(today, 365)) as { m: number | null }).m;
-        const candidates = [u.base_price, m].filter((v): v is number => v != null);
-        return { ...u, price_from: candidates.length ? Math.min(...candidates) : null };
+      extras: extrasFor(db, p.id).map((e) => ({ id: e.id, name: e.name, name_en: e.name_en || e.name, description: e.description, price: e.price, per: e.per, max_qty: e.max_qty })),
+      units: units.filter((u) => u.property_id === p.id).map(({ id }) => {
+        const u = unitPricing(db, id)!;
+        const prices = nights(db, u, today, end).map((n) => n.price).filter((v): v is number => v != null);
+        const name = (get('SELECT name FROM units WHERE id = ?', id) as { name: string }).name;
+        return { id, name, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null };
       }),
     })).filter((p) => p.units.length));
   });
@@ -112,6 +113,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!DATE_RE.test(from) || from < today) from = today;
     if (!DATE_RE.test(to) || to <= from) to = addDays(from, 62);
     if (nightsBetween(from, to) > 460) to = addDays(from, 460);
+    // dalej niż horyzont ustawiony w aplikacji strona nie pokazuje cen ani wolnych dni
+    const end = horizonEnd(db);
+    if (to > end) to = end > from ? end : from;
     const list = nights(db, unit, from, to);
     c.header('Cache-Control', 'no-store');
     return c.json({
@@ -157,12 +161,16 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (b.consent !== true) bad(t('Zaakceptuj zgodę na przetwarzanie danych, żebyśmy mogli odpowiedzieć', 'Please accept the data processing consent so we can reply'));
     const q = quote(db, unit, r.check_in, r.check_out, en ? 'en' : 'pl');
     if (!q.available) return c.json({ error: q.reason, code: 'unavailable' }, 409);
-    const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unit.id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.message, q.total, ip.slice(0, 64), b.lang === 'en' ? 'en' : 'pl');
+    const propertyId = (get('SELECT property_id FROM units WHERE id = ?', unit.id) as { property_id: number }).property_id;
+    const extras = priceExtras(db, propertyId, b.extras, q.nights);
+    const extrasTotal = extras.reduce((s, e) => s + e.total, 0);
+    const total = q.total == null ? null : q.total + extrasTotal;
+    const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang, extras)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unit.id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+      r.adults, r.children, r.message, total, ip.slice(0, 64), b.lang === 'en' ? 'en' : 'pl', extras.length ? JSON.stringify(extras) : null);
     const row = get('SELECT * FROM booking_requests WHERE id = ?', res.lastInsertRowid) as RequestRow;
     announceRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o zapytaniu nie powiodło się', err));
-    return c.json({ ok: true, id: row.id, quoted_price: q.total, nights: q.nights }, 201);
+    return c.json({ ok: true, id: row.id, quoted_price: total, extras_total: extrasTotal, nights: q.nights }, 201);
   });
 
   app.route('/public', pub);
@@ -678,8 +686,58 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const b = await c.req.json();
     const price = money(b.base_price);
     if (price != null && (price < 0 || price > 1_000_000)) bad('Nieprawidłowa cena');
+    const weekday = b.weekday_prices === undefined ? undefined : parseWeekdayPrices(b.weekday_prices);
+    if (weekday?.some((v) => v != null && v > 1_000_000)) bad('Nieprawidłowa cena');
     run('UPDATE units SET base_price = ?, min_nights = ?, bookable = ? WHERE id = ?', price, Math.min(60, Math.max(1, int(b.min_nights) || 1)), b.bookable === false ? 0 : 1, id);
-    return c.json(get('SELECT id, base_price, min_nights, bookable FROM units WHERE id = ?', id));
+    if (weekday) run('UPDATE units SET weekday_prices = ? WHERE id = ?', weekday.some((v) => v != null) ? JSON.stringify(weekday) : null, id);
+    return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices FROM units WHERE id = ?', id));
+  });
+
+  // ---- Opcje płatne (parking, zwierzę, łóżeczko…) ----
+  const readExtra = (b: Record<string, unknown>) => {
+    const name = str(b.name, 80);
+    if (!name) bad('Podaj nazwę opcji');
+    const price = money(b.price);
+    if (price == null || price < 0 || price > 100_000) bad('Podaj cenę (0 = bezpłatnie)');
+    const scope = b.property_ids == null ? null : readScope(b.property_ids);
+    return {
+      name, name_en: str(b.name_en, 80), description: str(b.description, 300), price,
+      per: b.per === 'night' ? 'night' : 'stay', max_qty: Math.min(20, Math.max(1, int(b.max_qty) || 1)),
+      property_ids: scope ? JSON.stringify(scope) : null, active: b.active === false ? 0 : 1,
+    };
+  };
+  api.get('/extras', (c) => c.json(all('SELECT * FROM extras ORDER BY sort, id')));
+  api.post('/extras', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const e = readExtra(await c.req.json());
+    const { m } = get('SELECT COALESCE(MAX(sort), 0) + 1 AS m FROM extras') as { m: number };
+    const r = run('INSERT INTO extras (name, name_en, description, price, per, max_qty, property_ids, active, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      e.name, e.name_en, e.description, e.price, e.per, e.max_qty, e.property_ids, e.active, m);
+    return c.json(get('SELECT * FROM extras WHERE id = ?', r.lastInsertRowid), 201);
+  });
+  api.put('/extras/:id', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const e = readExtra(await c.req.json());
+    const r = run('UPDATE extras SET name = ?, name_en = ?, description = ?, price = ?, per = ?, max_qty = ?, property_ids = ?, active = ? WHERE id = ?',
+      e.name, e.name_en, e.description, e.price, e.per, e.max_qty, e.property_ids, e.active, int(c.req.param('id')));
+    if (!r.changes) return c.json({ error: 'Nie znaleziono' }, 404);
+    return c.json(get('SELECT * FROM extras WHERE id = ?', int(c.req.param('id'))));
+  });
+  api.delete('/extras/:id', (c) => {
+    requireFullAdmin(c.get('user'));
+    run('DELETE FROM extras WHERE id = ?', int(c.req.param('id')));
+    return c.json({ ok: true });
+  });
+
+  // Na ile dni do przodu strona pokazuje ceny i przyjmuje zapytania
+  api.get('/settings/booking', (c) => c.json({ horizon_days: bookingHorizon(db), default_days: DEFAULT_HORIZON }));
+  api.put('/settings/booking', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const b = await c.req.json();
+    const days = int(b.horizon_days);
+    if (days < 7 || days > 730) bad('Podaj liczbę dni od 7 do 730');
+    run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', HORIZON_KEY, String(days));
+    return c.json({ horizon_days: bookingHorizon(db), default_days: DEFAULT_HORIZON });
   });
 
   // ---- Zapytania o rezerwację ze strony www ----
@@ -712,7 +770,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const price = b.price === undefined ? r.quoted_price : money(b.price);
     const note = str(b.note, 3000);
-    const notes = [r.message && `Wiadomość od gościa: ${r.message}`, `Rezerwacja ze strony www (zapytanie #${r.id}).`].filter(Boolean).join('\n');
+    const chosen = parseChosenExtras(r.extras);
+    const notes = [r.message && `Wiadomość od gościa: ${r.message}`, chosen.length && `Opcje dodatkowe: ${extrasLines(chosen).join('; ')}`,
+      `Rezerwacja ze strony www (zapytanie #${r.id}).`].filter(Boolean).join('\n');
     db.exec('BEGIN');
     let created: Record<string, unknown>;
     try {

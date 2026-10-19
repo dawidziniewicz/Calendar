@@ -656,3 +656,71 @@ test('ustawienia e-mail i konto podglądu', async () => {
   assert.equal((await call('PUT', '/api/rates', { unit_ids: [1], from: inDays(1), to: inDays(2), price: 1 })).status, 403);
   assert.equal((await call('GET', '/api/requests')).status, 200);
 });
+
+test('ceny wg dni tygodnia, pierwszeństwo ceny na dzień i horyzont rezerwacji', async () => {
+  const { call, login } = setupWithMail();
+  await login();
+  // 300 zł w tygodniu, 600 zł w piątek i sobotę (0 = niedziela … 6 = sobota)
+  const res = await call('PUT', '/api/rates/unit/1', { base_price: 300, min_nights: 1, weekday_prices: [null, null, null, null, null, 600, 600] });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).weekday_prices, '[null,null,null,null,null,600,600]');
+  const from = inDays(7), to = inDays(21);
+  const cal = await (await call('GET', `/public/calendar?unit=1&from=${from}&to=${to}`)).json();
+  for (const [d, price] of cal.days) {
+    const dow = new Date(`${d}T12:00:00Z`).getUTCDay();
+    assert.equal(price, dow === 5 || dow === 6 ? 600 : 300, d);
+  }
+  // cena ustawiona na konkretny dzień wygrywa z ceną dnia tygodnia
+  const friday = cal.days.find(([d]: [string]) => new Date(`${d}T12:00:00Z`).getUTCDay() === 5)[0];
+  await call('PUT', '/api/rates', { unit_ids: [1], from: friday, to: friday, price: 999 });
+  const again = await (await call('GET', `/public/calendar?unit=1&from=${friday}&to=${inDays(30)}`)).json();
+  assert.equal(again.days[0][1], 999);
+  // wyczyszczenie cen dni tygodnia
+  await call('PUT', '/api/rates/unit/1', { base_price: 300, min_nights: 1, weekday_prices: [] });
+  assert.equal((await (await call('GET', `/public/calendar?unit=1&from=${inDays(7)}&to=${inDays(14)}`)).json()).days.every((d: unknown[]) => d[1] === 300 || d[1] === 999), true);
+
+  // horyzont: domyślnie 365 dni, po zmianie na 30 kalendarz kończy się po 30 dniach, a dalsze zapytania są odrzucane
+  assert.equal((await (await call('GET', '/api/settings/booking')).json()).horizon_days, 365);
+  assert.equal((await call('PUT', '/api/settings/booking', { horizon_days: 3 })).status, 400);
+  assert.equal((await (await call('PUT', '/api/settings/booking', { horizon_days: 30 })).json()).horizon_days, 30);
+  const short = await (await call('GET', `/public/calendar?unit=1&from=${inDays(0)}&to=${inDays(200)}`)).json();
+  assert.equal(short.to, inDays(30));
+  const late = await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(40), check_out: inDays(42), name: 'Jan Nowak', email: 'jan@example.com', adults: 2, consent: true }, { 'x-client-ip': '3.3.3.3' });
+  assert.equal(late.status, 409);
+  assert.match((await late.json()).error, /30 dni/);
+});
+
+test('opcje płatne: admin ustawia, gość wybiera, cena dolicza się do wyceny i e-maili', async () => {
+  const { call, login, sent } = setupWithMail();
+  await login();
+  await call('PUT', '/api/rates/unit/1', { base_price: 300, min_nights: 1 });
+  assert.equal((await call('POST', '/api/extras', { name: '', price: 10 })).status, 400);
+  const parking = await (await call('POST', '/api/extras', { name: 'Parking', name_en: 'Parking', price: 40, per: 'night', max_qty: 2 })).json();
+  const pet = await (await call('POST', '/api/extras', { name: 'Zwierzę', name_en: 'Pet', price: 100, per: 'stay' })).json();
+  // opcja tylko dla Sopotu — nie pojawia się przy Jantarze
+  await call('POST', '/api/extras', { name: 'Sauna', price: 50, per: 'stay', property_ids: [2] });
+  const hidden = await (await call('POST', '/api/extras', { name: 'Stara opcja', price: 5, active: false })).json();
+  const catalog = await (await call('GET', '/public/catalog')).json();
+  assert.deepEqual(catalog[0].extras.map((e: { name: string }) => e.name), ['Parking', 'Zwierzę']);
+  assert.equal(catalog.find((p: { name: string }) => p.name === 'Apartament Sopot').extras.length, 3);
+
+  const res = await call('POST', '/public/requests', {
+    unit_id: 1, check_in: inDays(10), check_out: inDays(13), name: 'Ola Kowal', email: 'ola@example.com', adults: 2, consent: true,
+    extras: [{ id: parking.id, qty: 5 }, { id: pet.id, qty: 1 }, { id: hidden.id, qty: 1 }, { id: 9999, qty: 1 }],
+  }, { 'x-client-ip': '4.4.4.4' });
+  const body = await res.json();
+  // 3 noce × 300 + parking 2 szt. (maks.) × 40 × 3 noce + zwierzę 100
+  assert.equal(body.extras_total, 340);
+  assert.equal(body.quoted_price, 900 + 340);
+  await flush();
+  assert.match(sent.find((m) => m.to[0] === 'wlasciciel@x.pl')!.text, /Parking × 2/);
+
+  const out = await (await call('POST', `/api/requests/${body.id}/accept`, {})).json();
+  assert.equal(out.reservation.price, 1240);
+  assert.match(out.reservation.notes, /Opcje dodatkowe: Parking × 2/);
+
+  // edycja i usuwanie
+  assert.equal((await (await call('PUT', `/api/extras/${pet.id}`, { name: 'Pies', price: 120, per: 'stay' })).json()).price, 120);
+  assert.equal((await call('DELETE', `/api/extras/${pet.id}`)).status, 200);
+  assert.equal((await (await call('GET', '/api/extras')).json()).length, 3);
+});
