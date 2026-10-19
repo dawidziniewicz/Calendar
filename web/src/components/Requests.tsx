@@ -22,9 +22,11 @@ export default function Requests({ version, readOnly, focusId, onChanged, onOpen
   const [decided, setDecided] = useState<BookingRequest[]>([]);
   const [showDecided, setShowDecided] = useState(false);
   const [error, setError] = useState('');
+  const [cancels, setCancels] = useState<BookingRequest[]>([]);
 
   useEffect(() => {
     api.requests('pending').then((r) => { setPending(r); setError(''); }).catch((e) => setError(e.message));
+    api.cancellations().then(setCancels).catch(() => {});
     if (showDecided) api.requests('decided').then(setDecided).catch(() => {});
   }, [version, showDecided]);
 
@@ -39,6 +41,12 @@ export default function Requests({ version, readOnly, focusId, onChanged, onOpen
         <p className="muted">Goście wysyłają je przyciskiem <b>Zarezerwuj</b> na odmorzadogor.pl. Po akceptacji rezerwacja trafia do kalendarza, a gość dostaje e-mail z potwierdzeniem.</p>
       </div>
       {error && <div className="banner error">{error}</div>}
+      {cancels.length > 0 && (
+        <div className="cancel-section">
+          <h2 className="cancel-head">Prośby o anulację <span className="count danger">{cancels.length}</span></h2>
+          {cancels.map((r) => <CancelCard key={r.id} r={r} readOnly={readOnly} focused={r.id === focusId} onDone={onChanged} />)}
+        </div>
+      )}
       {pending === null && !error && <p className="muted">Wczytywanie…</p>}
       {pending?.length === 0 && (
         <div className="empty-state">
@@ -69,6 +77,66 @@ export default function Requests({ version, readOnly, focusId, onChanged, onOpen
         </div>
       )) : <p className="empty">Brak rozpatrzonych zapytań.</p>)}
     </section>
+  );
+}
+
+// Gość kliknął „Poproś o anulację” w e-mailu z potwierdzeniem
+function CancelCard({ r, readOnly, focused, onDone }: { r: BookingRequest; readOnly: boolean; focused: boolean; onDone: () => void }) {
+  const [mode, setMode] = useState<'idle' | 'confirm' | 'decline'>('idle');
+  const [note, setNote] = useState('');
+  const [sendEmail, setSendEmail] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await (mode === 'confirm' ? api.cancelConfirm : api.cancelDecline)(r.id, { note, email: sendEmail });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <article id={`request-${r.id}`} className={`request-card cancel-card ${focused ? 'focused' : ''}`}>
+      <div className="request-top">
+        <span className="pill pill-rejected">Prośba o anulację</span>
+        <span className="muted small-meta">{r.cancel_requested_at && when(r.cancel_requested_at)}</span>
+      </div>
+      <div className="request-guest">{r.guest_name}</div>
+      <div className="request-unit">{r.unit_name} <span className="muted">· {r.property_name} · {formatShort(r.check_in)} – {formatShort(r.check_out)}</span></div>
+      {r.cancel_reason ? <p className="request-message">„{r.cancel_reason}”</p> : <p className="muted small-note">Gość nie podał powodu.</p>}
+      <div className="request-contact">
+        {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
+        <a className="btn small" href={`mailto:${r.guest_email}`}>{r.guest_email}</a>
+      </div>
+      {!readOnly && mode === 'idle' && (
+        <div className="request-actions">
+          <button className="btn danger" onClick={() => setMode('confirm')}>Potwierdź anulację</button>
+          <button className="btn" onClick={() => setMode('decline')}>Odrzuć prośbę</button>
+        </div>
+      )}
+      {mode !== 'idle' && (
+        <div className="decision">
+          <h3>{mode === 'confirm' ? 'Anulowanie — rezerwacja zniknie z kalendarza, termin się zwolni' : 'Odrzucenie prośby — rezerwacja zostaje'}</h3>
+          <label>{mode === 'confirm' ? 'Informacja dla gościa (np. zwrot zaliczki)' : 'Wiadomość dla gościa (np. warunki zaliczki)'}
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder={mode === 'confirm' ? 'Zaliczkę zwrócimy w ciągu 7 dni na konto, z którego przyszła.' : 'Zgodnie z warunkami rezerwacji zaliczka jest bezzwrotna, ale możemy przenieść pobyt na inny termin.'} />
+          </label>
+          <label className="check-row">
+            <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} /> Wyślij gościowi e-mail z odpowiedzią
+          </label>
+          {error && <div className="banner error">{error}</div>}
+          <div className="request-actions">
+            <button className={`btn ${mode === 'confirm' ? 'danger' : 'primary'}`} disabled={busy} onClick={submit}>
+              {busy ? 'Zapisywanie…' : mode === 'confirm' ? 'Anuluj rezerwację' : 'Odrzuć prośbę'}
+            </button>
+            <button className="btn" disabled={busy} onClick={() => { setMode('idle'); setError(''); }}>Wróć</button>
+          </div>
+        </div>
+      )}
+    </article>
   );
 }
 

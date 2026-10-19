@@ -62,6 +62,7 @@ export type BookingRequest = {
   decided_by: string | null; decided_at: string | null; decision_note: string; reservation_id: number | null;
   created_at: string; lang: string;
   expired_at: string | null; // termin minął bez decyzji → archiwum
+  cancel_status?: 'requested' | 'confirmed' | 'declined' | null; cancel_requested_at?: string | null; cancel_reason?: string; // prośba gościa o anulację
   extras: string | null; // JSON: wybrane opcje płatne [{ name, price, per, qty, total }]
   group_units: { id: number; name: string; type_name: string; free: boolean }[]; // domki typu do przydziału (pierwszy = proponowany)
   assign_mode?: 'auto' | 'manual';

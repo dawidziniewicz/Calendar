@@ -28,6 +28,22 @@ function migrate(db: DatabaseSync) {
   if (user_version < 11) migrateV11(db);
   if (user_version < 12) migrateV12(db);
   if (user_version < 13) migrateV13(db);
+  if (user_version < 14) migrateV14(db);
+}
+
+// Prośba gościa o anulację (link z e-maila z potwierdzeniem): losowy kod w linku, data i powód prośby, decyzja admina.
+function migrateV14(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE booking_requests ADD COLUMN cancel_token TEXT;
+    ALTER TABLE booking_requests ADD COLUMN cancel_requested_at TEXT;
+    ALTER TABLE booking_requests ADD COLUMN cancel_reason TEXT NOT NULL DEFAULT '';
+    ALTER TABLE booking_requests ADD COLUMN cancel_status TEXT;
+    ALTER TABLE booking_requests ADD COLUMN cancel_note TEXT NOT NULL DEFAULT '';
+    CREATE UNIQUE INDEX booking_requests_cancel_token ON booking_requests(cancel_token) WHERE cancel_token IS NOT NULL;
+    PRAGMA user_version = 14;
+    COMMIT;
+  `);
 }
 
 // Zapytania, których data przyjazdu minęła bez decyzji, trafiają do archiwum (expired_at) — nie wiszą wśród nowych.
