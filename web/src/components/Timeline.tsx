@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import type { Property, Reservation } from '../types';
+import type { Property, Rate, Reservation } from '../types';
 import { SOURCES } from '../types';
 import { getPrefs } from '../prefs';
 import { conflictIds } from '../conflicts';
 import ConflictMark from './ConflictMark';
+import PriceSheet from './PriceSheet';
 import { addDays, addMonths, diffDays, formatMonth, formatShort, formatWeekday, fromIso, isWeekend, today } from '../dates';
 
 type Props = {
@@ -29,6 +30,36 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
   const DAYS = diffDays(start, end);
   const step = rangeMonths === 1 ? 7 : rangeMonths <= 3 ? 14 : 30; // o ile dni przesuwają strzałki
   const now = today();
+  // Tryb „Ceny”: na wolnych dniach cena za noc; stuknięcie w pierwszy i ostatni dzień otwiera edycję cen
+  const [priceMode, setPriceMode] = useState(() => sessionStorageFlag('price-mode'));
+  const [rates, setRates] = useState<Map<string, Rate>>(new Map());
+  const [anchor, setAnchor] = useState<{ unitId: number; date: string } | null>(null);
+  const [editRange, setEditRange] = useState<{ unitId: number; from: string; to: string } | null>(null);
+  const [ratesVersion, setRatesVersion] = useState(0);
+
+  useEffect(() => {
+    if (!priceMode) return;
+    let alive = true;
+    api.rates(start, end)
+      .then((list) => alive && setRates(new Map(list.map((r) => [`${r.unit_id}:${r.date}`, r]))))
+      .catch((e) => alive && setError(e.message));
+    return () => { alive = false; };
+  }, [priceMode, start, end, ratesVersion, version]);
+
+  const togglePriceMode = () => {
+    const next = !priceMode;
+    setPriceMode(next);
+    setAnchor(null);
+    try { sessionStorage.setItem('price-mode', next ? '1' : ''); } catch { /* prywatny tryb */ }
+  };
+
+  const pickPriceDay = (unitId: number, date: string) => {
+    if (anchor && anchor.unitId === unitId) {
+      const [from, to] = anchor.date <= date ? [anchor.date, date] : [date, anchor.date];
+      setEditRange({ unitId, from, to });
+      setAnchor(null);
+    } else setAnchor({ unitId, date });
+  };
 
   useEffect(() => {
     let alive = true;
@@ -97,14 +128,19 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
           />
         </div>
         <div className="toolbar-stats">
-          {loading ? <span className="muted">Wczytywanie…</span> : (
+          {priceMode ? (
+            <span className="muted price-hint">{onCreate ? (anchor ? 'Teraz stuknij ostatni dzień' : 'Stuknij pierwszy dzień, potem ostatni') : 'Ceny za noc'}</span>
+          ) : loading ? <span className="muted">Wczytywanie…</span> : (
             <span>Dziś zajęte: <strong>{occupiedToday}</strong> / {totalUnits}</span>
           )}
+          <button className={`btn price-toggle ${priceMode ? 'active' : ''}`} onClick={togglePriceMode} aria-pressed={priceMode}>
+            <span aria-hidden>zł</span> Ceny
+          </button>
         </div>
       </div>
       {error && <div className="banner error">{error}</div>}
 
-      <div className={`timeline size-${daySize}`} style={{ ['--days' as string]: DAYS }}>
+      <div className={`timeline size-${daySize} ${priceMode ? 'price-mode' : ''}`} style={{ ['--days' as string]: DAYS }}>
         <div className="tl-grid">
           <div className="tl-corner" />
           <div className="tl-months">
@@ -133,6 +169,17 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                   <div className="tl-row" style={{ ['--lanes' as string]: lanes.countOf.get(u.id) ?? 1 }}>
                     {days.map((d) => {
                       const cls = `tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''}`;
+                      if (priceMode) {
+                        const rate = rates.get(`${u.id}:${d}`);
+                        const price = rate?.price ?? u.base_price;
+                        const picked = anchor?.unitId === u.id && anchor.date === d;
+                        const pcls = `${cls} price-cell ${rate?.price != null ? 'custom' : ''} ${rate?.closed ? 'closed' : ''} ${picked ? 'picked' : ''}`;
+                        const label = price == null ? '–' : price >= 10000 ? `${Math.round(price / 1000)}k` : String(Math.round(price));
+                        const title = `${u.name}, ${formatShort(d)}: ${price == null ? 'brak ceny' : `${price} zł`}${rate?.min_nights ? ` · min. ${rate.min_nights} noce` : ''}${rate?.closed ? ' · rezerwacje online zamknięte' : ''}`;
+                        return onCreate
+                          ? <button key={d} className={pcls} onClick={() => pickPriceDay(u.id, d)} title={title} aria-label={title}><span>{label}</span>{rate?.min_nights ? <sup>{rate.min_nights}</sup> : null}</button>
+                          : <div key={d} className={`${pcls} readonly`} title={title}><span>{label}</span></div>;
+                      }
                       return onCreate
                         ? <button key={d} className={cls} onClick={() => onCreate(u.id, d)} aria-label={`Nowa rezerwacja: ${u.name}, ${formatShort(d)}`} />
                         : <div key={d} className={`${cls} readonly`} />;
@@ -171,14 +218,39 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
         </div>
       </div>
 
+      {priceMode ? (
+        <div className="legend">
+          <span><i className="price-base" /> Cena podstawowa</span>
+          <span><i className="price-custom" /> Cena ustawiona na dzień</span>
+          <span><i className="price-closed" /> Rezerwacje online zamknięte</span>
+          <span><sup className="legend-sup">3</sup> Minimalny pobyt</span>
+        </div>
+      ) : (
       <div className="legend">
         <span><i className="src-direct" /> Prywatne</span>
+        <span><i className="src-website" /> Strona www</span>
         <span><i className="src-booking" /> Booking.com</span>
         <span><i className="src-airbnb" /> Airbnb</span>
         <span><i className="st-tentative" /> Wstępna</span>
         <span><ConflictMark /> Konflikt</span>
         <span><i className="arrival-today" /> Przyjazd dziś</span>
       </div>
+      )}
+
+      {editRange && (
+        <PriceSheet
+          properties={properties}
+          unitId={editRange.unitId}
+          from={editRange.from}
+          to={editRange.to}
+          onClose={() => setEditRange(null)}
+          onSaved={() => { setEditRange(null); setRatesVersion((v) => v + 1); }}
+        />
+      )}
     </section>
   );
+}
+
+function sessionStorageFlag(key: string) {
+  try { return sessionStorage.getItem(key) === '1'; } catch { return false; }
 }

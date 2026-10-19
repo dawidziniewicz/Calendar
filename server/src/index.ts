@@ -6,6 +6,7 @@ import { createApp } from './app.ts';
 import { syncAll } from './sync.ts';
 import { dailyArrivalsTick, webPushSender } from './push.ts';
 import { announce, syncEvents } from './changes.ts';
+import { createMailer } from './mail.ts';
 
 const apiKey = process.env.API_KEY ?? '';
 if (apiKey.length < 16) {
@@ -18,7 +19,9 @@ const syncMinutes = Number(process.env.SYNC_INTERVAL_MINUTES ?? 15);
 
 const db = openDb(dbPath);
 const pushSender = webPushSender(db);
-const app = createApp(db, apiKey, pushSender);
+const mailer = createMailer();
+console.log(mailer ? `E-maile: ${mailer.kind}, nadawca ${mailer.from}` : 'E-maile wyłączone (ustaw RESEND_API_KEY albo SMTP_HOST w .env)');
+const app = createApp(db, apiKey, pushSender, mailer);
 
 serve({ fetch: app.fetch, port, hostname: '0.0.0.0' }, (info) => console.log(`API działa na porcie ${info.port}`));
 

@@ -15,26 +15,29 @@ function chunk(type, data) {
   return Buffer.concat([len, td, c]);
 }
 
-const BG = [31, 95, 85], PAPER = [250, 247, 240], ACCENT = [217, 119, 66], GRID = [196, 214, 208];
-const inRect = (x, y, x0, y0, x1, y1, r = 0) => {
-  if (x < x0 || x > x1 || y < y0 || y > y1) return false;
-  const cx = Math.min(Math.max(x, x0 + r), x1 - r), cy = Math.min(Math.max(y, y0 + r), y1 - r);
-  return (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
+// Logo Od Morza do Gór: linia gór nad falą morza, kolory strony (#577267 · #8CA196 · #C1B1A0)
+const BG = [87, 114, 103], CREAM = [245, 241, 234], SAND = [193, 177, 160];
+
+const distSeg = (x, y, [ax, ay], [bx, by]) => {
+  const dx = bx - ax, dy = by - ay;
+  const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(x - (ax + t * dx), y - (ay + t * dy));
 };
+// Ten sam rysunek co logo SVG (viewBox 64): góry 12,38 → 25,19 → 32,28 → 37,22 → 52,38; fala y = 44.5 ± 1.5
+const MOUNTAINS = [[12, 38], [25, 19], [32, 28], [37, 22], [52, 38]].map(([x, y]) => [x / 64, y / 64]);
+const STROKE = 3.6 / 64 / 2;
 
 function pixel(u, v, pad) {
   // u, v w zakresie 0..1; pad zmniejsza rysunek (maskable ma "bezpieczną strefę")
   const s = (t) => (t - pad) / (1 - 2 * pad);
   const x = s(u), y = s(v);
-  if (inRect(x, y, 0.16, 0.2, 0.84, 0.84, 0.07)) {
-    if (y < 0.36) return ACCENT;
-    for (let row = 0; row < 3; row++) for (let col = 0; col < 4; col++) {
-      const x0 = 0.24 + col * 0.14, y0 = 0.44 + row * 0.12;
-      if (inRect(x, y, x0, y0, x0 + 0.09, y0 + 0.07, 0.015)) return row === 1 && col === 2 ? BG : GRID;
-    }
-    return PAPER;
+  for (let i = 0; i < MOUNTAINS.length - 1; i++) if (distSeg(x, y, MOUNTAINS[i], MOUNTAINS[i + 1]) <= STROKE) return CREAM;
+  if (x >= 12 / 64 - STROKE && x <= 52 / 64 + STROKE) {
+    // fala: okres 13.2/64, amplituda 1.5/64 — liczona jako odległość od krzywej (przybliżenie pionowe wystarcza)
+    const wx = Math.min(Math.max(x, 12 / 64), 52 / 64);
+    const wy = 44.5 / 64 + (1.5 / 64) * Math.cos(((wx - 12 / 64) / (13.2 / 64)) * 2 * Math.PI);
+    if (Math.hypot(x - wx, y - wy) <= STROKE * 1.05) return SAND;
   }
-  if (inRect(x, y, 0.3, 0.12, 0.36, 0.28, 0.03) || inRect(x, y, 0.64, 0.12, 0.7, 0.28, 0.03)) return PAPER;
   return BG;
 }
 

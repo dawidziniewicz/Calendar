@@ -1,6 +1,6 @@
 // Service worker: aplikacja otwiera się też przy słabym zasięgu (ostatnia wersja interfejsu z pamięci).
 // Dane z /api nigdy nie są cache'owane.
-const CACHE = 'kalendarz-v3';
+const CACHE = 'kalendarz-v4';
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => {

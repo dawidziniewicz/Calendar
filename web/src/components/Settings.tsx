@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api, type SyncResult } from '../api';
+import { useEffect, useState } from 'react';
+import { api, type EmailSettings, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
 import Notifications from './Notifications';
@@ -88,6 +88,7 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
 
       <button className="add-property" onClick={addProperty}>＋ Dodaj obiekt</button>
 
+      {canManageUsers && <EmailPanel />}
       {canManageUsers && (
         <button type="button" className="panel nav-panel" onClick={onOpenUsers}>
           <span>
@@ -124,7 +125,7 @@ function PropertyPanel({ property: p, run }: { property: Property; run: (fn: () 
       <div className="row end">
         <button className="btn small" onClick={() => {
           const name = prompt(`Nazwa nowego domku/apartamentu w „${p.name}”:`);
-          if (name?.trim()) run(() => api.createUnit({ property_id: p.id, name, capacity: 4, color: '#2f7d6d' }));
+          if (name?.trim()) run(() => api.createUnit({ property_id: p.id, name, capacity: 4, color: '#577267' }));
         }}>＋ Dodaj domek / apartament</button>
         <button className="btn small danger-outline" onClick={() => {
           if (confirm(`Usunąć obiekt „${p.name}” razem z domkami i WSZYSTKIMI ich rezerwacjami?`)) run(() => api.deleteProperty(p.id));
@@ -158,7 +159,8 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
       <button className="unit-summary" onClick={() => setOpen(!open)} aria-expanded={open}>
         <i style={{ background: u.color }} />
         <span className="unit-title">{u.name}</span>
-        <span className="muted">do {u.capacity} os.</span>
+        <span className="muted">do {u.capacity} os.{u.base_price != null && ` · ${u.base_price} zł/noc`}</span>
+        {!u.bookable && <span className="badge">ukryty na stronie</span>}
         {u.feeds.map((f) => (
           <span key={f.id} className={`badge ${f.last_error ? 'bad' : f.last_sync_at ? 'ok' : ''}`}>{SOURCES[f.source] ?? f.source}</span>
         ))}
@@ -173,6 +175,8 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
             <label className="narrow">Kolor<input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></label>
           </div>
           {dirty && <button className="btn primary small" onClick={() => run(() => api.updateUnit(u.id, form))}>Zapisz zmiany</button>}
+
+          <UnitPricing unit={u} run={run} />
 
           <h4>1. Import z Booking.com / Airbnb (zajęte terminy)</h4>
           <p className="muted">W Bookingu przy eksporcie wybierz <b>„zarezerwowane i zamknięte dni”</b>, żeby widzieć też zamknięte terminy.</p>
@@ -217,6 +221,71 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Cena podstawowa za noc, minimalny pobyt i widoczność na odmorzadogor.pl (szczegóły na dni — w kalendarzu, tryb „Ceny”)
+function UnitPricing({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown>) => void }) {
+  const [price, setPrice] = useState(u.base_price == null ? '' : String(u.base_price));
+  const [minNights, setMinNights] = useState(u.min_nights || 1);
+  const [bookable, setBookable] = useState(!!u.bookable);
+  const dirty = price !== (u.base_price == null ? '' : String(u.base_price)) || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable;
+  const save = () => {
+    const n = price.trim() === '' ? null : Number(price.replace(',', '.'));
+    if (n != null && (!Number.isFinite(n) || n < 0)) return alert('Podaj poprawną cenę');
+    run(() => api.saveUnitPricing(u.id, { base_price: n, min_nights: minNights, bookable }));
+  };
+  return (
+    <div className="pricing-box">
+      <h4>Cena i rezerwacje na stronie www</h4>
+      <div className="row">
+        <label>Cena podstawowa za noc (zł)<input inputMode="decimal" placeholder="np. 450" value={price} onChange={(e) => setPrice(e.target.value)} /></label>
+        <label className="narrow">Min. nocy<input type="number" min={1} max={60} value={minNights} onChange={(e) => setMinNights(Math.max(1, Number(e.target.value) || 1))} /></label>
+      </div>
+      <label className="switch-row">
+        <input type="checkbox" checked={bookable} onChange={(e) => setBookable(e.target.checked)} />
+        <span><b>Widoczny na stronie</b><small>Goście widzą ceny i wolne terminy i mogą wysłać zapytanie przyciskiem „Zarezerwuj”</small></span>
+      </label>
+      <p className="muted small-note">Ceny na konkretne dni (sezon, weekendy, święta) ustawisz w Kalendarzu → przycisk <b>Ceny</b>.</p>
+      {dirty && <button className="btn primary small" onClick={save}>Zapisz cenę</button>}
+    </div>
+  );
+}
+
+// Adresy, na które przychodzą e-maile o nowych zapytaniach ze strony (+ test wysyłki)
+function EmailPanel() {
+  const [settings, setSettings] = useState<EmailSettings | null>(null);
+  const [emails, setEmails] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api.emailSettings().then((s) => { setSettings(s); setEmails(s.emails); }).catch(() => {}); }, []);
+  if (!settings) return null;
+  const act = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setMsg(null);
+    try { setMsg({ ok: true, text: await fn() }); } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); } finally { setBusy(false); }
+  };
+  return (
+    <div className="panel">
+      <h2>Powiadomienia e-mail</h2>
+      <p className="muted notif-desc">
+        Nowe zapytania o rezerwację ze strony przychodzą na te adresy. Gość dostaje e-mail z potwierdzeniem otrzymania zapytania, a potem z Twoją decyzją.
+      </p>
+      {!settings.configured && (
+        <div className="banner error">Wysyłka e-maili nie jest skonfigurowana na serwerze — dodaj <code>RESEND_API_KEY</code> (albo dane SMTP) w pliku <code>.env</code> i uruchom ponownie.</div>
+      )}
+      {settings.configured && <p className="muted small-note">Nadawca: {settings.from} ({settings.kind === 'resend' ? 'Resend' : 'SMTP'})</p>}
+      <div className="row">
+        <input className="grow" type="text" inputMode="email" placeholder="kontakt@odmorzadogor.pl, druga@osoba.pl" value={emails} onChange={(e) => setEmails(e.target.value)} />
+        {emails !== settings.emails && (
+          <button className="btn primary small" disabled={busy} onClick={() => act(async () => { const s = await api.saveEmailSettings(emails); setSettings(s); setEmails(s.emails); return 'Zapisano adresy.'; })}>Zapisz</button>
+        )}
+        {settings.configured && emails === settings.emails && settings.emails && (
+          <button className="btn small" disabled={busy} onClick={() => act(async () => { const { sent } = await api.testEmail(); return `Wysłano test na ${sent} ${sent === 1 ? 'adres' : 'adresy'}.`; })}>Wyślij test</button>
+        )}
+      </div>
+      {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
     </div>
   );
 }

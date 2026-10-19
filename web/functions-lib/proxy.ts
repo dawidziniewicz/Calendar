@@ -10,7 +10,7 @@ export interface Env {
 
 export type Ctx = { request: Request; env: Env };
 
-export async function forward({ request, env }: Ctx, withApiKey: boolean): Promise<Response> {
+export async function forward({ request, env }: Ctx, withApiKey: boolean, opts: { publicOnly?: boolean } = {}): Promise<Response> {
   if (!env.API_ORIGIN) return new Response('Brak konfiguracji API_ORIGIN', { status: 500 });
   const url = new URL(request.url);
   const target = new URL(url.pathname + url.search, env.API_ORIGIN);
@@ -22,8 +22,9 @@ export async function forward({ request, env }: Ctx, withApiKey: boolean): Promi
   if (withApiKey) {
     headers.set('x-api-key', env.API_KEY);
     // sesja logowania (ciasteczko), adres IP do blokady zgadywania haseł, https dla flagi Secure
+    // (publiczne API strony www nie dostaje ciasteczek z kalendarza)
     const cookie = request.headers.get('cookie');
-    if (cookie) headers.set('cookie', cookie);
+    if (cookie && !opts.publicOnly) headers.set('cookie', cookie);
     headers.set('x-client-ip', request.headers.get('cf-connecting-ip') ?? '');
     headers.set('x-forwarded-proto', url.protocol.replace(':', ''));
   }
