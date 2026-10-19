@@ -9,6 +9,7 @@ import ReservationSheet from './components/ReservationSheet';
 import Login from './components/Login';
 import ReservationView from './components/ReservationView';
 import UsersPage from './components/UsersPage';
+import PricingPage from './components/PricingPage';
 import ConflictMark from './components/ConflictMark';
 import Requests from './components/Requests';
 import { conflictIds } from './conflicts';
@@ -61,14 +62,16 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const readOnly = user.role === 'viewer';
   const limited = user.properties !== null;
   // Podstrona „Użytkownicy i uprawnienia” (z obsługą przycisku Wstecz / gestu cofania na iPhonie)
-  const [page, setPage] = useState<'main' | 'users'>('main');
+  type Page = 'main' | 'users' | 'pricing';
+  const [page, setPage] = useState<Page>('main');
   useEffect(() => {
-    const onPop = () => setPage(history.state?.page === 'users' ? 'users' : 'main');
+    const onPop = () => setPage(['users', 'pricing'].includes(history.state?.page) ? history.state.page : 'main');
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
-  const openUsers = () => { history.pushState({ page: 'users' }, ''); setPage('users'); window.scrollTo(0, 0); };
-  const closeUsers = () => { if (history.state?.page === 'users') history.back(); else setPage('main'); };
+  const openPage = (p: Page) => { history.pushState({ page: p }, ''); setPage(p); window.scrollTo(0, 0); };
+  const openUsers = () => openPage('users');
+  const closeUsers = () => { if (history.state?.page && history.state.page !== 'main') history.back(); else setPage('main'); };
   const tabs = readOnly ? VIEWER_TABS : limited ? LIMITED_TABS : TABS;
   const [tab, setTab] = useState<Tab>(() => {
     // Kliknięcie w powiadomienie otwiera /?tab=agenda
@@ -128,7 +131,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   }, []);
 
   const selectTab = (t: Tab) => {
-    if (page === 'users') closeUsers();
+    if (page !== 'main') closeUsers();
     setTab(t);
     try { sessionStorage.setItem('tab', t); } catch { /* prywatny tryb */ }
   };
@@ -171,14 +174,15 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         </div>
       )}
 
-      <main className={`content content-${page === 'users' ? 'settings' : tab}`}>
+      <main className={`content content-${page !== 'main' ? 'settings' : tab}`}>
         {page === 'main' && tab === 'calendar' && <Timeline properties={properties} version={version} onSelect={openExisting} onCreate={readOnly ? undefined : openNew} />}
         {page === 'main' && tab === 'requests' && (
           <Requests version={version} readOnly={readOnly} focusId={focusRequest} onChanged={() => setVersion((v) => v + 1)} onOpenReservation={setViewing} />
         )}
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
-        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {page === 'pricing' && <PricingPage properties={properties} canEditHorizon={user.canManageUsers} onBack={closeUsers} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { BookingRequest, Reservation } from '../types';
+import type { BookingRequest, ChosenExtra, Reservation } from '../types';
 import { SOURCES } from '../types';
 import { diffDays, formatShort, nightsLabel } from '../dates';
 
@@ -14,6 +14,7 @@ type Props = {
 
 const zl = (n: number | null) => (n == null ? 'do ustalenia' : `${n.toLocaleString('pl-PL')} zł`);
 const people = (r: BookingRequest) => `${r.adults} dor.${r.children ? ` + ${r.children} dz.` : ''}`;
+const chosenExtras = (r: BookingRequest): ChosenExtra[] => { try { return r.extras ? JSON.parse(r.extras) : []; } catch { return []; } };
 const when = (sqlUtc: string) => new Date(`${sqlUtc.replace(' ', 'T')}Z`).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 export default function Requests({ version, readOnly, focusId, onChanged, onOpenReservation }: Props) {
@@ -119,6 +120,13 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
         <div className="banner error">
           Termin jest już zajęty: {r.conflicts.map((c) => `${c.guest_name || SOURCES[c.source] || c.source} (${formatShort(c.check_in)} – ${formatShort(c.check_out)})`).join(', ')}
         </div>
+      )}
+      {chosenExtras(r).length > 0 && (
+        <ul className="request-extras">
+          {chosenExtras(r).map((e) => (
+            <li key={e.id}><span>{e.name}{e.qty > 1 && ` × ${e.qty}`} <small className="muted">({e.price} zł/{e.per === 'night' ? 'noc' : 'pobyt'})</small></span><b>{zl(e.total)}</b></li>
+          ))}
+        </ul>
       )}
       {r.message && <p className="request-message">{r.message}</p>}
 

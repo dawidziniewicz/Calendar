@@ -1,4 +1,4 @@
-import type { BookingRequest, Draft, Property, Rate, Reservation } from './types';
+import type { BookingRequest, Draft, Extra, Property, Rate, Reservation } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -35,6 +35,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export type PushSettings = { time: string; changes: boolean; requests: boolean };
+export type ExtraInput = { name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: number[] | null; active: boolean };
 export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | null; from: string | null; emails: string };
 /** price/min_nights: liczba = ustaw, null = przywróć ustawienie domku, brak = bez zmian */
 export type RatePatch = { unit_ids: number[]; from: string; to: string; weekdays?: number[]; price?: number | null; min_nights?: number | null; closed?: boolean };
@@ -85,7 +86,12 @@ export const api = {
   reviewCancellation: (id: number) => request<Reservation>('POST', `/reservations/${id}/review-cancellation`),
   rates: (from: string, to: string) => request<Rate[]>('GET', `/rates?from=${from}&to=${to}`),
   saveRates: (patch: RatePatch) => request<{ changed: number }>('PUT', '/rates', patch),
-  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean }) => request('PUT', `/rates/unit/${id}`, p),
+  saveUnitPricing: (id: number, p: { base_price: number | null; min_nights: number; bookable: boolean; weekday_prices?: (number | null)[] }) => request('PUT', `/rates/unit/${id}`, p),
+  extras: () => request<Extra[]>('GET', '/extras'),
+  saveExtra: (e: ExtraInput, id?: number) => (id ? request<Extra>('PUT', `/extras/${id}`, e) : request<Extra>('POST', '/extras', e)),
+  deleteExtra: (id: number) => request('DELETE', `/extras/${id}`),
+  bookingSettings: () => request<{ horizon_days: number; default_days: number }>('GET', '/settings/booking'),
+  saveBookingSettings: (horizon_days: number) => request<{ horizon_days: number; default_days: number }>('PUT', '/settings/booking', { horizon_days }),
   requests: (status: 'pending' | 'decided') => request<BookingRequest[]>('GET', `/requests?status=${status}`),
   acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean }) =>
     request<{ request: BookingRequest; reservation: Reservation; emailed: boolean }>('POST', `/requests/${id}/accept`, body),

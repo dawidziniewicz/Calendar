@@ -6,6 +6,7 @@ import { getPrefs } from '../prefs';
 import { conflictIds } from '../conflicts';
 import ConflictMark from './ConflictMark';
 import PriceSheet from './PriceSheet';
+import { nightPrice } from '../pricing';
 import { addDays, addMonths, diffDays, formatMonth, formatShort, formatWeekday, fromIso, isWeekend, today } from '../dates';
 
 type Props = {
@@ -171,7 +172,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
                       const cls = `tl-cell ${isWeekend(d) ? 'weekend' : ''} ${d === now ? 'today' : ''}`;
                       if (priceMode) {
                         const rate = rates.get(`${u.id}:${d}`);
-                        const price = rate?.price ?? u.base_price;
+                        const price = nightPrice(u, d, rate);
                         const picked = anchor?.unitId === u.id && anchor.date === d;
                         const pcls = `${cls} price-cell ${rate?.price != null ? 'custom' : ''} ${rate?.closed ? 'closed' : ''} ${picked ? 'picked' : ''}`;
                         const label = price == null ? '–' : price >= 10000 ? `${Math.round(price / 1000)}k` : String(Math.round(price));
@@ -220,7 +221,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
 
       {priceMode ? (
         <div className="legend">
-          <span><i className="price-base" /> Cena podstawowa</span>
+          <span><i className="price-base" /> Cena podstawowa / dnia tygodnia</span>
           <span><i className="price-custom" /> Cena ustawiona na dzień</span>
           <span><i className="price-closed" /> Rezerwacje online zamknięte</span>
           <span><sup className="legend-sup">3</sup> Minimalny pobyt</span>

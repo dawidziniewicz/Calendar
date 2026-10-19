@@ -2,6 +2,7 @@ export type Feed = { id: number; unit_id: number; source: string; url: string; l
 export type Unit = {
   id: number; property_id: number; name: string; capacity: number; color: string; sort: number; export_token: string; feeds: Feed[];
   base_price: number | null; min_nights: number; bookable: number; // cennik i rezerwacje ze strony www
+  weekday_prices: string | null; // JSON: 7 cen od niedzieli, null = cena podstawowa
 };
 export type Property = { id: number; name: string; location: string; address: string; sort: number; units: Unit[] };
 export type Status = 'confirmed' | 'tentative' | 'cancelled';
@@ -55,5 +56,13 @@ export type BookingRequest = {
   adults: number; children: number; message: string; quoted_price: number | null; status: RequestStatus;
   decided_by: string | null; decided_at: string | null; decision_note: string; reservation_id: number | null;
   created_at: string; lang: string;
+  extras: string | null; // JSON: wybrane opcje płatne [{ name, price, per, qty, total }]
   conflicts: { id: number; check_in: string; check_out: string; guest_name: string; source: string }[];
 };
+
+/** Opcja płatna (parking, zwierzę…) do wyboru przez gościa przy zapytaniu ze strony. */
+export type Extra = {
+  id: number; name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number;
+  property_ids: string | null; active: number; sort: number;
+};
+export type ChosenExtra = { id: number; name: string; price: number; per: 'stay' | 'night'; qty: number; total: number };
