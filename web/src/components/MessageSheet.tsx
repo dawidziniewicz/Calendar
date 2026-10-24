@@ -3,6 +3,7 @@ import { api, type MessageInput } from '../api';
 import type { MessageKind, Reservation } from '../types';
 import { today } from '../dates';
 import NumInput from './NumInput';
+import { currencySymbol } from '../money';
 
 export const MESSAGE_LABELS: Record<MessageKind, string> = {
   deposit: 'Prośba o zaliczkę',
@@ -124,14 +125,14 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
               <fieldset>
                 {(payment || kind === 'received') && (
                   <>
-                    <label>{kind === 'received' ? 'Otrzymana kwota (zł)' : 'Kwota (zł)'}<NumInput value={amount} onChange={setAmount} /></label>
+                    <label>{kind === 'received' ? 'Otrzymana kwota' : 'Kwota'} ({currencySymbol(r.currency)})<NumInput value={amount} onChange={setAmount} /></label>
                     {payment && <label>Termin wpłaty<input type="date" value={due} min={today()} onChange={(e) => setDue(e.target.value)} /></label>}
                   </>
                 )}
                 {payment && (
                   <label className="full">Tytuł przelewu<input value={title} onChange={(e) => { edited.current.title = true; setTitle(e.target.value); }} /></label>
                 )}
-                {payment && !hasAccount && <p className="full warn">Brak numeru konta — uzupełnij w Ustawienia → Płatności i rachunki, inaczej e-mail nie będzie miał danych do przelewu.</p>}
+                {payment && !hasAccount && <p className="full warn">Brak numeru konta i Revolutu — uzupełnij w Ustawienia → Płatności i rachunki, inaczej e-mail nie będzie miał danych do płatności.</p>}
                 <label>Język
                   <select value={lang} onChange={(e) => { edited.current = { subject: false, body: false, title: false }; setLang(e.target.value as 'pl' | 'en'); }}>
                     <option value="pl">polski</option><option value="en">angielski</option>

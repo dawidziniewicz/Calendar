@@ -3,6 +3,8 @@ import { api } from '../api';
 import type { Invoice, InvoiceData, InvoiceItem } from '../types';
 import PdfPreview from './PdfPreview';
 import NumInput from './NumInput';
+import SignaturePad from './SignaturePad';
+import { CURRENCIES, currencySymbol, fmt } from '../money';
 import { useWide } from './useWide';
 
 type Props = {
@@ -13,12 +15,12 @@ type Props = {
   onChanged: () => void;
 };
 
-const money = (n: number) => `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
 const PAYMENT_METHODS = ['przelew', 'gotówka', 'karta', 'BLIK'];
 
 // Rachunek: edycja (wszystkie pola opcjonalne) + podgląd PDF A4; po zapisaniu — pobranie, udostępnienie, wysyłka e-mailem.
 export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onClose, onChanged }: Props) {
   const [inv, setInv] = useState<InvoiceData | null>(null);
+  const [signing, setSigning] = useState<'seller' | 'buyer' | null>(null);
   const [saved, setSaved] = useState<Invoice | null>(null);
   const [mode, setMode] = useState<'edit' | 'view'>(invoiceId ? 'view' : 'edit');
   const [tab, setTab] = useState<'form' | 'preview'>('form');
@@ -45,10 +47,11 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
   }, [invoiceId, reservationId]);
 
   useEffect(() => {
+    if (signing) return; // Escape zamyka najpierw pole do podpisu
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, signing]);
 
   // Podgląd: zapisany rachunek z serwera, wersja robocza na żywo (z opóźnieniem po pisaniu)
   const previewVisible = mode === 'view' || wide || tab === 'preview';
@@ -82,6 +85,15 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
   const setSeller = (k: keyof InvoiceData['seller'], v: string) => setInv({ ...inv, seller: { ...inv.seller, [k]: v } });
   const setBuyer = (k: keyof InvoiceData['buyer'], v: string) => setInv({ ...inv, buyer: { ...inv.buyer, [k]: v } });
   const setItem = (i: number, patch: Partial<InvoiceItem>) => setInv({ ...inv, items: inv.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
+  const money = (n: number) => fmt(n, inv.currency, true);
+  // zmiana waluty nowego rachunku: konto z ustawień dla tej waluty (EUR → konto walutowe)
+  const changeCurrency = async (c: string) => {
+    if (saved) { set('currency', c); return; }
+    try {
+      const d = await api.invoiceDraft(reservationId, c);
+      setInv({ ...inv, currency: c, seller: { ...inv.seller, account: d.seller.account, bank: d.seller.bank } });
+    } catch { set('currency', c); }
+  };
   const total = inv.items.reduce((s, it) => s + Math.round(it.qty * it.price * 100) / 100, 0);
 
   const save = async () => {
@@ -93,6 +105,26 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
       setInv(res);
       setMode('view');
       setInfo(saved ? 'Zapisano zmiany.' : `Wystawiono rachunek nr ${res.number}.`);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Podpis palcem: w edycji trafia do formularza, w podglądzie zapisuje się od razu (np. gość podpisuje przy wymeldowaniu)
+  const applySignature = async (who: 'seller' | 'buyer', png: string) => {
+    setSigning(null);
+    const key = who === 'seller' ? 'seller_signature' : 'buyer_signature';
+    if (mode === 'edit' || !saved) { setInv({ ...inv, [key]: png }); return; }
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.saveInvoice({ ...saved, [key]: png, save_template: false }, saved.id);
+      setSaved(res);
+      setInv(res);
+      setInfo(who === 'buyer' ? 'Dodano podpis gościa.' : 'Dodano Twój podpis.');
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -182,7 +214,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                     <label className="item-name">Nazwa usługi<textarea rows={2} value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} /></label>
                     <label>Ilość<NumInput value={it.qty} onChange={(v) => setItem(i, { qty: v ?? 0 })} /></label>
                     <label>J.m.<input value={it.unit} onChange={(e) => setItem(i, { unit: e.target.value })} placeholder="usł." /></label>
-                    <label>Cena (zł)<NumInput value={it.price} onChange={(v) => setItem(i, { price: v ?? 0 })} /></label>
+                    <label>Cena ({currencySymbol(inv.currency)})<NumInput value={it.price} onChange={(v) => setItem(i, { price: v ?? 0 })} /></label>
                     <div className="item-total"><small className="muted">Wartość</small><b>{money(Math.round(it.qty * it.price * 100) / 100)}</b></div>
                     {inv.items.length > 1 && <button type="button" className="link danger-link item-remove" onClick={() => set('items', inv.items.filter((_, j) => j !== i))}>Usuń</button>}
                   </div>
@@ -200,7 +232,12 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                   <datalist id="pay-methods">{PAYMENT_METHODS.map((m) => <option key={m} value={m} />)}</datalist>
                 </label>
                 <label>Termin płatności<input type="date" value={inv.payment_due} onChange={(e) => set('payment_due', e.target.value)} /></label>
-                <label>Zapłacono (zł)<NumInput value={inv.paid} onChange={(v) => set('paid', v)} placeholder="puste = nie pokazuj" /></label>
+                <label>Waluta
+                  <select value={inv.currency} onChange={(e) => changeCurrency(e.target.value)}>
+                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+                <label>Zapłacono ({currencySymbol(inv.currency)})<NumInput value={inv.paid} onChange={(v) => set('paid', v)} placeholder="puste = nie pokazuj" /></label>
                 {inv.paid !== total && <button type="button" className="chip paid-chip" onClick={() => set('paid', total)}>✓ Zapłacone w całości</button>}
               </fieldset>
 
@@ -220,6 +257,19 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                     <label>Bank<input value={inv.seller.bank} onChange={(e) => setSeller('bank', e.target.value)} /></label>
                   </>
                 )}
+              </fieldset>
+
+              <fieldset>
+                <legend>Podpisy</legend>
+                <label className="check-row full">
+                  <input type="checkbox" checked={inv.signatures} onChange={(e) => set('signatures', e.target.checked)} />
+                  Pola na podpisy na rachunku
+                </label>
+                <SignatureRow label="Podpis wystawcy" note={saveTemplate ? 'zapamięta się w szablonie' : undefined} value={inv.seller_signature}
+                  onSign={() => setSigning('seller')} onClear={() => set('seller_signature', '')} />
+                <SignatureRow label="Podpis odbiorcy (gościa)" value={inv.buyer_signature}
+                  onSign={() => setSigning('buyer')} onClear={() => set('buyer_signature', '')} />
+                {!inv.signatures && <p className="full muted">Bez pól na podpisy — złożony podpis i tak pojawi się na rachunku.</p>}
               </fieldset>
 
               <fieldset>
@@ -248,6 +298,12 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                     <button type="button" className="btn" disabled={!blob} onClick={share}>Udostępnij / drukuj</button>
                     {saved?.reservation_id && <button type="button" className="btn primary" onClick={() => setSendTo(sendTo == null ? guestEmail ?? '' : null)}>Wyślij gościowi</button>}
                   </div>
+                  {saved && (
+                    <div className="invoice-buttons sign-buttons">
+                      <button type="button" className="btn small" disabled={busy} onClick={() => setSigning('buyer')}>✍ {saved.buyer_signature ? 'Podpisz ponownie (gość)' : 'Podpis gościa'}</button>
+                      <button type="button" className="btn small" disabled={busy} onClick={() => setSigning('seller')}>✍ {saved.seller_signature ? 'Podpisz ponownie (Ty)' : 'Mój podpis'}</button>
+                    </div>
+                  )}
                   {sendTo != null && (
                     <div className="send-row">
                       <label>Adres e-mail<input type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="e-mail gościa" /></label>
@@ -261,6 +317,29 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
             </div>
           )}
         </div>
+      </div>
+      {signing && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <SignaturePad
+            title={signing === 'buyer' ? 'Podpis odbiorcy (gościa)' : 'Podpis wystawcy'}
+            hint={signing === 'buyer' ? 'Podaj telefon gościowi — podpis pojawi się nad linią „osoby upoważnionej do odbioru”.' : undefined}
+            onCancel={() => setSigning(null)}
+            onSave={(png) => applySignature(signing, png)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignatureRow({ label, note, value, onSign, onClear }: { label: string; note?: string; value: string; onSign: () => void; onClear: () => void }) {
+  return (
+    <div className="sig-row full">
+      <div className="sig-row-head"><span>{label}</span>{note && value && <small className="muted">{note}</small>}</div>
+      {value ? <img className="sig-preview" src={value} alt={label} /> : <div className="sig-empty">brak podpisu</div>}
+      <div className="sig-row-actions">
+        <button type="button" className="btn small" onClick={onSign}>✍ {value ? 'Podpisz ponownie' : 'Podpisz palcem'}</button>
+        {value && <button type="button" className="link danger-link" onClick={onClear}>Usuń</button>}
       </div>
     </div>
   );

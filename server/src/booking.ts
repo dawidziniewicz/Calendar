@@ -342,7 +342,8 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
 }
 
 /** Odpowiedź do gościa po decyzji (akceptacja / odrzucenie). */
-export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined, r: RequestRow, accepted: boolean, price: number | null, extraRows: MailRow[] = []) {
+export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined, r: RequestRow, accepted: boolean, price: number | null, extraRows: MailRow[] = [],
+  images: { src: string; caption: string; href?: string }[] = []) {
   if (!mailer) return false;
   const u = unitInfo(db, r.unit_id);
   const t = txt(r);
@@ -354,6 +355,7 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
         title: t.okTitle,
         intro: [t.hello(firstName(r.guest_name)), t.okIntro],
         rows: [...stayRows(db, r, price, t), ...extraRows, ...(u.address ? [[t.address, u.address] as MailRow] : [])],
+        images,
         note: r.decision_note ? { label: t.fromUs, text: r.decision_note } : undefined,
         outro: t.okOutro,
         link: r.cancel_token ? { text: t.cancelText, label: t.cancelLabel, url: `${siteUrl()}${t.cancelPath}?t=${r.cancel_token}` } : undefined,

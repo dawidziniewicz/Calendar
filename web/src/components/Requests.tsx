@@ -5,6 +5,7 @@ import { SOURCES } from '../types';
 import { addDays, diffDays, formatShort, nightsLabel, today } from '../dates';
 import OfferSheet from './OfferSheet';
 import NumInput from './NumInput';
+import { fmt } from '../money';
 
 type Props = {
   version: number;
@@ -227,7 +228,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
 
       {offer && (
         <div className={`offer-status offer-${offer.expired ? 'expired' : offer.status}`}>
-          <b>Oferta {zl(offer.price)}{offer.deposit ? ` · zaliczka ${zl(offer.deposit)}` : ''}</b>
+          <b>Oferta {fmt(offer.price, offer.currency)}{offer.deposit ? ` · zaliczka ${fmt(offer.deposit, offer.currency)}` : ''}</b>
           <span>
             {offer.expired ? 'wygasła' : { sent: 'wysłana — czeka na akceptację gościa', accepted: 'zaakceptowana ✓', declined: 'gość odrzucił', withdrawn: 'wycofana' }[offer.status]}
             {offer.status === 'sent' && offer.valid_until && !offer.expired ? ` (ważna do ${formatShort(offer.valid_until)})` : ''}
@@ -251,7 +252,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
       )}
       {offerOpen && (
         <OfferSheet
-          target={{ kind: 'request', id: r.id, price: r.quoted_price, checkIn: r.check_in, email: r.guest_email, phone: r.guest_phone, lang: r.lang, guest: r.guest_name }}
+          target={{ kind: 'request', currency: 'PLN', id: r.id, price: r.quoted_price, checkIn: r.check_in, email: r.guest_email, phone: r.guest_phone, lang: r.lang, guest: r.guest_name }}
           onClose={() => { setOfferOpen(false); onDone(); }}
           onSent={() => {}}
         />

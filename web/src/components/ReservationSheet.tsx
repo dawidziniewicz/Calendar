@@ -3,6 +3,7 @@ import { api, ApiError, type Guest } from '../api';
 import type { Draft, Property, Reservation, Status } from '../types';
 import { SOURCES, STATUS_LABELS } from '../types';
 import { addDays, diffDays, formatShort, nightsLabel } from '../dates';
+import { CURRENCIES, currencySymbol } from '../money';
 
 type Props = { draft: Draft; properties: Property[]; onClose: () => void; onSaved: (saved: Reservation | null) => void };
 type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
@@ -192,20 +193,26 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
               </select>
             </label>
             <label>
-              Cena (zł)
+              Cena ({currencySymbol(r.currency)})
               <input inputMode="decimal" value={r.price ?? ''} onChange={(e) => numberField('price', e.target.value)} />
             </label>
             <label>
-              Wpłacono (zł)
+              Wpłacono ({currencySymbol(r.currency)})
               <input inputMode="decimal" value={r.paid ?? ''} onChange={(e) => numberField('paid', e.target.value)} />
             </label>
             <label>
-              Zaliczka (zł)
+              Zaliczka ({currencySymbol(r.currency)})
               <input inputMode="decimal" value={r.deposit ?? ''} placeholder="brak" onChange={(e) => numberField('deposit', e.target.value)} />
             </label>
             <label>
               Zaliczka do
               <input type="date" value={r.deposit_due ?? ''} disabled={!r.deposit} onChange={(e) => set('deposit_due', e.target.value || null)} />
+            </label>
+            <label>
+              Waluta
+              <select value={r.currency ?? 'PLN'} onChange={(e) => set('currency', e.target.value)}>
+                {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
             </label>
             <label>
               Język e-maili do gościa

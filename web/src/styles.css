@@ -713,3 +713,25 @@ fieldset.plain { padding: 0; background: none; margin-bottom: 12px; }
 .offer-done h3 { text-transform: none; letter-spacing: 0; font-size: 1.1rem; color: var(--ink); }
 .invoice-buttons a.btn, .share-buttons a.btn { color: var(--ink); }
 .payments-page .special-head { border-top: 0; margin-top: 0; padding-top: 0; }
+
+/* ---- Podpis palcem ---- */
+.sig-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.sig-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--ink); font-weight: 600; font-size: 0.88rem; }
+.sig-preview { display: block; max-width: 100%; height: 64px; object-fit: contain; object-position: left center; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
+.sig-empty { height: 64px; display: grid; place-items: center; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 0.85rem; }
+.sig-row-actions { display: flex; gap: 10px; align-items: center; }
+.sign-buttons { margin-top: 8px; }
+.sig-overlay { position: fixed; z-index: 80; inset: 0; top: var(--vv-top, 0px); height: var(--vv-height, 100%); bottom: auto; background: rgba(10, 16, 14, 0.6); display: flex; align-items: center; justify-content: center; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+.sig-box { width: 100%; max-width: 760px; max-height: 100%; display: flex; flex-direction: column; background: var(--bg); border-radius: 16px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+.sig-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.sig-head h2 { margin: 0; font-size: 1rem; }
+.sig-area { position: relative; margin: 14px; height: min(46vh, 300px); min-height: 160px; background: #fff; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; }
+.sig-area canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; z-index: 1; }
+.sig-line { position: absolute; left: 7%; right: 7%; bottom: 26%; border-bottom: 1.5px dashed #c1b1a0; }
+.sig-placeholder { position: absolute; left: 0; right: 0; bottom: calc(26% + 12px); text-align: center; color: #a0a8a3; font-size: 1rem; pointer-events: none; }
+.sig-hint { margin: 0 16px; font-size: 0.82rem; color: var(--muted); }
+.sig-actions { display: flex; gap: 10px; padding: 12px 14px 16px; }
+.sig-actions .btn { flex: 1; min-height: 46px; }
+@media (orientation: landscape) and (max-height: 500px) { .sig-area { height: calc(var(--vv-height, 100vh) - 150px); margin: 8px 12px; } .sig-hint { display: none; } .sig-actions { padding: 8px 12px; } }
+.foreign-account { padding: 10px 0; border-top: 1px solid var(--line); border-radius: 0; }
+.revolut-title { margin-top: 18px; }
