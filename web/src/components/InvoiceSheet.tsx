@@ -4,6 +4,7 @@ import type { Invoice, InvoiceData, InvoiceItem } from '../types';
 import PdfPreview from './PdfPreview';
 import NumInput from './NumInput';
 import SignaturePad from './SignaturePad';
+import { CURRENCIES, currencySymbol, fmt } from '../money';
 import { useWide } from './useWide';
 
 type Props = {
@@ -14,7 +15,6 @@ type Props = {
   onChanged: () => void;
 };
 
-const money = (n: number) => `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
 const PAYMENT_METHODS = ['przelew', 'gotówka', 'karta', 'BLIK'];
 
 // Rachunek: edycja (wszystkie pola opcjonalne) + podgląd PDF A4; po zapisaniu — pobranie, udostępnienie, wysyłka e-mailem.
@@ -85,6 +85,15 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
   const setSeller = (k: keyof InvoiceData['seller'], v: string) => setInv({ ...inv, seller: { ...inv.seller, [k]: v } });
   const setBuyer = (k: keyof InvoiceData['buyer'], v: string) => setInv({ ...inv, buyer: { ...inv.buyer, [k]: v } });
   const setItem = (i: number, patch: Partial<InvoiceItem>) => setInv({ ...inv, items: inv.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
+  const money = (n: number) => fmt(n, inv.currency, true);
+  // zmiana waluty nowego rachunku: konto z ustawień dla tej waluty (EUR → konto walutowe)
+  const changeCurrency = async (c: string) => {
+    if (saved) { set('currency', c); return; }
+    try {
+      const d = await api.invoiceDraft(reservationId, c);
+      setInv({ ...inv, currency: c, seller: { ...inv.seller, account: d.seller.account, bank: d.seller.bank } });
+    } catch { set('currency', c); }
+  };
   const total = inv.items.reduce((s, it) => s + Math.round(it.qty * it.price * 100) / 100, 0);
 
   const save = async () => {
@@ -205,7 +214,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                     <label className="item-name">Nazwa usługi<textarea rows={2} value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} /></label>
                     <label>Ilość<NumInput value={it.qty} onChange={(v) => setItem(i, { qty: v ?? 0 })} /></label>
                     <label>J.m.<input value={it.unit} onChange={(e) => setItem(i, { unit: e.target.value })} placeholder="usł." /></label>
-                    <label>Cena (zł)<NumInput value={it.price} onChange={(v) => setItem(i, { price: v ?? 0 })} /></label>
+                    <label>Cena ({currencySymbol(inv.currency)})<NumInput value={it.price} onChange={(v) => setItem(i, { price: v ?? 0 })} /></label>
                     <div className="item-total"><small className="muted">Wartość</small><b>{money(Math.round(it.qty * it.price * 100) / 100)}</b></div>
                     {inv.items.length > 1 && <button type="button" className="link danger-link item-remove" onClick={() => set('items', inv.items.filter((_, j) => j !== i))}>Usuń</button>}
                   </div>
@@ -223,7 +232,12 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                   <datalist id="pay-methods">{PAYMENT_METHODS.map((m) => <option key={m} value={m} />)}</datalist>
                 </label>
                 <label>Termin płatności<input type="date" value={inv.payment_due} onChange={(e) => set('payment_due', e.target.value)} /></label>
-                <label>Zapłacono (zł)<NumInput value={inv.paid} onChange={(v) => set('paid', v)} placeholder="puste = nie pokazuj" /></label>
+                <label>Waluta
+                  <select value={inv.currency} onChange={(e) => changeCurrency(e.target.value)}>
+                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+                <label>Zapłacono ({currencySymbol(inv.currency)})<NumInput value={inv.paid} onChange={(v) => set('paid', v)} placeholder="puste = nie pokazuj" /></label>
                 {inv.paid !== total && <button type="button" className="chip paid-chip" onClick={() => set('paid', total)}>✓ Zapłacone w całości</button>}
               </fieldset>
 

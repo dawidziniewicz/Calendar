@@ -86,6 +86,8 @@ export type MailContent = {
   note?: { label: string; text: string };
   button?: { label: string; url: string };
   outro?: string[];
+  /** Obrazki pod danymi (kody QR do płatności), opcjonalnie z linkiem */
+  images?: { src: string; caption: string; href?: string }[];
   /** Dyskretny link pod treścią (np. „Poproś o anulację”) */
   link?: { text: string; label: string; url: string };
 };
@@ -101,6 +103,12 @@ export function renderMail(c: MailContent, lang: 'pl' | 'en' = 'pl'): { html: st
     ? `<div style="margin:0 0 20px;padding:14px 16px;border-left:3px solid #8CA196;background:#f1f4f2;border-radius:0 10px 10px 0">
         <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#577267;font-weight:700;margin-bottom:4px">${esc(c.note.label)}</div>
         <div style="font-size:15px;line-height:1.55;color:#1f2a25">${esc(c.note.text).replace(/\n/g, '<br>')}</div></div>` : '';
+  const images = c.images?.length
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px"><tr>${c.images.map((im) => {
+        const img = `<img src="${esc(im.src)}" width="150" height="150" alt="${esc(im.caption)}" style="display:block;width:150px;height:150px;border:1px solid #e6dfd5;border-radius:10px">`;
+        return `<td align="center" valign="top" style="padding:0 14px 0 0">${im.href ? `<a href="${esc(im.href)}">${img}</a>` : img}
+          <div style="margin-top:6px;font-size:12px;color:#6b776f;max-width:150px">${im.href ? `<a href="${esc(im.href)}" style="color:#577267;font-weight:600">${esc(im.caption)}</a>` : esc(im.caption)}</div></td>`;
+      }).join('')}</tr></table>` : '';
   const button = c.button
     ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:4px 0 22px"><tr><td style="border-radius:999px;background:#577267">
         <a href="${esc(c.button.url)}" style="display:inline-block;padding:13px 26px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none">${esc(c.button.label)}</a></td></tr></table>` : '';
@@ -112,7 +120,7 @@ export function renderMail(c: MailContent, lang: 'pl' | 'en' = 'pl'): { html: st
     <tr><td style="padding:0 6px 16px;font-family:Georgia,'Times New Roman',serif;font-size:20px;color:#577267;letter-spacing:.01em">Od Morza do Gór</td></tr>
     <tr><td style="background:#ffffff;border-radius:18px;padding:30px 28px 12px;border-top:5px solid #577267">
       <h1 style="margin:0 0 16px;font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:25px;line-height:1.25;color:#1f2a25">${esc(c.title)}</h1>
-      ${c.intro.map(p).join('')}${rows}${note}${button}${(c.outro ?? []).map(p).join('')}
+      ${c.intro.map(p).join('')}${rows}${images}${note}${button}${(c.outro ?? []).map(p).join('')}
       ${c.link ? `<p style="margin:4px 0 18px;padding-top:14px;border-top:1px solid #ece6dd;font-size:13px;line-height:1.6;color:#6b776f">${esc(c.link.text)} <a href="${esc(c.link.url)}" style="color:#577267;font-weight:600">${esc(c.link.label)}</a></p>` : ''}
     </td></tr>
     <tr><td style="padding:18px 6px;font-size:12px;line-height:1.6;color:#7d877f">

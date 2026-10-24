@@ -32,6 +32,19 @@ function migrate(db: DatabaseSync) {
   if (user_version < 15) migrateV15(db);
   if (user_version < 16) migrateV16(db);
   if (user_version < 17) migrateV17(db);
+  if (user_version < 18) migrateV18(db);
+}
+
+// Waluty: rezerwacja, oferta i rachunek mogą być w PLN, EUR, GBP… (ceny na stronie zawsze w PLN)
+function migrateV18(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE reservations ADD COLUMN currency TEXT NOT NULL DEFAULT 'PLN';
+    ALTER TABLE offers ADD COLUMN currency TEXT NOT NULL DEFAULT 'PLN';
+    ALTER TABLE invoices ADD COLUMN currency TEXT NOT NULL DEFAULT 'PLN';
+    PRAGMA user_version = 18;
+    COMMIT;
+  `);
 }
 
 // Rachunki: pola na podpisy (opcjonalne) i podpisy złożone palcem w aplikacji (PNG jako data URL).

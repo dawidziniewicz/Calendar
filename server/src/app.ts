@@ -19,7 +19,9 @@ import {
 import {
   composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
   plusDays, MESSAGE_KINDS, PAYMENT_SETTINGS_KEY, type MessageKind, type OfferRow, type Stay,
+  setQrKey, titleRange, paymentQrs, accountFor, readCurrency, money as fmtMoney, revolutLink, depositImages,
 } from './payments.ts';
+import { epcPayload, plBankPayload, qrFromPath, qrPng } from './qr.ts';
 import {
   autoFooter, readSignature, invoiceData, invoiceFileName, invoiceSettings, itemsTotal, nextInvoiceNumber, readInvoiceSettings, readItems, readParty, renderInvoicePdf,
   INVOICE_SETTINGS_KEY, type InvoiceData, type InvoiceRow,
@@ -50,6 +52,7 @@ const warsawToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Eu
 
 export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender, mailer?: Mailer) {
   const app = new Hono();
+  setQrKey(apiKey);
   const all = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).all(...p);
   const get = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).get(...p);
   const run = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).run(...p);
@@ -261,16 +264,24 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     return c.json({ ok: true, state: 'requested' });
   });
 
+  // ---- Kody QR do płatności (podpisany adres z e-maila / strony oferty) ----
+  pub.get('/qr/:file', async (c) => {
+    const data = c.req.param('file').replace(/\.png$/, '');
+    const payload = qrFromPath(apiKey, data, str(c.req.query('s'), 40));
+    if (!payload) return c.text('Not found', 404);
+    return c.body(new Uint8Array(await qrPng(payload)), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+  });
+
   // ---- Oferta cenowa: gość akceptuje cenę z obowiązkiem zapłaty (link z e-maila: /oferta/?t=KOD) ----
   const offerByToken = (token: string) => (/^[a-f0-9]{48}$/.test(token) ? get('SELECT * FROM offers WHERE token = ?', token) as OfferRow | undefined : undefined);
   /** Pobyt, którego dotyczy oferta (zapytanie albo rezerwacja) z ceną i zaliczką z oferty */
   const offerStay = (o: OfferRow): (Stay & { request?: RequestRow; reservation?: Record<string, unknown> }) | null => {
     if (o.request_id) {
       const r = get('SELECT * FROM booking_requests WHERE id = ?', o.request_id) as RequestRow | undefined;
-      return r ? { ...r, unit_id: o.unit_id ?? r.unit_id, lang: o.lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, paid: 0, request: r } : null;
+      return r ? { ...r, unit_id: o.unit_id ?? r.unit_id, lang: o.lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, paid: 0, currency: o.currency, request: r } : null;
     }
     const res = o.reservation_id ? get('SELECT * FROM reservations WHERE id = ?', o.reservation_id) as Record<string, unknown> | undefined : undefined;
-    return res ? { ...(res as unknown as Stay), lang: o.lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, reservation: res } : null;
+    return res ? { ...(res as unknown as Stay), lang: o.lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, currency: o.currency, reservation: res } : null;
   };
   const offerState = (o: OfferRow, st: ReturnType<typeof offerStay>) => {
     if (o.status !== 'sent') return o.status;
@@ -292,13 +303,19 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       property: u?.property ?? '', unit: u ? (en && u.type_name_en) || u.type_name || u.name : '',
       check_in: st?.check_in ?? null, check_out: st?.check_out ?? null, adults: st?.adults ?? 0, children: st?.children ?? 0,
       extras: st ? extrasLines(parseChosenExtras(st.extras), en ? 'en' : 'pl') : [],
-      price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, valid_until: o.valid_until, message: o.message,
+      price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, valid_until: o.valid_until, message: o.message, currency: o.currency,
       terms: (en && ps.terms_en) || ps.terms, decided_at: o.decided_at,
-      // dane do przelewu dopiero po akceptacji
-      payment: state === 'accepted' && ps.account_number ? {
-        account_number: ps.account_number, account_name: ps.account_name, bank_name: ps.bank_name,
-        title: st ? `${en ? 'Deposit' : 'Zaliczka'} – ${st.guest_name}, ${dateRange(st.check_in, st.check_out)}` : '',
-      } : null,
+      // dane do płatności dopiero po akceptacji: konto w walucie oferty, Revolut, kody QR
+      payment: state === 'accepted' ? (() => {
+        const acc = accountFor(ps, o.currency);
+        const title = st ? `${en ? 'Deposit' : 'Zaliczka'} – ${st.guest_name}, ${titleRange(st.check_in, st.check_out, en ? 'en' : 'pl')}` : '';
+        const revolut = revolutLink(ps);
+        if (!acc && !revolut) return null;
+        return {
+          account_number: acc?.account_number ?? '', account_name: acc?.account_name ?? '', bank_name: acc?.bank_name ?? '', bic: acc?.bic ?? '',
+          title, revolut, qr: o.deposit ? paymentQrs(ps, { amount: o.deposit, currency: o.currency, title }) : paymentQrs(ps, { amount: null, currency: o.currency, title }),
+        };
+      })() : null,
     };
   };
   pub.get('/offer', (c) => {
@@ -351,18 +368,18 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
         return c.json({ error: t('Niestety ten termin został właśnie zajęty. Skontaktujemy się z Tobą.', 'Unfortunately these dates have just been booked. We will contact you.'), code: 'unavailable' }, 409);
       }
       const made = reservationFromRequest(r, unitId, o.price, {
-        by: 'gość (akceptacja oferty)', note: o.message, deposit: o.deposit, deposit_due: o.deposit_due,
-        extraNote: `Gość zaakceptował ofertę ${zl(o.price)}${o.deposit ? ` (zaliczka ${zl(o.deposit)})` : ''} z obowiązkiem zapłaty: ${stamp}.`,
+        by: 'gość (akceptacja oferty)', note: o.message, deposit: o.deposit, deposit_due: o.deposit_due, currency: o.currency,
+        extraNote: `Gość zaakceptował ofertę ${fmtMoney(o.price, o.currency)}${o.deposit ? ` (zaliczka ${fmtMoney(o.deposit, o.currency)})` : ''} z obowiązkiem zapłaty: ${stamp}.`,
       });
       reservationId = made.created.id as number;
       cancelUrl = `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${o.lang === 'en' ? '/en/cancel/' : '/anulacja/'}?t=${made.cancelToken}`;
       notify([{ kind: 'created', row: made.created, by: 'gość (oferta)' }], null);
     } else {
       const before = st.reservation!;
-      const line = `Gość zaakceptował ofertę ${zl(o.price)}${o.deposit ? ` (zaliczka ${zl(o.deposit)})` : ''} z obowiązkiem zapłaty: ${stamp}.`;
-      run(`UPDATE reservations SET price = ?, deposit = ?, deposit_due = ?, status = CASE WHEN status = 'tentative' THEN 'confirmed' ELSE status END,
+      const line = `Gość zaakceptował ofertę ${fmtMoney(o.price, o.currency)}${o.deposit ? ` (zaliczka ${fmtMoney(o.deposit, o.currency)})` : ''} z obowiązkiem zapłaty: ${stamp}.`;
+      run(`UPDATE reservations SET price = ?, deposit = ?, deposit_due = ?, currency = ?, status = CASE WHEN status = 'tentative' THEN 'confirmed' ELSE status END,
         notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END, updated_at = datetime('now') WHERE id = ?`,
-        o.price, o.deposit, o.deposit_due, line, line, before.id as number);
+        o.price, o.deposit, o.deposit_due, o.currency, line, line, before.id as number);
       reservationId = before.id as number;
       notify([{ kind: 'updated', before, after: get('SELECT * FROM reservations WHERE id = ?', reservationId) as Record<string, unknown>, by: 'gość (oferta)' }], null);
     }
@@ -738,6 +755,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       lang: b.lang === 'en' ? 'en' : 'pl',
       deposit: money(b.deposit),
       deposit_due: DATE_RE.test(str(b.deposit_due, 10)) ? str(b.deposit_due, 10) : null,
+      currency: readCurrency(b.currency),
     };
     if (!DATE_RE.test(r.check_in) || !DATE_RE.test(r.check_out)) bad('Nieprawidłowe daty');
     if (r.check_out <= r.check_in) bad('Wyjazd musi być po przyjeździe');
@@ -757,9 +775,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const found = conflicts(r, 0);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email,
-      adults, children, price, paid, notes, lang, deposit, deposit_due) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      adults, children, price, paid, notes, lang, deposit, deposit_due, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes, r.lang, r.deposit, r.deposit_due);
+      r.adults, r.children, r.price, r.paid, r.notes, r.lang, r.deposit, r.deposit_due, r.currency);
     const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
     notify([{ kind: 'created', row: created, by: c.get('user').username }], c.get('user').id);
     return c.json(created, 201);
@@ -778,10 +796,10 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const found = conflicts(r, id);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     run(`UPDATE reservations SET unit_id = ?, check_in = ?, check_out = ?, status = ?, source = ?, guest_name = ?, guest_phone = ?,
-      guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, lang = ?, deposit = ?, deposit_due = ?,
+      guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, lang = ?, deposit = ?, deposit_due = ?, currency = ?,
       updated_at = datetime('now') WHERE id = ?`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, r.lang, r.deposit, r.deposit_due, id);
+      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, r.lang, r.deposit, r.deposit_due, r.currency, id);
     const updated = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown>;
     notify([{ kind: 'updated', before: existing, after: updated, by: c.get('user').username }], c.get('user').id);
     return c.json(updated);
@@ -1094,7 +1112,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
 
   /** Zapytanie → rezerwacja w kalendarzu (akceptacja przez admina albo przez gościa z linku w ofercie). */
   const reservationFromRequest = (r: RequestRow, unitId: number, price: number | null,
-    o: { by: string; note: string; deposit?: number | null; deposit_due?: string | null; extraNote?: string }) => {
+    o: { by: string; note: string; deposit?: number | null; deposit_due?: string | null; extraNote?: string; currency?: string }) => {
     const chosen = parseChosenExtras(r.extras);
     const notes = [r.message && `Wiadomość od gościa: ${r.message}`, chosen.length && `Opcje dodatkowe: ${extrasLines(chosen).join('; ')}`,
       `Rezerwacja ze strony www (zapytanie #${r.id}).`, o.extraNote].filter(Boolean).join('\n');
@@ -1102,9 +1120,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const cancelToken = newToken();
     db.exec('BEGIN');
     try {
-      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes, lang, deposit, deposit_due)
-        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-        r.adults, r.children, price, notes, r.lang === 'en' ? 'en' : 'pl', o.deposit ?? null, o.deposit_due ?? null);
+      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes, lang, deposit, deposit_due, currency)
+        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+        r.adults, r.children, price, notes, r.lang === 'en' ? 'en' : 'pl', o.deposit ?? null, o.deposit_due ?? null, readCurrency(o.currency));
       run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ?,
         cancel_token = ? WHERE id = ?`, o.by, o.note, res.lastInsertRowid, unitId, cancelToken, r.id);
       const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
@@ -1144,7 +1162,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     withdrawOffers('request_id', r.id);
     notify([{ kind: 'created', row: created, by: user.username }], user.id);
     const stay = { ...r, unit_id: unitId, deposit, deposit_due: depositDue };
-    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note, cancel_token: cancelToken }, true, price, depositRows(db, stay))
+    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note, cancel_token: cancelToken }, true, price, depositRows(db, stay), depositImages(db, stay))
       .catch((err) => { console.error('E-mail z potwierdzeniem nie wysłany', err); return false; });
     return c.json({ request: requestRow(r.id), reservation: created, emailed });
   });
@@ -1204,7 +1222,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // ---- Oferty cenowe (link „Akceptuję” z obowiązkiem zapłaty) ----
   const publicOffer = (o: OfferRow) => ({
     id: o.id, status: o.status, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, valid_until: o.valid_until, message: o.message,
-    lang: o.lang, created_by: o.created_by, created_at: o.created_at, decided_at: o.decided_at, decline_reason: o.decline_reason,
+    currency: o.currency, lang: o.lang, created_by: o.created_by, created_at: o.created_at, decided_at: o.decided_at, decline_reason: o.decline_reason,
     request_id: o.request_id, reservation_id: o.reservation_id, url: offerUrl(o), expired: offerExpired(o),
   });
   const readOffer = (b: Record<string, unknown>, checkIn: string) => {
@@ -1221,7 +1239,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       validUntil = days ? plusDays(warsawToday(), days) : '';
     }
     if (validUntil && validUntil > checkIn) validUntil = checkIn;
-    return { price, deposit: deposit || null, deposit_due: deposit ? depositDue || null : null, valid_until: validUntil || null, message: str(b.message, 3000) };
+    return { price, deposit: deposit || null, deposit_due: deposit ? depositDue || null : null, valid_until: validUntil || null, message: str(b.message, 3000), currency: readCurrency(b.currency) };
   };
   const createOffer = async (user: User, stay: Stay, link: { request_id?: number; reservation_id?: number; unit_id: number }, b: Record<string, unknown>) => {
     const o = readOffer(b, stay.check_in);
@@ -1230,13 +1248,13 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (sendEmail && !isEmail(stay.guest_email)) bad('Brak adresu e-mail gościa — uzupełnij go albo wyślij gościowi link w SMS/WhatsApp');
     if (sendEmail && !mailer) bad('Wysyłka e-maili nie jest skonfigurowana — odznacz e-mail i wyślij gościowi link w SMS/WhatsApp');
     withdrawOffers(link.request_id ? 'request_id' : 'reservation_id', (link.request_id ?? link.reservation_id)!);
-    const res = run(`INSERT INTO offers (token, request_id, reservation_id, unit_id, price, deposit, deposit_due, valid_until, message, lang, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, newToken(), link.request_id ?? null, link.reservation_id ?? null, link.unit_id,
-      o.price, o.deposit, o.deposit_due, o.valid_until, o.message, lang, user.username);
+    const res = run(`INSERT INTO offers (token, request_id, reservation_id, unit_id, price, deposit, deposit_due, valid_until, message, lang, created_by, currency)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, newToken(), link.request_id ?? null, link.reservation_id ?? null, link.unit_id,
+      o.price, o.deposit, o.deposit_due, o.valid_until, o.message, lang, user.username, o.currency);
     const offer = get('SELECT * FROM offers WHERE id = ?', res.lastInsertRowid) as OfferRow;
     let emailed = false;
     if (sendEmail && mailer) {
-      await sendGuestMessage(db, mailer, { ...stay, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due }, {
+      await sendGuestMessage(db, mailer, { ...stay, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, currency: o.currency }, {
         kind: 'offer', body: typeof b.body === 'string' ? str(b.body, 3000) : undefined, offerUrl: offerUrl(offer), validUntil: o.valid_until, offerNote: o.message,
       }, { reservation_id: link.reservation_id ?? null, request_id: link.request_id ?? null, sent_by: user.username });
       emailed = true;
@@ -1299,7 +1317,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     return c.json({
       offers: (all(`SELECT * FROM offers WHERE reservation_id = ? OR request_id IN (${reqList}) ORDER BY id DESC`, r.id) as OfferRow[]).map(publicOffer),
       messages: all(`SELECT id, kind, to_email, subject, body, sent_by, sent_at FROM guest_messages WHERE reservation_id = ? OR request_id IN (${reqList}) ORDER BY sent_at DESC, id DESC`, r.id),
-      invoices: all('SELECT id, number, issue_date, total FROM invoices WHERE reservation_id = ? ORDER BY id DESC', r.id),
+      invoices: all('SELECT id, number, issue_date, total, currency FROM invoices WHERE reservation_id = ? ORDER BY id DESC', r.id),
       email_configured: !!mailer,
     });
   });
@@ -1313,7 +1331,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const ps = paymentSettings(db);
     return c.json({
       ...draftMessage(db, stay, kind, amount === undefined ? undefined : money(amount), due === undefined ? undefined : (DATE_RE.test(due) ? due : null)),
-      has_account: !!ps.account_number, default_deposit: defaultDeposit(ps, r.price as number | null, r.check_in),
+      has_account: !!accountFor(ps, readCurrency(r.currency)) || !!revolutLink(ps), default_deposit: defaultDeposit(ps, r.price as number | null, r.check_in),
     });
   });
 
@@ -1387,6 +1405,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       seller: { ...readParty(seller), account: str(seller.account, 60), bank: str(seller.bank, 120) }, buyer: readParty(b.buyer), items: readItems(b.items),
       payment_method: str(b.payment_method, 60), payment_due: DATE_RE.test(due) ? due : '', paid: money(b.paid), note: str(b.note, 1000), footer: str(b.footer, 300),
       signatures: b.signatures !== false, seller_signature: readSignature(b.seller_signature), buyer_signature: readSignature(b.buyer_signature),
+      currency: readCurrency(b.currency),
     };
   };
   const invoiceOut = (row: InvoiceRow) => ({ id: row.id, reservation_id: row.reservation_id, created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at, total: row.total, ...invoiceData(row) });
@@ -1395,6 +1414,20 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       'Content-Type': 'application/pdf', 'Cache-Control': 'no-store',
       'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${invoiceFileName(number)}"`,
     });
+  /** Kod QR do zapłaty pozostałej kwoty na rachunku (PLN — ZBP, EUR — EPC), jeśli włączone w ustawieniach */
+  const invoicePdf = async (inv: InvoiceData) => {
+    const ps = paymentSettings(db);
+    const due = Math.round((itemsTotal(inv.items) - (inv.paid ?? 0)) * 100) / 100;
+    let qr: Buffer | undefined;
+    if (ps.show_qr && due > 0 && inv.seller.account && /przelew/i.test(inv.payment_method || 'przelew')) {
+      const title = `Rachunek ${inv.number}`.trim();
+      const payload = inv.currency === 'PLN' ? plBankPayload({ account: inv.seller.account, amount: due, name: inv.seller.name, title })
+        : inv.currency === 'EUR' ? epcPayload({ account: inv.seller.account, amount: due, name: inv.seller.name, text: title, bic: (inv.seller.bank.match(/BIC\/SWIFT (\S+)/) ?? [])[1] }) : null;
+      if (payload) qr = await qrPng(payload, 300);
+    }
+    return renderInvoicePdf(inv, { qr });
+  };
+
   /** Zapamiętanie danych z rachunku jako szablonu na następny raz */
   const saveInvoiceTemplate = (inv: InvoiceData) => {
     const cur = invoiceSettings(db);
@@ -1410,9 +1443,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   api.get('/invoices', (c) => {
     const user = c.get('user');
     const resId = c.req.query('reservation_id');
-    const rows = all(`SELECT i.id, i.number, i.issue_date, i.total, i.buyer, i.reservation_id, r.unit_id, r.check_in, r.check_out FROM invoices i
+    const rows = all(`SELECT i.id, i.number, i.issue_date, i.total, i.currency, i.buyer, i.reservation_id, r.unit_id, r.check_in, r.check_out FROM invoices i
       LEFT JOIN reservations r ON r.id = i.reservation_id ${resId ? 'WHERE i.reservation_id = ?' : ''} ORDER BY i.issue_date DESC, i.id DESC LIMIT 500`, ...(resId ? [int(resId)] : [])) as
-      { id: number; number: string; issue_date: string; total: number; buyer: string; reservation_id: number | null; unit_id: number | null; check_in: string | null; check_out: string | null }[];
+      { id: number; number: string; issue_date: string; total: number; currency: string; buyer: string; reservation_id: number | null; unit_id: number | null; check_in: string | null; check_out: string | null }[];
     return c.json(rows.filter((r) => (r.unit_id ? canSee(user, r.unit_id) : isFullAdmin(user))).map(({ buyer, ...r }) => {
       let name = '';
       try { name = (JSON.parse(buyer) as { name?: string }).name ?? ''; } catch { name = ''; }
@@ -1428,9 +1461,13 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!r && !isFullAdmin(c.get('user'))) bad('Wybierz rezerwację');
     const u = r ? get(`SELECT u.name, u.type_name, p.name AS property FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`, r.unit_id) as { name: string; type_name: string; property: string } : undefined;
     const nightsCount = r ? nightsBetween(r.check_in, r.check_out) : 0;
+    const currency = readCurrency(c.req.query('currency') ?? r?.currency);
+    // konto: z szablonu dla PLN, konto walutowe z ustawień płatności dla EUR, GBP…
+    const foreign = currency !== 'PLN' ? accountFor(paymentSettings(db), currency) : null;
+    const account = currency === 'PLN' ? { account: t.account, bank: t.bank } : { account: foreign?.account_number ?? '', bank: [foreign?.bank_name, foreign?.bic && `BIC/SWIFT ${foreign.bic}`].filter(Boolean).join(', ') };
     const draft: InvoiceData = {
       number: nextInvoiceNumber(db, today, t.numbering), issue_date: today, sale_date: r ? r.check_out : today, place: t.place,
-      seller: { name: t.name, address: t.address, city: t.city, nip: t.nip, phone: t.phone, email: t.email, account: t.show_account ? t.account : '', bank: t.show_account ? t.bank : '' },
+      seller: { name: t.name, address: t.address, city: t.city, nip: t.nip, phone: t.phone, email: t.email, account: t.show_account ? account.account : '', bank: t.show_account ? account.bank : '' },
       buyer: { name: r?.guest_name ?? '', address: '', city: '', nip: '', phone: '', email: '' },
       items: r ? [{
         name: `Usługa noclegowa — ${u?.type_name || u?.name} (${u?.property}), ${dateRange(r.check_in, r.check_out)}, ${nightsCount} ${nightsCount === 1 ? 'noc' : nightsCount % 10 >= 2 && nightsCount % 10 <= 4 && (nightsCount % 100 < 12 || nightsCount % 100 > 14) ? 'noce' : 'nocy'}`,
@@ -1438,7 +1475,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       }] : [{ name: '', qty: 1, unit: 'usł.', price: 0 }],
       payment_method: t.payment_method, payment_due: t.payment_days != null ? plusDays(today, t.payment_days) : '', paid: r ? (r.paid as number | null) : null,
       note: t.note, footer: t.footer ?? t.auto_footer,
-      signatures: t.signatures, seller_signature: t.seller_signature, buyer_signature: '',
+      signatures: t.signatures, seller_signature: t.seller_signature, buyer_signature: '', currency,
     };
     return c.json({ ...draft, reservation_id: r?.id ?? null });
   });
@@ -1446,7 +1483,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   api.post('/invoices/preview', async (c) => {
     const inv = readInvoice(await c.req.json().catch(() => ({})));
     if (!inv.number) inv.number = nextInvoiceNumber(db, inv.issue_date, invoiceSettings(db).numbering);
-    return pdfResponse(c, await renderInvoicePdf(inv), inv.number, false);
+    return pdfResponse(c, await invoicePdf(inv), inv.number, false);
   });
 
   const writeInvoice = async (c: { get: (k: 'user') => User; req: { json: () => Promise<unknown> } }, existing?: InvoiceRow) => {
@@ -1459,15 +1496,15 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!inv.number) inv.number = nextInvoiceNumber(db, inv.issue_date, invoiceSettings(db).numbering);
     if (get('SELECT 1 FROM invoices WHERE number = ? AND id != ?', inv.number, existing?.id ?? 0)) bad(`Rachunek nr ${inv.number} już istnieje — zmień numer`);
     const vals = [inv.number, inv.issue_date, inv.sale_date, inv.place, JSON.stringify(inv.seller), JSON.stringify(inv.buyer), JSON.stringify(inv.items),
-      itemsTotal(inv.items), inv.payment_method, inv.payment_due, inv.paid, inv.note, inv.footer, inv.signatures ? 1 : 0, inv.seller_signature, inv.buyer_signature];
+      itemsTotal(inv.items), inv.payment_method, inv.payment_due, inv.paid, inv.note, inv.footer, inv.signatures ? 1 : 0, inv.seller_signature, inv.buyer_signature, inv.currency];
     let id: number;
     if (existing) {
       run(`UPDATE invoices SET number = ?, issue_date = ?, sale_date = ?, place = ?, seller = ?, buyer = ?, items = ?, total = ?, payment_method = ?, payment_due = ?,
-        paid = ?, note = ?, footer = ?, signatures = ?, seller_signature = ?, buyer_signature = ?, updated_at = datetime('now') WHERE id = ?`, ...vals, existing.id);
+        paid = ?, note = ?, footer = ?, signatures = ?, seller_signature = ?, buyer_signature = ?, currency = ?, updated_at = datetime('now') WHERE id = ?`, ...vals, existing.id);
       id = existing.id;
     } else {
       id = Number(run(`INSERT INTO invoices (number, issue_date, sale_date, place, seller, buyer, items, total, payment_method, payment_due, paid, note, footer,
-        signatures, seller_signature, buyer_signature, reservation_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...vals, resId, user.username).lastInsertRowid);
+        signatures, seller_signature, buyer_signature, currency, reservation_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...vals, resId, user.username).lastInsertRowid);
     }
     if (b.save_template !== false) saveInvoiceTemplate(inv);
     return invoiceOut(get('SELECT * FROM invoices WHERE id = ?', id) as InvoiceRow);
@@ -1482,7 +1519,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   });
   api.get('/invoices/:id{[0-9]+}/pdf', async (c) => {
     const row = invoiceRow(c.get('user'), int(c.req.param('id')));
-    return pdfResponse(c, await renderInvoicePdf(invoiceData(row)), row.number, c.req.query('download') === '1');
+    return pdfResponse(c, await invoicePdf(invoiceData(row)), row.number, c.req.query('download') === '1');
   });
   api.post('/invoices/:id{[0-9]+}/send', async (c) => {
     const user = c.get('user');
@@ -1493,7 +1530,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const r = visibleReservation(user, row.reservation_id);
     const to = str(b.to, 200) || r.guest_email;
     if (!isEmail(to)) bad('Podaj adres e-mail gościa');
-    const pdf = await renderInvoicePdf(invoiceData(row));
+    const pdf = await invoicePdf(invoiceData(row));
     try {
       await sendGuestMessage(db, mailer!, { ...r, guest_email: to }, {
         kind: 'invoice', subject: str(b.subject, 200) || undefined, body: typeof b.body === 'string' ? str(b.body, 3000) : undefined,

@@ -17,7 +17,7 @@ type Props = {
 };
 type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
 
-const money = (v: number) => `${v.toLocaleString('pl-PL', { maximumFractionDigits: 2 })} zł`;
+import { fmt } from '../money';
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
 /** Link do czatu WhatsApp. Numer bez kierunkowego (9 cyfr) traktujemy jako polski (+48). */
@@ -32,6 +32,7 @@ function whatsappHref(phone: string): string | null {
 
 export default function ReservationView({ reservation: r, properties, readOnly, onClose, onEdit, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
+  const money = (v: number, c = r.currency) => fmt(v, c);
   const [error, setError] = useState('');
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [activity, setActivity] = useState<Activity | null>(null);
@@ -272,14 +273,14 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
                     <li key={`i${i.id}`}>
                       <button type="button" className="history-item" onClick={() => setInvoice({ id: i.id })}>
                         <span className="history-kind invoice">Rachunek {i.number}</span>
-                        <span>{money(i.total)} · {formatShort(i.issue_date)}</span>
+                        <span>{money(i.total, i.currency)} · {formatShort(i.issue_date)}</span>
                         <span className="chev">›</span>
                       </button>
                     </li>
                   ))}
                   {activity.offers.map((o) => (
                     <li key={`o${o.id}`} className="history-row">
-                      <span className="history-kind offer">Oferta {money(o.price)}{o.deposit ? ` · zaliczka ${money(o.deposit)}` : ''}</span>
+                      <span className="history-kind offer">Oferta {money(o.price, o.currency)}{o.deposit ? ` · zaliczka ${money(o.deposit, o.currency)}` : ''}</span>
                       <span className={`muted offer-st offer-${o.expired ? 'expired' : o.status}`}>{o.expired ? 'wygasła' : OFFER_STATUS[o.status]} · {when(o.decided_at ?? o.created_at)}</span>
                       {o.status === 'sent' && !o.expired && (
                         <span className="history-actions">
@@ -320,7 +321,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
       {offerOpen && (
         <div onClick={(e) => e.stopPropagation()}>
           <OfferSheet
-            target={{ kind: 'reservation', id: r.id, price: r.price, checkIn: r.check_in, email: r.guest_email, phone: r.guest_phone, lang: r.lang, guest: r.guest_name || 'Gość' }}
+            target={{ kind: 'reservation', currency: r.currency, id: r.id, price: r.price, checkIn: r.check_in, email: r.guest_email, phone: r.guest_phone, lang: r.lang, guest: r.guest_name || 'Gość' }}
             onClose={() => setOfferOpen(false)}
             onSent={refreshActivity}
           />

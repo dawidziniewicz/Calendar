@@ -3,6 +3,7 @@ import { allowedUnitIds, propertyIdsOf } from './auth.ts';
 import { dateRange } from './changes.ts';
 import { renderMail, type Attachment, type MailContent, type Mailer, type MailRow } from './mail.ts';
 import { sendToSubscriptions, type Sender } from './push.ts';
+import { epcPayload, iban, plBankPayload, polishNrb, qrPath, revolutUrl } from './qr.ts';
 import {
   TXT, adminEmails, appUrl, extrasLines, firstName, guestUnitName, longDate, nightsBetween, parseChosenExtras, siteUrl, unitInfo, zl, type Lang,
 } from './booking.ts';
@@ -13,8 +14,13 @@ import {
 // ---------------------------------------------------------------------------
 // Ustawienia płatności (konto, zaliczka, warunki) — wszystko opcjonalne
 // ---------------------------------------------------------------------------
+/** Konto w innej walucie (np. EUR — IBAN i BIC dla gości z zagranicy) */
+export type ForeignAccount = { currency: string; account_number: string; account_name: string; bank_name: string; bic: string };
 export type PaymentSettings = {
-  account_number: string; account_name: string; bank_name: string;
+  account_number: string; account_name: string; bank_name: string; bic: string; // konto główne (PLN)
+  accounts: ForeignAccount[]; // konta walutowe
+  revolut: string; // Revtag (np. @jankowalski) → link revolut.me
+  show_qr: boolean; // kody QR do płatności w e-mailach, na stronie oferty i na rachunku
   deposit_percent: number | null; // domyślna zaliczka w % ceny
   deposit_days: number | null; // ile dni na wpłatę zaliczki
   offer_days: number | null; // ile dni oferta jest ważna
@@ -22,7 +28,7 @@ export type PaymentSettings = {
 };
 export const PAYMENT_SETTINGS_KEY = 'payment_settings';
 export const DEFAULT_PAYMENT_SETTINGS: PaymentSettings = {
-  account_number: '', account_name: '', bank_name: '', deposit_percent: 30, deposit_days: 3, offer_days: 3, terms: '', terms_en: '',
+  account_number: '', account_name: '', bank_name: '', bic: '', accounts: [], revolut: '', show_qr: true, deposit_percent: 30, deposit_days: 3, offer_days: 3, terms: '', terms_en: '',
 };
 const s = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const optInt = (v: unknown, min: number, max: number) => {
@@ -33,7 +39,12 @@ const optInt = (v: unknown, min: number, max: number) => {
 export function readPaymentSettings(v: unknown): PaymentSettings {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
   return {
-    account_number: s(o.account_number, 60), account_name: s(o.account_name, 200), bank_name: s(o.bank_name, 120),
+    account_number: s(o.account_number, 60), account_name: s(o.account_name, 200), bank_name: s(o.bank_name, 120), bic: s(o.bic, 20),
+    accounts: (Array.isArray(o.accounts) ? o.accounts : []).slice(0, 10).map((a) => {
+      const x = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
+      return { currency: readCurrency(x.currency), account_number: s(x.account_number, 60), account_name: s(x.account_name, 200), bank_name: s(x.bank_name, 120), bic: s(x.bic, 20) };
+    }).filter((a) => a.account_number && a.currency !== 'PLN'),
+    revolut: s(o.revolut, 60), show_qr: o.show_qr !== false,
     deposit_percent: optInt(o.deposit_percent, 0, 100), deposit_days: optInt(o.deposit_days, 0, 60), offer_days: optInt(o.offer_days, 1, 60),
     terms: s(o.terms, 3000), terms_en: s(o.terms_en, 3000),
   };
@@ -42,6 +53,50 @@ export function paymentSettings(db: DatabaseSync): PaymentSettings {
   const raw = (db.prepare('SELECT value FROM settings WHERE key = ?').get(PAYMENT_SETTINGS_KEY) as { value: string } | undefined)?.value;
   try { return raw ? readPaymentSettings(JSON.parse(raw)) : { ...DEFAULT_PAYMENT_SETTINGS }; } catch { return { ...DEFAULT_PAYMENT_SETTINGS }; }
 }
+
+// ---------------------------------------------------------------------------
+// Waluty
+// ---------------------------------------------------------------------------
+export const CURRENCIES = ['PLN', 'EUR', 'GBP', 'USD', 'CHF', 'CZK', 'NOK', 'SEK', 'DKK'] as const;
+export const readCurrency = (v: unknown) => (typeof v === 'string' && (CURRENCIES as readonly string[]).includes(v.toUpperCase()) ? v.toUpperCase() : 'PLN');
+/** Kwota w walucie: 1200 zł, 1 200 € / €1,200 */
+export function money(n: number, currency = 'PLN', lang: Lang = 'pl') {
+  if (currency === 'PLN') return zl(n);
+  const frac = Math.round(n * 100) % 100 !== 0;
+  return new Intl.NumberFormat(lang === 'en' ? 'en-GB' : 'pl-PL', { style: 'currency', currency, minimumFractionDigits: frac ? 2 : 0, maximumFractionDigits: 2 })
+    .format(n).replace(/\u00a0/g, ' ');
+}
+const cur = (st: { currency?: string | null }) => readCurrency(st.currency);
+/** Termin do tytułu przelewu: po polsku „3–6 gru”, po angielsku liczbowo „03.12–06.12.2026” (banki za granicą) */
+export const titleRange = (from: string, to: string, lang: Lang) => (lang === 'en'
+  ? `${from.slice(8, 10)}.${from.slice(5, 7)}–${to.slice(8, 10)}.${to.slice(5, 7)}.${to.slice(0, 4)}` : dateRange(from, to));
+
+/** Konto do przelewu w danej walucie: PLN → konto główne, inne → konto walutowe (jeśli jest) */
+export function accountFor(ps: PaymentSettings, currency: string) {
+  if (currency === 'PLN') return ps.account_number ? { account_number: ps.account_number, account_name: ps.account_name, bank_name: ps.bank_name, bic: ps.bic } : null;
+  return ps.accounts.find((a) => a.currency === currency) ?? null;
+}
+
+// Podpis adresów obrazków QR (klucz serwera ustawia createApp)
+let qrKey = '';
+export const setQrKey = (key: string) => { qrKey = key; };
+export type PaymentQr = { kind: 'bank' | 'revolut'; path: string; url?: string };
+/** Kody QR: przelew (PLN — ZBP, EUR — EPC) i Revolut (link revolut.me) */
+export function paymentQrs(ps: PaymentSettings, o: { amount: number | null; currency: string; title: string }): PaymentQr[] {
+  if (!ps.show_qr || !qrKey) return [];
+  const out: PaymentQr[] = [];
+  const acc = accountFor(ps, o.currency);
+  if (acc && o.amount) {
+    const payload = o.currency === 'PLN' ? plBankPayload({ account: acc.account_number, amount: o.amount, name: acc.account_name, title: o.title })
+      : o.currency === 'EUR' ? epcPayload({ account: acc.account_number, bic: acc.bic, amount: o.amount, name: acc.account_name, text: o.title }) : null;
+    if (payload) out.push({ kind: 'bank', path: qrPath(qrKey, payload) });
+  }
+  const rev = revolutUrl(ps.revolut);
+  if (rev) out.push({ kind: 'revolut', path: qrPath(qrKey, rev), url: rev });
+  return out;
+}
+export const revolutLink = (ps: PaymentSettings) => revolutUrl(ps.revolut);
+export { polishNrb, iban };
 
 const warsawToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
 export const plusDays = (iso: string, n: number) => {
@@ -64,6 +119,7 @@ export type Stay = {
   unit_id: number; check_in: string; check_out: string; guest_name: string; guest_email: string;
   adults: number; children: number; lang?: string | null; extras?: string | null;
   price?: number | null; paid?: number | null; deposit?: number | null; deposit_due?: string | null;
+  currency?: string | null;
 };
 export const stayLang = (st: Stay): Lang => (st.lang === 'en' ? 'en' : 'pl');
 
@@ -164,21 +220,34 @@ function stayRows(db: DatabaseSync, st: Stay, lang: Lang, priceLabel?: string, p
     [t.length, t.nights(n)],
     ...(st.adults + st.children ? [[t.guests, t.people(st.adults, st.children)] as MailRow] : []),
     ...(extras.length ? [[lang === 'en' ? 'Extras' : 'Opcje dodatkowe', extrasLines(extras, lang).join('\n')] as MailRow] : []),
-    ...(priceLabel && price != null ? [[priceLabel, zl(price)] as MailRow] : []),
+    ...(priceLabel && price != null ? [[priceLabel, money(price, cur(st), lang)] as MailRow] : []),
   ];
 }
 
-/** Dane do przelewu: kwota, termin, odbiorca, konto, bank, tytuł (puste pola są pomijane). */
-function transferRows(ps: PaymentSettings, lang: Lang, amount: number | null, due: string | null, title: string): MailRow[] {
+/** Dane do przelewu: kwota, termin, odbiorca, konto (IBAN/BIC dla walut), bank, tytuł, Revolut (puste pola są pomijane). */
+function transferRows(ps: PaymentSettings, lang: Lang, amount: number | null, due: string | null, title: string, currency = 'PLN'): MailRow[] {
   const p = P[lang];
+  const acc = accountFor(ps, currency);
+  const rev = revolutUrl(ps.revolut);
   return ([
-    [p.amount, amount != null ? zl(amount) : ''],
+    [p.amount, amount != null ? money(amount, currency, lang) : ''],
     [p.due, short(due, lang) ?? ''],
-    [p.recipient, ps.account_name],
-    [p.account, ps.account_number],
-    [p.bank, ps.bank_name],
-    [p.title, ps.account_number ? title : ''],
+    [p.recipient, acc?.account_name ?? ''],
+    [currency === 'PLN' ? p.account : 'IBAN', acc ? (currency === 'PLN' ? acc.account_number : (iban(acc.account_number) ?? acc.account_number).replace(/(.{4})/g, '$1 ').trim()) : ''],
+    ['BIC / SWIFT', acc?.bic ?? ''],
+    [p.bank, acc?.bank_name ?? ''],
+    [p.title, acc ? title : ''],
+    ['Revolut', rev ? rev.replace('https://', '') : ''],
   ] as MailRow[]).filter(([, v]) => v);
+}
+/** Obrazki QR do e-maila (adres bezwzględny: kalendarz → /public/qr/…) */
+function qrImages(ps: PaymentSettings, lang: Lang, amount: number | null, currency: string, title: string) {
+  return paymentQrs(ps, { amount, currency, title }).map((q) => ({
+    src: `${appUrl()}/public${q.path}`,
+    caption: q.kind === 'bank' ? (lang === 'en' ? (currency === 'EUR' ? 'Scan in your banking app (SEPA)' : 'Scan in a Polish banking app') : 'Zeskanuj w aplikacji banku')
+      : (lang === 'en' ? 'Pay with Revolut' : 'Zapłać przez Revolut'),
+    href: q.url,
+  }));
 }
 
 export type MessageInput = {
@@ -201,14 +270,14 @@ export function draftMessage(db: DatabaseSync, st: Stay, kind: MessageKind, amou
       : kind === 'received' ? { amount: st.paid ?? null, due: null } : { amount: null, due: null };
   const a = amount === undefined ? def.amount : amount;
   const d = due === undefined ? def.due : due;
-  const money = a != null ? zl(a) : '…';
+  const amountText = a != null ? money(a, cur(st), lang) : '…';
   const bodies = p.bodies as Record<string, (a: string, d: string | null) => string>;
   return {
     lang,
     subject: p.subjects[kind](u.property, range),
-    body: (bodies[kind] ?? (() => ''))(money, short(d, lang)),
+    body: (bodies[kind] ?? (() => ''))(amountText, short(d, lang)),
     amount: a ?? null, due: d ?? null,
-    title: kind === 'balance' ? p.balanceTitle(st.guest_name, range) : p.depositTitle(st.guest_name, range),
+    title: kind === 'balance' ? p.balanceTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang)) : p.depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang)),
   };
 }
 
@@ -235,7 +304,8 @@ export function composeMessage(db: DatabaseSync, st: Stay, m: MessageInput) {
     case 'balance':
       content = {
         preheader: `${draft.subject}`, title: p.titles[m.kind], intro,
-        rows: [...stayRows(db, st, lang).slice(0, 3), ...transferRows(ps, lang, draft.amount, draft.due, m.title || draft.title)],
+        rows: [...stayRows(db, st, lang).slice(0, 3), ...transferRows(ps, lang, draft.amount, draft.due, m.title || draft.title, cur(st))],
+        images: qrImages(ps, lang, draft.amount, cur(st), m.title || draft.title),
         note: terms && m.kind === 'deposit' ? { label: p.terms, text: terms } : undefined,
         outro: [p.contact, p.signOff],
       };
@@ -243,7 +313,7 @@ export function composeMessage(db: DatabaseSync, st: Stay, m: MessageInput) {
     case 'received':
       content = {
         preheader: subject, title: p.titles.received, intro,
-        rows: [...stayRows(db, st, lang).slice(0, 3), ...(price != null ? [[t.price, zl(price)] as MailRow, [p.paid, zl(paid)] as MailRow, [p.left, zl(left ?? 0)] as MailRow] : [])],
+        rows: [...stayRows(db, st, lang).slice(0, 3), ...(price != null ? [[t.price, money(price, cur(st), lang)] as MailRow, [p.paid, money(paid, cur(st), lang)] as MailRow, [p.left, money(left ?? 0, cur(st), lang)] as MailRow] : [])],
         outro: [p.signOff],
       };
       break;
@@ -255,11 +325,12 @@ export function composeMessage(db: DatabaseSync, st: Stay, m: MessageInput) {
         intro: m.kind === 'offer' ? intro : [t.hello(firstName(st.guest_name)), p.acceptedIntro(dep)],
         rows: [
           ...stayRows(db, st, lang, t.price, price),
-          ...(dep ? [[p.deposit, p.depositPayable(zl(st.deposit!), short(st.deposit_due, lang))] as MailRow] : []),
+          ...(dep ? [[p.deposit, p.depositPayable(money(st.deposit!, cur(st), lang), short(st.deposit_due, lang))] as MailRow] : []),
           ...(m.kind === 'offer' && m.validUntil ? [[p.validUntil, short(m.validUntil, lang)!] as MailRow] : []),
-          ...(m.kind === 'offer_accepted' && dep ? transferRows(ps, lang, null, null, p.depositTitle(st.guest_name, range)) : []),
+          ...(m.kind === 'offer_accepted' && dep ? transferRows(ps, lang, null, null, p.depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang)), cur(st)) : []),
           ...(m.kind === 'offer_accepted' && u.address ? [[t.address, u.address] as MailRow] : []),
         ],
+        images: m.kind === 'offer_accepted' && dep ? qrImages(ps, lang, st.deposit!, cur(st), p.depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang))) : undefined,
         note: m.offerNote ? { label: t.msgFromUs, text: m.offerNote } : undefined,
         button: m.kind === 'offer' && m.offerUrl ? { label: p.offerButton, url: m.offerUrl } : undefined,
         outro: m.kind === 'offer' ? p.offerOutro(dep) : [p.contact, p.signOff],
@@ -273,11 +344,12 @@ export function composeMessage(db: DatabaseSync, st: Stay, m: MessageInput) {
         preheader: subject, title: p.titles.confirmation, intro,
         rows: [
           ...stayRows(db, st, lang, t.price, price),
-          ...(dep ? [[p.deposit, p.depositPayable(zl(st.deposit!), short(st.deposit_due, lang))] as MailRow] : []),
-          ...(paid ? [[p.paid, zl(paid)] as MailRow] : []),
-          ...(dep ? transferRows(ps, lang, null, null, p.depositTitle(st.guest_name, range)) : []),
+          ...(dep ? [[p.deposit, p.depositPayable(money(st.deposit!, cur(st), lang), short(st.deposit_due, lang))] as MailRow] : []),
+          ...(paid ? [[p.paid, money(paid, cur(st), lang)] as MailRow] : []),
+          ...(dep ? transferRows(ps, lang, null, null, p.depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang)), cur(st)) : []),
           ...(u.address ? [[t.address, u.address] as MailRow] : []),
         ],
+        images: dep ? qrImages(ps, lang, st.deposit! - paid, cur(st), p.depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang))) : undefined,
         outro: [p.contact, p.signOff],
         link: m.cancelUrl ? { text: t.cancelText, label: t.cancelLabel, url: m.cancelUrl } : undefined,
       };
@@ -308,7 +380,7 @@ export async function sendGuestMessage(
 // ---------------------------------------------------------------------------
 export type OfferRow = {
   id: number; token: string; request_id: number | null; reservation_id: number | null; unit_id: number | null;
-  price: number; deposit: number | null; deposit_due: string | null; valid_until: string | null; message: string; lang: string;
+  price: number; deposit: number | null; deposit_due: string | null; valid_until: string | null; message: string; lang: string; currency: string;
   status: 'sent' | 'accepted' | 'declined' | 'withdrawn'; created_by: string; created_at: string; decided_at: string | null; decided_ip: string; decline_reason: string;
 };
 export const offerUrl = (o: { token: string; lang: string }) => `${siteUrl()}${o.lang === 'en' ? '/en/offer/' : '/oferta/'}?t=${o.token}`;
@@ -340,10 +412,13 @@ export function depositRows(db: DatabaseSync, st: Stay): MailRow[] {
   const lang = stayLang(st);
   const p = P[lang];
   return [
-    [p.deposit, p.depositPayable(zl(st.deposit), short(st.deposit_due, lang))],
-    ...transferRows(paymentSettings(db), lang, null, null, p.depositTitle(st.guest_name, dateRange(st.check_in, st.check_out))),
+    [p.deposit, p.depositPayable(money(st.deposit, cur(st), lang), short(st.deposit_due, lang))],
+    ...transferRows(paymentSettings(db), lang, null, null, p.depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, lang)), cur(st)),
   ];
 }
 
 /** Wiersze pobytu dla e-maila do obsługi (po polsku). */
 export const staffRows = (db: DatabaseSync, st: Stay, price: number | null) => stayRows(db, st, 'pl', 'Cena', price);
+/** Obrazki QR do potwierdzenia po akceptacji przez admina (zaliczka) */
+export const depositImages = (db: DatabaseSync, st: Stay) =>
+  (st.deposit ? qrImages(paymentSettings(db), stayLang(st), st.deposit, cur(st), P[stayLang(st)].depositTitle(st.guest_name, titleRange(st.check_in, st.check_out, stayLang(st)))) : []);

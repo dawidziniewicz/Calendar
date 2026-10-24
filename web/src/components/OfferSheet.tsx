@@ -3,9 +3,11 @@ import { api } from '../api';
 import type { Offer, PaymentSettings } from '../types';
 import { addDays, formatShort, today } from '../dates';
 import NumInput from './NumInput';
+import { CURRENCIES, currencySymbol, fmt } from '../money';
 
 export type OfferTarget = {
   kind: 'request' | 'reservation';
+  currency: string; // waluta rezerwacji / wyceny (zapytania ze strony: PLN)
   id: number;
   price: number | null;
   checkIn: string;
@@ -15,7 +17,6 @@ export type OfferTarget = {
   guest: string;
 };
 
-const zl = (n: number) => `${n.toLocaleString('pl-PL', { maximumFractionDigits: 2 })} zł`;
 const phoneDigits = (p: string) => {
   let d = p.replace(/[^\d+]/g, '');
   if (d.startsWith('+')) d = d.slice(1); else if (d.startsWith('00')) d = d.slice(2); else if (d.length === 9) d = `48${d}`;
@@ -27,6 +28,8 @@ const phoneDigits = (p: string) => {
 export default function OfferSheet({ target, onClose, onSent }: { target: OfferTarget; onClose: () => void; onSent: (o: Offer) => void }) {
   const [ps, setPs] = useState<PaymentSettings | null>(null);
   const [price, setPrice] = useState<number | null>(target.price);
+  const [currency, setCurrency] = useState(target.currency || 'PLN');
+  const zl = (n: number) => fmt(n, currency);
   const [withDeposit, setWithDeposit] = useState(true);
   const [deposit, setDeposit] = useState<number | null>(null);
   const [depositDue, setDepositDue] = useState('');
@@ -69,7 +72,7 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
     setError('');
     try {
       const body = {
-        price, deposit: withDeposit ? deposit : null, deposit_due: withDeposit && depositDue ? depositDue : null,
+        price, currency, deposit: withDeposit ? deposit : null, deposit_due: withDeposit && depositDue ? depositDue : null,
         valid_until: validUntil || null, message, email, lang,
       };
       const res = target.kind === 'request' ? await api.requestOffer(target.id, body) : await api.reservationOffer(target.id, body);
@@ -122,10 +125,16 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
               </p>
               <fieldset>
                 <legend>Cena</legend>
-                <label className="full">Cena za cały pobyt (zł)
+                <label>Cena za cały pobyt ({currencySymbol(currency)})
                   <NumInput value={price} onChange={setPrice} placeholder="np. 1500" />
                 </label>
-                {target.price != null && price != null && price !== target.price && (
+                <label>Waluta
+                  <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+                {currency !== (target.currency || 'PLN') && target.price != null && <p className="full muted">Wycena wg cennika: {fmt(target.price, target.currency)} — wpisz cenę w {currency}.</p>}
+                {currency === (target.currency || 'PLN') && target.price != null && price != null && price !== target.price && (
                   <p className="full muted">Wycena wg cennika: {zl(target.price)} → {price < target.price ? 'rabat' : 'dopłata'} {zl(Math.abs(target.price - price))}</p>
                 )}
               </fieldset>
@@ -133,7 +142,7 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
                 <label className="check-row full"><input type="checkbox" checked={withDeposit} onChange={(e) => setWithDeposit(e.target.checked)} /> Z zaliczką</label>
                 {withDeposit && (
                   <>
-                    <label>Zaliczka (zł)<NumInput value={deposit} onChange={(v) => { setDepositTouched(true); setDeposit(v); }} /></label>
+                    <label>Zaliczka ({currencySymbol(currency)})<NumInput value={deposit} onChange={(v) => { setDepositTouched(true); setDeposit(v); }} /></label>
                     <label>Wpłata do<input type="date" value={depositDue} min={today()} onChange={(e) => setDepositDue(e.target.value)} /></label>
                     {price != null && price > 0 && (
                       <div className="full chips">
@@ -142,7 +151,7 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
                         ))}
                       </div>
                     )}
-                    {ps && !ps.account_number && <p className="full warn">Brak numeru konta — uzupełnij w Ustawienia → Płatności i rachunki (gość zobaczy go po akceptacji).</p>}
+                    {ps && !ps.revolut && !(currency === 'PLN' ? ps.account_number : ps.accounts.some((a) => a.currency === currency)) && <p className="full warn">Brak konta w {currency} i Revolutu — uzupełnij w Ustawienia → Płatności i rachunki (gość zobaczy dane do płatności po akceptacji).</p>}
                   </>
                 )}
               </fieldset>

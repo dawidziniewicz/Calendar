@@ -21,6 +21,7 @@ export type InvoiceData = {
   seller: Seller; buyer: Party; items: InvoiceItem[];
   payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
   signatures: boolean; seller_signature: string; buyer_signature: string; // podpisy złożone palcem (PNG, data URL)
+  currency: string; // PLN, EUR, GBP…
 };
 
 export const INVOICE_SETTINGS_KEY = 'invoice_settings';
@@ -99,7 +100,7 @@ function triple(n: number) {
   const h = Math.floor(n / 100), t = Math.floor((n % 100) / 10), o = n % 10;
   return [HUNDREDS[h], t === 1 ? TEENS[o] : TENS[t], t === 1 ? '' : ONES[o]].filter(Boolean).join(' ');
 }
-export function amountInWords(amount: number) {
+export function amountInWords(amount: number, currency = 'PLN') {
   const zloty = Math.floor(Math.abs(amount) + 1e-9);
   const grosze = Math.round((Math.abs(amount) - zloty) * 100);
   let words = '';
@@ -116,7 +117,8 @@ export function amountInWords(amount: number) {
     }
     words = parts.join(' ');
   }
-  return `${amount < 0 ? 'minus ' : ''}${words} ${plural(zloty, ['złoty', 'złote', 'złotych'])} ${String(grosze).padStart(2, '0')}/100`;
+  const unit = currency === 'PLN' ? plural(zloty, ['złoty', 'złote', 'złotych']) : currency === 'EUR' ? 'euro' : currency;
+  return `${amount < 0 ? 'minus ' : ''}${words} ${unit} ${String(grosze).padStart(2, '0')}/100`;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +137,12 @@ export const plMoney = (n: number) => `${n.toLocaleString('pl-PL', { minimumFrac
 const plDate = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : iso);
 const qtyText = (n: number) => n.toLocaleString('pl-PL', { maximumFractionDigits: 2 });
 
-export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
+/** Kwota na rachunku: 1 200,00 zł / 1 200,00 EUR */
+export const invMoney = (n: number, currency = 'PLN') => (currency === 'PLN' ? plMoney(n)
+  : `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/\u00a0| /g, ' ')} ${currency}`);
+
+export function renderInvoicePdf(inv: InvoiceData, opts: { qr?: Buffer } = {}): Promise<Buffer> {
+  const plMoney = (n: number) => invMoney(n, inv.currency || 'PLN');
   const f = loadFonts();
   const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `Rachunek ${inv.number}`.trim(), Author: inv.seller.name || 'Od Morza do Gór' } });
   doc.registerFont('regular', f.regular);
@@ -242,7 +249,7 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
   doc.font('regular').fontSize(9).fillColor(MUTED).text('RAZEM DO ZAPŁATY', W - M - boxW + 14, y + 10, { characterSpacing: 0.6 });
   doc.font('serif').fontSize(19).fillColor(GREEN).text(plMoney(total), W - M - boxW + 14, y + 20, { width: boxW - 28, align: 'right' });
   y += 58;
-  doc.font('regular').fontSize(9.5).fillColor(MUTED).text('Słownie: ', M, y, { continued: true }).fillColor(INK).text(amountInWords(total), { width: CW });
+  doc.font('regular').fontSize(9.5).fillColor(MUTED).text('Słownie: ', M, y, { continued: true }).fillColor(INK).text(amountInWords(total, inv.currency || 'PLN'), { width: CW });
   y = doc.y + 18;
 
   // Płatność
@@ -250,16 +257,26 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
   const pay: [string, string][] = [
     ['Sposób płatności', inv.payment_method],
     ['Termin płatności', plDate(inv.payment_due)],
-    ...(inv.seller.account && /przelew/i.test(inv.payment_method || 'przelew') ? [['Numer konta', `${inv.seller.account}${inv.seller.bank ? ` (${inv.seller.bank})` : ''}`] as [string, string]] : []),
+    ...(inv.seller.account && /przelew/i.test(inv.payment_method || 'przelew') ? [[(inv.currency || 'PLN') === 'PLN' ? 'Numer konta' : 'IBAN', `${inv.seller.account}${inv.seller.bank ? ` (${inv.seller.bank})` : ''}`] as [string, string]] : []),
     ...(paid != null ? [['Zapłacono', plMoney(paid)] as [string, string], ['Pozostało do zapłaty', plMoney(Math.max(0, round2(total - paid)))] as [string, string]] : []),
   ].filter(([, v]) => v) as [string, string][];
-  if (pay.length) {
+  if (pay.length || opts.qr) {
     doc.moveTo(M, y).lineTo(M + CW, y).lineWidth(0.6).strokeColor(LINE).stroke();
     y += 12;
+    const top = y;
+    const qrSize = 86;
+    const valueW = CW - 150 - (opts.qr ? qrSize + 20 : 0);
     for (const [k, v] of pay) {
       doc.font('regular').fontSize(10).fillColor(MUTED).text(k, M, y, { width: 150 });
-      doc.font('bold').fontSize(10).fillColor(INK).text(v, M + 150, y, { width: CW - 150 });
+      doc.font('bold').fontSize(10).fillColor(INK).text(v, M + 150, y, { width: valueW });
       y = Math.max(doc.y, y + 14) + 4;
+    }
+    // kod QR do zapłaty (aplikacja banku) — po prawej stronie danych płatności
+    if (opts.qr) {
+      const qx = W - M - qrSize;
+      doc.image(opts.qr, qx, top, { width: qrSize, height: qrSize });
+      doc.font('regular').fontSize(7).fillColor(MUTED).text('Zeskanuj w aplikacji banku', qx - 10, top + qrSize + 2, { width: qrSize + 20, align: 'center' });
+      y = Math.max(y, top + qrSize + 16);
     }
   }
 
@@ -311,7 +328,7 @@ export const autoFooter = (p: Party) => [p.name, p.address && p.city ? `${p.addr
 export type InvoiceRow = {
   id: number; number: string; reservation_id: number | null; issue_date: string; sale_date: string; place: string;
   seller: string; buyer: string; items: string; total: number; payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
-  signatures: number; seller_signature: string; buyer_signature: string;
+  signatures: number; seller_signature: string; buyer_signature: string; currency: string;
   created_by: string; created_at: string; updated_at: string;
 };
 const parse = <T>(raw: string, fallback: T): T => { try { return JSON.parse(raw) as T; } catch { return fallback; } };
@@ -321,6 +338,7 @@ export function invoiceData(row: InvoiceRow): InvoiceData {
     seller: { ...EMPTY_PARTY, account: '', bank: '', ...parse<Partial<Seller>>(row.seller, {}) }, buyer: { ...EMPTY_PARTY, ...parse<Partial<Party>>(row.buyer, {}) },
     items: readItems(parse(row.items, [])), payment_method: row.payment_method, payment_due: row.payment_due, paid: row.paid, note: row.note, footer: row.footer ?? '',
     signatures: row.signatures !== 0, seller_signature: row.seller_signature ?? '', buyer_signature: row.buyer_signature ?? '',
+    currency: row.currency || 'PLN',
   };
 }
 export const invoiceFileName = (number: string) => `Rachunek-${(number || 'bez-numeru').replace(/[^\w-]+/g, '-')}.pdf`;

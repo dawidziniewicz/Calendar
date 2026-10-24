@@ -7,6 +7,7 @@ import { parseIcal } from './ical.ts';
 import { syncFeed } from './sync.ts';
 import { dailyArrivalsTick, saveSubscription, type Sender } from './push.ts';
 import { announce, syncEvents } from './changes.ts';
+import { epcPayload, plBankPayload, qrFromPath, qrPath, revolutUrl } from './qr.ts';
 
 const KEY = 'test-key-1234567890';
 
@@ -1080,4 +1081,59 @@ test('rachunek: pola na podpisy opcjonalne, podpisy palcem (PNG) w PDF, podpis w
   assert.equal(plain.signatures, false);
   assert.equal((await call('GET', `/api/invoices/${plain.id}/pdf`)).status, 200);
   assert.equal((await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json()).signatures, false, 'zapamiętane jako szablon');
+});
+
+test('kody QR: przelew ZBP (PLN), EPC (EUR), Revolut i podpisany adres obrazka', () => {
+  assert.equal(plBankPayload({ account: 'PL 12 1020 1234 0000 1234 5678 9012', amount: 360, name: 'Od Morza do Gór Jan Kowalski', title: 'Zaliczka – Ewa Nowak, 3–6 gru' }),
+    '|PL|12102012340000123456789012|036000|Od Morza do Gór Jan|Zaliczka – Ewa Nowak, 3–6 gru|||');
+  assert.equal(plBankPayload({ account: '123', amount: 10, name: 'x', title: 'y' }), null, 'tylko polski numer konta');
+  assert.equal(epcPayload({ account: 'DE89 3704 0044 0532 0130 00', bic: 'COBADEFFXXX', amount: 120.5, name: 'Jan Kowalski', text: 'Deposit' }),
+    'BCD\n002\n1\nSCT\nCOBADEFFXXX\nJan Kowalski\nDE89370400440532013000\nEUR120.50\n\n\nDeposit');
+  assert.equal(revolutUrl('@JanKowalski'), 'https://revolut.me/jankowalski');
+  assert.equal(revolutUrl('https://revolut.me/jan_k'), 'https://revolut.me/jan_k');
+  assert.equal(revolutUrl('zły tag!'), null);
+  const path = qrPath('klucz', 'https://revolut.me/jan');
+  const [, data, sig] = path.match(/^\/qr\/([\w-]+)\.png\?s=([a-f0-9]+)$/)!;
+  assert.equal(qrFromPath('klucz', data, sig), 'https://revolut.me/jan');
+  assert.equal(qrFromPath('inny', data, sig), null, 'podpis z innym kluczem');
+  assert.equal(qrFromPath('klucz', `${data}x`, sig), null, 'zmieniona treść');
+});
+
+test('waluty i Revolut: oferta w EUR, dane IBAN/BIC, Revolut i kody QR po akceptacji; rachunek w EUR', async () => {
+  const { db, call, login, sent } = setupWithMail();
+  await login();
+  await call('PUT', '/api/settings/payments', {
+    account_number: '12 1020 1234 0000 1234 5678 9012', account_name: 'Jan Kowalski', revolut: '@jankowalski', show_qr: true,
+    accounts: [{ currency: 'EUR', account_number: 'PL61 1090 1014 0000 0712 1981 2874', bic: 'WBKPPLPP', account_name: 'Jan Kowalski', bank_name: 'Santander' }, { currency: 'XXX', account_number: '1' }],
+  });
+  const ps = await (await call('GET', '/api/settings/payments')).json();
+  assert.deepEqual(ps.accounts.map((a: { currency: string }) => a.currency), ['EUR'], 'nieznana waluta pominięta');
+  const r = await (await call('POST', '/api/reservations', { unit_id: 2, check_in: inDays(50), check_out: inDays(53), guest_name: 'John Smith', guest_phone: '+44 7700 900123', guest_email: 'john@example.com', lang: 'en', currency: 'EUR', price: 300 })).json();
+  assert.equal(r.currency, 'EUR');
+  const of = await (await call('POST', `/api/reservations/${r.id}/offers`, { price: 320, deposit: 100, currency: 'EUR' })).json();
+  assert.equal(of.offer.currency, 'EUR');
+  assert.match(sent.at(-1)!.text, /€320/);
+  const t = of.offer.url.split('t=')[1];
+  const acc = await (await call('POST', '/public/offer', { t, action: 'accept', consent: true }, { 'x-client-ip': '8.1.1.1' })).json();
+  assert.equal(acc.currency, 'EUR');
+  assert.equal(acc.payment.bic, 'WBKPPLPP');
+  assert.equal(acc.payment.revolut, 'https://revolut.me/jankowalski');
+  assert.deepEqual(acc.payment.qr.map((q: { kind: string }) => q.kind), ['bank', 'revolut']);
+  const img = await call('GET', `/public${acc.payment.qr[0].path}`);
+  assert.equal(img.headers.get('content-type'), 'image/png');
+  assert.equal((await call('GET', '/public/qr/abc.png?s=00000000000000000000')).status, 404);
+  await flush();
+  const mail = sent.find((m) => /Booking confirmed/.test(m.subject))!;
+  assert.match(mail.text, /IBAN: PL61 1090/);
+  assert.match(mail.text, /Revolut: revolut\.me\/jankowalski/);
+  assert.match((mail as unknown as { html: string }).html, /\/public\/qr\/[\w-]+\.png\?s=/);
+  assert.equal((db.prepare('SELECT currency FROM reservations WHERE id = ?').get(r.id) as { currency: string }).currency, 'EUR');
+  // rachunek w walucie rezerwacji z kontem walutowym
+  const draft = await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json();
+  assert.equal(draft.currency, 'EUR');
+  assert.match(draft.seller.account, /^PL61/);
+  assert.match(draft.seller.bank, /BIC\/SWIFT WBKPPLPP/);
+  const inv = await (await call('POST', '/api/invoices', { ...draft, reservation_id: r.id })).json();
+  assert.equal(inv.currency, 'EUR');
+  assert.equal((await call('GET', `/api/invoices/${inv.id}/pdf`)).status, 200);
 });

@@ -733,3 +733,5 @@ fieldset.plain { padding: 0; background: none; margin-bottom: 12px; }
 .sig-actions { display: flex; gap: 10px; padding: 12px 14px 16px; }
 .sig-actions .btn { flex: 1; min-height: 46px; }
 @media (orientation: landscape) and (max-height: 500px) { .sig-area { height: calc(var(--vv-height, 100vh) - 150px); margin: 8px 12px; } .sig-hint { display: none; } .sig-actions { padding: 8px 12px; } }
+.foreign-account { padding: 10px 0; border-top: 1px solid var(--line); border-radius: 0; }
+.revolut-title { margin-top: 18px; }

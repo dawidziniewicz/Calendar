@@ -45,6 +45,7 @@ export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
   lang: 'pl',
   deposit: null,
   deposit_due: null,
+  currency: 'PLN',
 });
 
 export default function App() {

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { InvoiceListItem, InvoiceTemplate, PaymentSettings } from '../types';
+import type { ForeignAccount, InvoiceListItem, InvoiceTemplate, PaymentSettings } from '../types';
 import { formatShort } from '../dates';
 import InvoiceSheet from './InvoiceSheet';
 import NumInput from './NumInput';
 
-const money = (n: number) => `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`;
+import { CURRENCIES, fmt } from '../money';
 
 // Ustawienia płatności (konto do przelewów, domyślna zaliczka, warunki) i rachunków (szablon wystawcy, lista).
 export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; canEdit: boolean }) {
@@ -38,6 +38,12 @@ export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; 
     } catch (e) { setMsg({ where: 'tpl', ok: false, text: e instanceof Error ? e.message : String(e) }); }
   };
   const p = <K extends keyof PaymentSettings>(k: K, v: PaymentSettings[K]) => ps && setPs({ ...ps, [k]: v });
+  const setAccount = (i: number, patch: Partial<ForeignAccount>) => ps && setPs({ ...ps, accounts: ps.accounts.map((a, j) => (j === i ? { ...a, ...patch } : a)) });
+  // link revolut.me z Revtagu (tak samo liczy serwer)
+  const revolut = (() => {
+    const t = (ps?.revolut ?? '').trim().replace(/^https?:\/\//, '').replace(/^(www\.)?revolut\.me\//i, '').replace(/^@/, '').replace(/\/.*$/, '');
+    return /^[a-z0-9._-]{2,40}$/i.test(t) ? `https://revolut.me/${t.toLowerCase()}` : '';
+  })();
   const t = <K extends keyof InvoiceTemplate>(k: K, v: InvoiceTemplate[K]) => tpl && setTpl({ ...tpl, [k]: v });
 
   return (
@@ -51,11 +57,40 @@ export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; 
 
       {ps && (
         <div className="panel">
-          <h2 className="panel-title">Dane do przelewu</h2>
+          <h2 className="panel-title">Dane do przelewu (PLN)</h2>
           <fieldset className="plain">
             <label className="full">Numer konta<input inputMode="numeric" value={ps.account_number} disabled={!canEdit} onChange={(e) => p('account_number', e.target.value)} placeholder="np. 12 3456 7890 1234 5678 9012 3456" /></label>
             <label>Odbiorca przelewu<input value={ps.account_name} disabled={!canEdit} onChange={(e) => p('account_name', e.target.value)} placeholder="imię i nazwisko / firma" /></label>
             <label>Bank<input value={ps.bank_name} disabled={!canEdit} onChange={(e) => p('bank_name', e.target.value)} placeholder="opcjonalnie" /></label>
+            <label>BIC / SWIFT<input value={ps.bic} disabled={!canEdit} onChange={(e) => p('bic', e.target.value.toUpperCase())} placeholder="dla przelewów z zagranicy" /></label>
+          </fieldset>
+
+          <h2 className="panel-title">Konta walutowe</h2>
+          <p className="muted small-note">Dla rezerwacji, ofert i rachunków w EUR, GBP… goście dostaną IBAN i BIC z konta w tej walucie (np. konto walutowe albo Revolut Business).</p>
+          {ps.accounts.map((a, i) => (
+            <fieldset key={i} className="plain foreign-account">
+              <label>Waluta
+                <select value={a.currency} disabled={!canEdit} onChange={(e) => setAccount(i, { currency: e.target.value })}>
+                  {CURRENCIES.filter((c) => c !== 'PLN').map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              <label>BIC / SWIFT<input value={a.bic} disabled={!canEdit} onChange={(e) => setAccount(i, { bic: e.target.value.toUpperCase() })} /></label>
+              <label className="full">IBAN<input value={a.account_number} disabled={!canEdit} onChange={(e) => setAccount(i, { account_number: e.target.value })} placeholder="np. PL61 1090 1014 0000 0712 1981 2874" /></label>
+              <label>Odbiorca<input value={a.account_name} disabled={!canEdit} onChange={(e) => setAccount(i, { account_name: e.target.value })} placeholder={ps.account_name || 'imię i nazwisko'} /></label>
+              <label>Bank<input value={a.bank_name} disabled={!canEdit} onChange={(e) => setAccount(i, { bank_name: e.target.value })} /></label>
+              {canEdit && <button type="button" className="link danger-link full" onClick={() => p('accounts', ps.accounts.filter((_, j) => j !== i))}>Usuń konto {a.currency}</button>}
+            </fieldset>
+          ))}
+          {canEdit && <button type="button" className="btn small" onClick={() => p('accounts', [...ps.accounts, { currency: ['EUR', 'GBP', 'USD'].find((c) => !ps.accounts.some((a) => a.currency === c)) ?? 'EUR', account_number: '', account_name: ps.account_name, bank_name: '', bic: '' }])}>＋ Dodaj konto walutowe</button>}
+
+          <h2 className="panel-title revolut-title">Revolut</h2>
+          <fieldset className="plain">
+            <label className="full">Revtag (nazwa użytkownika Revolut)
+              <input value={ps.revolut} disabled={!canEdit} onChange={(e) => p('revolut', e.target.value)} placeholder="np. @jankowalski" autoCapitalize="none" />
+            </label>
+            {revolut && <p className="full muted">Goście dostaną link <a href={revolut} target="_blank" rel="noopener noreferrer">{revolut.replace('https://', '')}</a> i kod QR — płacą kartą lub z aplikacji Revolut w dowolnej walucie (kwotę wpisują sami).</p>}
+            <label className="check-row full"><input type="checkbox" checked={ps.show_qr} disabled={!canEdit} onChange={(e) => p('show_qr', e.target.checked)} /> Kody QR do płatności (e-maile, strona oferty, rachunek)</label>
+            <p className="full muted">QR do przelewu: w PLN dla aplikacji polskich banków, w EUR — kod SEPA (EPC) dla banków w strefie euro. Dla innych walut tylko Revolut.</p>
           </fieldset>
           <h2 className="panel-title">Zaliczka i oferty</h2>
           <fieldset className="plain">
@@ -127,7 +162,7 @@ export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; 
                 <button type="button" className="history-item" onClick={() => setOpen({ id: i.id })}>
                   <span className="history-kind invoice">{i.number}</span>
                   <span>{i.buyer_name || '—'}{i.check_in ? ` · ${formatShort(i.check_in)}–${formatShort(i.check_out!)}` : ''}</span>
-                  <span className="muted">{money(i.total)} · {formatShort(i.issue_date)}</span>
+                  <span className="muted">{fmt(i.total, i.currency, true)} · {formatShort(i.issue_date)}</span>
                   <span className="chev">›</span>
                 </button>
               </li>

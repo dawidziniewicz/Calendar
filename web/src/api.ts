@@ -52,7 +52,7 @@ async function pdf(method: string, path: string, body?: unknown): Promise<Blob> 
   return res.blob();
 }
 
-export type OfferInput = { price: number; deposit?: number | null; deposit_due?: string | null; valid_until?: string | null; message?: string; email?: boolean; unit_id?: number; lang?: 'pl' | 'en' };
+export type OfferInput = { currency?: string; price: number; deposit?: number | null; deposit_due?: string | null; valid_until?: string | null; message?: string; email?: boolean; unit_id?: number; lang?: 'pl' | 'en' };
 export type MessageInput = { kind: MessageKind; subject?: string; body?: string; amount?: number | null; due?: string | null; title?: string; lang?: 'pl' | 'en' };
 export type MessageDraft = { lang: 'pl' | 'en'; subject: string; body: string; amount: number | null; due: string | null; title: string; has_account: boolean; default_deposit: { amount: number | null; due: string | null } };
 
@@ -150,7 +150,7 @@ export const api = {
   invoiceTemplate: () => request<InvoiceTemplate>('GET', '/settings/invoice'),
   saveInvoiceTemplate: (t: Partial<InvoiceTemplate>) => request<InvoiceTemplate>('PUT', '/settings/invoice', t),
   invoices: (reservationId?: number) => request<InvoiceListItem[]>('GET', `/invoices${reservationId ? `?reservation_id=${reservationId}` : ''}`),
-  invoiceDraft: (reservationId?: number) => request<InvoiceData>('GET', `/invoices/draft${reservationId ? `?reservation_id=${reservationId}` : ''}`),
+  invoiceDraft: (reservationId?: number, currency?: string) => request<InvoiceData>('GET', `/invoices/draft?${new URLSearchParams({ ...(reservationId ? { reservation_id: String(reservationId) } : {}), ...(currency ? { currency } : {}) })}`),
   invoice: (id: number) => request<Invoice>('GET', `/invoices/${id}`),
   saveInvoice: (inv: InvoiceData & { save_template?: boolean }, id?: number) => (id ? request<Invoice>('PUT', `/invoices/${id}`, inv) : request<Invoice>('POST', '/invoices', inv)),
   deleteInvoice: (id: number) => request('DELETE', `/invoices/${id}`),
