@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { Property, Reservation } from '../types';
+import type { Activity, MessageKind, Property, Reservation } from '../types';
+import OfferSheet from './OfferSheet';
+import MessageSheet, { MESSAGE_LABELS } from './MessageSheet';
+import InvoiceSheet from './InvoiceSheet';
 import { SOURCES, STATUS_LABELS } from '../types';
 import { diffDays, formatLong, formatShort, nightsLabel } from '../dates';
 
@@ -31,6 +34,17 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  const [activity, setActivity] = useState<Activity | null>(null);
+  const [activityVersion, setActivityVersion] = useState(0);
+  const [offerOpen, setOfferOpen] = useState(false);
+  const [messageKind, setMessageKind] = useState<MessageKind | null>(null);
+  const [invoice, setInvoice] = useState<{ id?: number } | null>(null);
+  const childOpen = offerOpen || messageKind != null || invoice != null;
+  useEffect(() => {
+    if (readOnly) return;
+    api.activity(r.id).then(setActivity).catch(() => {});
+  }, [r.id, readOnly, activityVersion]);
+  const refreshActivity = () => setActivityVersion((v) => v + 1);
   const cancelledImport = r.status === 'cancelled' && Boolean(r.external_uid);
 
   const convert = async (force = false) => {
@@ -86,10 +100,31 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
   const missingGuest = !r.guest_name && !r.guest_phone;
 
   useEffect(() => {
+    if (childOpen) return; // Escape zamyka najpierw otwarte okno (oferta, wiadomość, rachunek)
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, childOpen]);
+
+  // Zaliczka: kwota, termin i czy wpłacona
+  const depositPaid = r.deposit != null && r.deposit > 0 && (r.paid ?? 0) >= r.deposit;
+  const depositLate = r.deposit != null && !depositPaid && !!r.deposit_due && r.deposit_due < new Date().toLocaleDateString('sv-SE');
+  const markDeposit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const updated = await api.saveReservation({ ...r, paid: Math.max(r.paid ?? 0, r.deposit ?? 0) }, true);
+      onChanged(updated);
+      if (updated.guest_email && confirm('Zapisano wpłatę zaliczki. Wysłać gościowi potwierdzenie wpłaty?')) setMessageKind('received');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const canMail = r.status !== 'cancelled' && !cancelledImport;
+  const OFFER_STATUS: Record<string, string> = { sent: 'czeka na gościa', accepted: 'zaakceptowana ✓', declined: 'odrzucona', withdrawn: 'wycofana' };
+  const when = (sql: string) => new Date(`${sql.replace(' ', 'T')}Z`).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -199,6 +234,14 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
             {due != null && (
               <div><dt>Do zapłaty</dt><dd className={due > 0 ? 'due' : 'paid'}>{due > 0 ? money(due) : 'Opłacone ✓'}</dd></div>
             )}
+            {!readOnly && r.deposit != null && r.deposit > 0 && (
+              <div>
+                <dt>Zaliczka</dt>
+                <dd className={depositPaid ? 'paid' : depositLate ? 'due' : ''}>
+                  {money(r.deposit)}{depositPaid ? ' · wpłacona ✓' : r.deposit_due ? ` · do ${formatShort(r.deposit_due)}${depositLate ? ' (minął termin)' : ''}` : ''}
+                </dd>
+              </div>
+            )}
           </dl>
 
           {r.notes && (
@@ -208,8 +251,61 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
             </div>
           )}
 
+          {!readOnly && canMail && (
+            <section className="guest-comms">
+              <h4>Płatności i wiadomości do gościa</h4>
+              {!r.guest_email && <p className="muted small-note">Dodaj e-mail gościa (Edytuj), żeby wysyłać wiadomości. Ofertę możesz wysłać linkiem przez SMS / WhatsApp.</p>}
+              {activity && !activity.email_configured && <p className="muted small-note">Wysyłka e-maili nie jest skonfigurowana na serwerze.</p>}
+              <div className="comms-grid">
+                <button type="button" className="comms-btn" onClick={() => setOfferOpen(true)}><b>Oferta do akceptacji</b><small>cena z obowiązkiem zapłaty, link „Akceptuję”</small></button>
+                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('deposit')}><b>Poproś o zaliczkę</b><small>kwota, termin, numer konta</small></button>
+                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('balance')}><b>Poproś o dopłatę</b><small>pozostała kwota</small></button>
+                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('received')}><b>Potwierdź wpłatę</b><small>podziękowanie za przelew</small></button>
+                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('confirmation')}><b>Potwierdzenie rezerwacji</b><small>szczegóły pobytu</small></button>
+                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('custom')}><b>Napisz wiadomość</b><small>dowolna treść</small></button>
+                <button type="button" className="comms-btn accent" onClick={() => setInvoice({})}><b>Wystaw rachunek</b><small>PDF A4 z podglądem</small></button>
+              </div>
+
+              {activity && (activity.offers.length > 0 || activity.messages.length > 0 || activity.invoices.length > 0) && (
+                <ul className="history">
+                  {activity.invoices.map((i) => (
+                    <li key={`i${i.id}`}>
+                      <button type="button" className="history-item" onClick={() => setInvoice({ id: i.id })}>
+                        <span className="history-kind invoice">Rachunek {i.number}</span>
+                        <span>{money(i.total)} · {formatShort(i.issue_date)}</span>
+                        <span className="chev">›</span>
+                      </button>
+                    </li>
+                  ))}
+                  {activity.offers.map((o) => (
+                    <li key={`o${o.id}`} className="history-row">
+                      <span className="history-kind offer">Oferta {money(o.price)}{o.deposit ? ` · zaliczka ${money(o.deposit)}` : ''}</span>
+                      <span className={`muted offer-st offer-${o.expired ? 'expired' : o.status}`}>{o.expired ? 'wygasła' : OFFER_STATUS[o.status]} · {when(o.decided_at ?? o.created_at)}</span>
+                      {o.status === 'sent' && !o.expired && (
+                        <span className="history-actions">
+                          <button type="button" className="link" onClick={() => navigator.clipboard?.writeText(o.url).then(() => alert('Skopiowano link do oferty'), () => prompt('Link:', o.url))}>Kopiuj link</button>
+                          <button type="button" className="link danger-link" onClick={() => api.withdrawOffer(o.id).then(refreshActivity).catch((e) => setError(e.message))}>Wycofaj</button>
+                        </span>
+                      )}
+                      {o.decline_reason && <span className="muted">„{o.decline_reason}”</span>}
+                    </li>
+                  ))}
+                  {activity.messages.map((m) => (
+                    <li key={`m${m.id}`} className="history-row">
+                      <span className="history-kind">{MESSAGE_LABELS[m.kind] ?? m.kind}</span>
+                      <span className="muted">{m.subject} · {when(m.sent_at)}{m.sent_by ? ` · ${m.sent_by}` : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+
           {!readOnly && (
             <div className="sheet-actions">
+              {r.deposit != null && r.deposit > 0 && !depositPaid && r.status !== 'cancelled' && (
+                <button type="button" className="btn big" disabled={busy} onClick={markDeposit}>✓ Klient wpłacił zaliczkę ({money(r.deposit)})</button>
+              )}
               {!fullyPaid && r.status !== 'cancelled' && (
                 <button type="button" className="btn paid-btn big" disabled={busy} onClick={markPaid}>
                   ✓ Klient zapłacił{due != null && due > 0 ? ` (${money(due)})` : ''}
@@ -221,6 +317,25 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
           )}
         </div>
       </div>
+      {offerOpen && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <OfferSheet
+            target={{ kind: 'reservation', id: r.id, price: r.price, checkIn: r.check_in, email: r.guest_email, phone: r.guest_phone, lang: r.lang, guest: r.guest_name || 'Gość' }}
+            onClose={() => setOfferOpen(false)}
+            onSent={refreshActivity}
+          />
+        </div>
+      )}
+      {messageKind && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <MessageSheet reservation={r} initialKind={messageKind} onClose={() => setMessageKind(null)} onSent={(u) => { onChanged(u); refreshActivity(); }} />
+        </div>
+      )}
+      {invoice && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <InvoiceSheet reservationId={invoice.id ? undefined : r.id} invoiceId={invoice.id} guestEmail={r.guest_email} onClose={() => setInvoice(null)} onChanged={refreshActivity} />
+        </div>
+      )}
     </div>
   );
 }

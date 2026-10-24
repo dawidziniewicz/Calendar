@@ -8,10 +8,10 @@ import InstallApp from './InstallApp';
 
 type Props = {
   user: string; readOnly: boolean; scope: string[] | null; canManageUsers: boolean;
-  onOpenUsers: () => void; onOpenPricing: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
+  onOpenUsers: () => void; onOpenPricing: () => void; onOpenPayments: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
 };
 
-export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onOpenPricing, onLogout, properties, reload }: Props) {
+export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onOpenPricing, onOpenPayments, onLogout, properties, reload }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult[] | null>(null);
   const [error, setError] = useState('');
@@ -48,7 +48,7 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
     return (
       <section className="settings">
         <InstallApp />
-        {!readOnly && (
+        {!readOnly && (<>
           <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenPricing}>
             <span>
               <b>Cennik i rezerwacje online</b>
@@ -56,7 +56,14 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
             </span>
             <span className="nav-arrow">›</span>
           </button>
-        )}
+          <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenPayments}>
+            <span>
+              <b>Płatności i rachunki</b>
+              <small>Wystawione rachunki i ich szablon</small>
+            </span>
+            <span className="nav-arrow">›</span>
+          </button>
+        </>)}
         <div className="panel access-info">
           {scope && <p>Dostęp do obiektów: <b>{scope.join(', ')}</b></p>}
           {readOnly && <p className="muted">To konto ma dostęp tylko do podglądu rezerwacji.</p>}
@@ -79,6 +86,13 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
         <span>
           <b>Cennik i rezerwacje online</b>
           <small>Cena podstawowa, ceny wg dni tygodnia (np. weekendy), ceny na wybrane dni, opcje płatne, jak daleko do przodu widać ceny</small>
+        </span>
+        <span className="nav-arrow">›</span>
+      </button>
+      <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenPayments}>
+        <span>
+          <b>Płatności i rachunki</b>
+          <small>Numer konta, zaliczka, warunki rezerwacji, szablon rachunku i wystawione rachunki</small>
         </span>
         <span className="nav-arrow">›</span>
       </button>

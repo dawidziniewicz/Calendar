@@ -1,4 +1,6 @@
-import type { BookingRequest, Draft, Extra, Property, Rate, Reservation } from './types';
+import type {
+  Activity, BookingRequest, Draft, Extra, Invoice, InvoiceData, InvoiceListItem, InvoiceTemplate, MessageKind, Offer, PaymentSettings, Property, Rate, Reservation,
+} from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -34,10 +36,30 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+/** PDF (podgląd rachunku) jako Blob */
+async function pdf(method: string, path: string, body?: unknown): Promise<Blob> {
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
+  } catch {
+    throw new ApiError(0, { error: 'Brak połączenia z internetem' });
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) window.dispatchEvent(new Event('auth:required'));
+    throw new ApiError(res.status, data);
+  }
+  return res.blob();
+}
+
+export type OfferInput = { price: number; deposit?: number | null; deposit_due?: string | null; valid_until?: string | null; message?: string; email?: boolean; unit_id?: number; lang?: 'pl' | 'en' };
+export type MessageInput = { kind: MessageKind; subject?: string; body?: string; amount?: number | null; due?: string | null; title?: string; lang?: 'pl' | 'en' };
+export type MessageDraft = { lang: 'pl' | 'en'; subject: string; body: string; amount: number | null; due: string | null; title: string; has_account: boolean; default_deposit: { amount: number | null; due: string | null } };
+
 export type PushSettings = { time: string; changes: boolean; requests: boolean };
-export type BookingSettings = { horizon_days: number; default_days: number; assign_mode: 'auto' | 'manual' };
+export type BookingSettings = { horizon_days: number; horizon_until: string | null; horizon_last: string; default_days: number; assign_mode: 'auto' | 'manual' };
 export type ExtraInput = { name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: number[] | null; active: boolean };
-export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | null; from: string | null; emails: string };
+export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | 'log' | null; from: string | null; emails: string };
 /** price/min_nights: liczba = ustaw, null = przywróć ustawienie domku, brak = bez zmian */
 export type RatePatch = { unit_ids: number[]; from: string; to: string; weekdays?: number[]; price?: number | null; min_nights?: number | null; closed?: boolean };
 /** properties: nazwy obiektów, do których konto ma dostęp (null = wszystkie). */
@@ -93,9 +115,9 @@ export const api = {
   saveExtra: (e: ExtraInput, id?: number) => (id ? request<Extra>('PUT', `/extras/${id}`, e) : request<Extra>('POST', '/extras', e)),
   deleteExtra: (id: number) => request('DELETE', `/extras/${id}`),
   bookingSettings: () => request<BookingSettings>('GET', '/settings/booking'),
-  saveBookingSettings: (patch: Partial<Pick<BookingSettings, 'horizon_days' | 'assign_mode'>>) => request<BookingSettings>('PUT', '/settings/booking', patch),
+  saveBookingSettings: (patch: Partial<Pick<BookingSettings, 'horizon_days' | 'horizon_until' | 'assign_mode'>>) => request<BookingSettings>('PUT', '/settings/booking', patch),
   requests: (status: 'pending' | 'decided') => request<BookingRequest[]>('GET', `/requests?status=${status}`),
-  acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean; unit_id?: number }) =>
+  acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean; unit_id?: number; deposit?: number | null; deposit_due?: string | null }) =>
     request<{ request: BookingRequest; reservation: Reservation; emailed: boolean }>('POST', `/requests/${id}/accept`, body),
   cancellations: () => request<BookingRequest[]>('GET', '/cancellations'),
   cancelConfirm: (id: number, body: { note?: string; email?: boolean }) => request<{ ok: boolean; emailed: boolean }>('POST', `/requests/${id}/cancel-confirm`, body),
@@ -105,4 +127,35 @@ export const api = {
   saveEmailSettings: (emails: string) => request<EmailSettings>('PUT', '/settings/email', { emails }),
   testEmail: () => request<{ sent: number }>('POST', '/settings/email/test'),
   guests: (q: string) => request<Guest[]>('GET', `/guests?q=${encodeURIComponent(q)}`),
+  setUnitType: (id: number, typeName: string) => request<{ type_name: string }>('PUT', `/rates/unit/${id}/type`, { type_name: typeName }),
+  renameType: (unitId: number, typeName: string, typeNameEn: string) => request('PUT', '/rates/type', { unit_id: unitId, type_name: typeName, type_name_en: typeNameEn }),
+  // oferty cenowe
+  requestOffer: (id: number, o: OfferInput) => request<{ offer: Offer; emailed: boolean }>('POST', `/requests/${id}/offers`, o),
+  reservationOffer: (id: number, o: OfferInput) => request<{ offer: Offer; emailed: boolean }>('POST', `/reservations/${id}/offers`, o),
+  withdrawOffer: (id: number) => request<Offer>('POST', `/offers/${id}/withdraw`),
+  // wiadomości do gościa
+  activity: (id: number) => request<Activity>('GET', `/reservations/${id}/activity`),
+  messageDraft: (id: number, kind: MessageKind, o: { amount?: number | null; due?: string | null; lang?: string } = {}) => {
+    const q = new URLSearchParams({ kind });
+    if (o.amount !== undefined) q.set('amount', o.amount == null ? '' : String(o.amount));
+    if (o.due !== undefined) q.set('due', o.due ?? '');
+    if (o.lang) q.set('lang', o.lang);
+    return request<MessageDraft>('GET', `/reservations/${id}/messages/draft?${q}`);
+  },
+  messagePreview: (id: number, m: MessageInput) => request<{ subject: string; html: string }>('POST', `/reservations/${id}/messages/preview`, m),
+  sendMessage: (id: number, m: MessageInput) => request<{ ok: boolean; reservation: Reservation }>('POST', `/reservations/${id}/messages`, m),
+  // płatności i rachunki
+  paymentSettings: () => request<PaymentSettings>('GET', '/settings/payments'),
+  savePaymentSettings: (p: PaymentSettings) => request<PaymentSettings>('PUT', '/settings/payments', p),
+  invoiceTemplate: () => request<InvoiceTemplate>('GET', '/settings/invoice'),
+  saveInvoiceTemplate: (t: Partial<InvoiceTemplate>) => request<InvoiceTemplate>('PUT', '/settings/invoice', t),
+  invoices: (reservationId?: number) => request<InvoiceListItem[]>('GET', `/invoices${reservationId ? `?reservation_id=${reservationId}` : ''}`),
+  invoiceDraft: (reservationId?: number) => request<InvoiceData>('GET', `/invoices/draft${reservationId ? `?reservation_id=${reservationId}` : ''}`),
+  invoice: (id: number) => request<Invoice>('GET', `/invoices/${id}`),
+  saveInvoice: (inv: InvoiceData & { save_template?: boolean }, id?: number) => (id ? request<Invoice>('PUT', `/invoices/${id}`, inv) : request<Invoice>('POST', '/invoices', inv)),
+  deleteInvoice: (id: number) => request('DELETE', `/invoices/${id}`),
+  sendInvoice: (id: number, body: { to?: string; body?: string } = {}) => request<{ ok: boolean; to: string }>('POST', `/invoices/${id}/send`, body),
+  invoicePdf: (id: number) => pdf('GET', `/invoices/${id}/pdf`),
+  invoicePreview: (inv: InvoiceData) => pdf('POST', '/invoices/preview', inv),
+  invoicePdfUrl: (id: number, download = false) => `/api/invoices/${id}/pdf${download ? '?download=1' : ''}`,
 };

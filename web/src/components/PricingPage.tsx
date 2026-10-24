@@ -3,7 +3,7 @@ import { api } from '../api';
 import type { Property, Rate, Unit } from '../types';
 import { type BookingSettings } from '../api';
 import { addDays, formatShort, nightsLabel, today } from '../dates';
-import { WEEKDAYS, weekdayPrices } from '../pricing';
+import { WEEKDAYS, groupUnits, weekdayPrices } from '../pricing';
 import PriceSheet from './PriceSheet';
 import ExtrasPanel from './ExtrasPanel';
 
@@ -43,18 +43,18 @@ export default function PricingPage({ properties, canEditHorizon, onBack, reload
         <div key={p.id} className="pricing-property">
           <h2 className="pricing-property-name">{p.name}</h2>
           <ClosurePanel property={p} onSaved={reload} />
-          <datalist id={`types-${p.id}`}>{[...new Set(p.units.map((u) => u.type_name).filter(Boolean))].map((t) => <option key={t} value={t} />)}</datalist>
-          {p.units.map((u) => (
+          {p.units.length > 1 && <TypesPanel property={p} onSaved={() => { reload(); setRatesVersion((v) => v + 1); }} />}
+          {groupUnits(p.units).map((g) => (
             <UnitPricingCard
-              key={u.id}
-              unit={u}
-              siblings={p.units.filter((x) => x.id !== u.id)}
-              typesListId={`types-${p.id}`}
-              rates={rates.filter((r) => r.unit_id === u.id)}
+              key={`${g.key}:${g.units.map((u) => u.id).join(',')}:${g.units[0].base_price}:${g.units[0].weekday_prices}:${g.units[0].min_nights}:${g.units[0].bookable}`}
+              units={g.units}
+              typeName={g.type}
+              rates={rates.filter((r) => g.units.some((u) => u.id === r.unit_id))}
               onSaved={reload}
-              onAddDays={() => setSheet({ unitId: u.id, from: today(), to: addDays(today(), 6) })}
-              onEditRange={(from, to) => setSheet({ unitId: u.id, from, to })}
+              onAddDays={() => setSheet({ unitId: g.units[0].id, from: today(), to: addDays(today(), 6) })}
+              onEditRange={(from, to) => setSheet({ unitId: g.units[0].id, from, to })}
               onRatesChanged={() => setRatesVersion((v) => v + 1)}
+              onUnified={() => { reload(); setRatesVersion((v) => v + 1); }}
             />
           ))}
         </div>
@@ -74,47 +74,83 @@ export default function PricingPage({ properties, canEditHorizon, onBack, reload
   );
 }
 
+const withYear = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+
 function HorizonPanel({ canEdit }: { canEdit: boolean }) {
   const [settings, setSettings] = useState<BookingSettings | null>(null);
+  const [mode, setMode] = useState<'date' | 'days'>('date');
+  const [until, setUntil] = useState('');
   const [days, setDays] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => { api.bookingSettings().then((s) => { setSettings(s); setDays(String(s.horizon_days)); }).catch(() => {}); }, []);
+  const apply = (s: BookingSettings) => {
+    setSettings(s);
+    setMode(s.horizon_until ? 'date' : 'days');
+    setUntil(s.horizon_until ?? s.horizon_last);
+    setDays(String(s.horizon_days));
+  };
+  useEffect(() => { api.bookingSettings().then(apply).catch(() => {}); }, []);
   if (settings == null) return null;
-  const saved = settings.horizon_days;
   const n = Number(days);
-  const save = async (value = n) => {
+  const save = async (patch: { horizon_until?: string | null; horizon_days?: number }) => {
     setMsg(null);
     try {
-      const s = await api.saveBookingSettings({ horizon_days: value });
-      setSettings(s);
-      setDays(String(s.horizon_days));
-      setMsg({ ok: true, text: `Zapisano — strona pokazuje ceny i przyjmuje zapytania do ${formatShort(addDays(today(), s.horizon_days))}.` });
+      const s = await api.saveBookingSettings(patch);
+      apply(s);
+      setMsg({ ok: true, text: `Zapisano — strona pokazuje ceny i przyjmuje zapytania do ${withYear(s.horizon_last)} (ostatnia noc).` });
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     }
   };
-  const setAssign = async (mode: 'auto' | 'manual') => {
-    try { setSettings(await api.saveBookingSettings({ assign_mode: mode })); } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+  const setAssign = async (m: 'auto' | 'manual') => {
+    try { setSettings(await api.saveBookingSettings({ assign_mode: m })); } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
   };
+  // szybkie daty: koniec wakacji, koniec roku, koniec przyszłego roku
+  const y = Number(today().slice(0, 4));
+  const quick: [string, string][] = [
+    ...(() => { const v = today() <= `${y}-09-30` ? y : y + 1; return [[`${v}-09-30`, `Koniec wakacji ${v}`] as [string, string]]; })(),
+    [`${y}-12-31`, `Koniec ${y}`],
+    [`${y + 1}-12-31`, `Koniec ${y + 1}`],
+  ];
   return (
     <div className="panel">
-      <h2>Na ile dni do przodu pokazywać ceny</h2>
+      <h2>Do kiedy pokazywać ceny na stronie</h2>
       <p className="muted notif-desc">
-        Goście widzą ceny i mogą wysłać zapytanie na najbliższe <b>{saved} dni</b> (do {formatShort(addDays(today(), saved))}). Późniejsze dni są na stronie niedostępne.
+        Goście widzą ceny i mogą wysłać zapytanie do <b>{withYear(settings.horizon_last)}</b> (ostatnia noc)
+        {settings.horizon_until ? '.' : ` — zawsze ${settings.horizon_days} dni do przodu, data przesuwa się każdego dnia.`} Późniejsze dni są na stronie niedostępne.
       </p>
       {canEdit ? (
         <>
-          <div className="chips horizon-chips">
-            {HORIZON_PRESETS.map((d) => (
-              <button key={d} type="button" className={`chip ${saved === d ? 'active' : ''}`} onClick={() => save(d)}>
-                {d === 365 ? '1 rok' : d === 540 ? '1,5 roku' : `${d} dni`}
-              </button>
-            ))}
+          <div className="segmented">
+            <button type="button" className={`chip ${mode === 'date' ? 'active' : ''}`} onClick={() => setMode('date')}>Do konkretnej daty</button>
+            <button type="button" className={`chip ${mode === 'days' ? 'active' : ''}`} onClick={() => setMode('days')}>Stała liczba dni do przodu</button>
           </div>
-          <div className="row">
-            <label className="narrow-time">Liczba dni (7–730)<input type="number" min={7} max={730} value={days} onChange={(e) => setDays(e.target.value)} /></label>
-            {n !== saved && <button className="btn primary small" disabled={!Number.isInteger(n) || n < 7 || n > 730} onClick={() => save()}>Zapisz</button>}
-          </div>
+          {mode === 'date' ? (
+            <>
+              <div className="row">
+                <label>Ostatnia noc z ceną na stronie<input type="date" min={today()} value={until} onChange={(e) => setUntil(e.target.value)} /></label>
+                {until && (until !== settings.horizon_until) && <button className="btn primary small" disabled={until < today()} onClick={() => save({ horizon_until: until })}>Zapisz</button>}
+              </div>
+              <div className="chips horizon-chips">
+                {quick.map(([d, label]) => (
+                  <button key={d} type="button" className={`chip ${settings.horizon_until === d ? 'active' : ''}`} onClick={() => save({ horizon_until: d })}>{label} · {formatShort(d)}</button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="chips horizon-chips">
+                {HORIZON_PRESETS.map((d) => (
+                  <button key={d} type="button" className={`chip ${!settings.horizon_until && settings.horizon_days === d ? 'active' : ''}`} onClick={() => save({ horizon_days: d })}>
+                    {d === 365 ? '1 rok' : d === 540 ? '1,5 roku' : `${d} dni`}
+                  </button>
+                ))}
+              </div>
+              <div className="row">
+                <label className="narrow-time">Liczba dni (7–730)<input type="number" min={7} max={730} value={days} onChange={(e) => setDays(e.target.value)} /></label>
+                {(n !== settings.horizon_days || settings.horizon_until) && <button className="btn primary small" disabled={!Number.isInteger(n) || n < 7 || n > 730} onClick={() => save({ horizon_days: n })}>Zapisz</button>}
+              </div>
+            </>
+          )}
         </>
       ) : <p className="muted small-note">Zmienić to może administrator z dostępem do wszystkich obiektów.</p>}
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
@@ -193,19 +229,88 @@ function groupRanges(rates: Rate[]): Range[] {
   return out;
 }
 
-function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAddDays, onEditRange, onRatesChanged }: {
-  unit: Unit; siblings: Unit[]; typesListId: string; rates: Rate[]; onSaved: () => void; onAddDays: () => void; onEditRange: (from: string, to: string) => void; onRatesChanged: () => void;
-}) {
-  const [typeName, setTypeName] = useState(u.type_name);
-  const [typeNameEn, setTypeNameEn] = useState(u.type_name_en);
-  // wpisanie istniejącego typu podpowiada jego angielską nazwę z innego domku
-  const changeType = (v: string) => {
-    setTypeName(v);
-    const match = siblings.find((x) => x.type_name.trim().toLowerCase() === v.trim().toLowerCase() && x.type_name_en);
-    if (match && !typeNameEn) setTypeNameEn(match.type_name_en);
+// Typy domków: przynależność wybierana z listy (bez literówek), nazwa typu PL/EN zmieniana dla wszystkich domków naraz
+function TypesPanel({ property: p, onSaved }: { property: Property; onSaved: () => void }) {
+  const groups = groupUnits(p.units).filter((g) => g.type);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const assign = async (u: Unit, value: string) => {
+    let name = value;
+    if (value === '__new') {
+      const typed = prompt('Nazwa nowego typu (np. Mały domek):')?.trim();
+      if (!typed) return;
+      name = groups.find((g) => g.type!.toLowerCase() === typed.toLowerCase())?.type ?? typed;
+    }
+    const target = groups.find((g) => g.type === name);
+    if (target && !confirm(`${u.name} dołączy do typu „${name}” i przejmie jego ceny (cena podstawowa, dni tygodnia, ceny na wybrane dni). Kontynuować?`)) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.setUnitType(u.id, name);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
   };
-  const sameType = typeName.trim() ? siblings.filter((x) => x.type_name.trim().toLowerCase() === typeName.trim().toLowerCase()) : [];
-  const [applyToType, setApplyToType] = useState(true);
+  return (
+    <div className="panel types-panel">
+      <h3>Typy domków</h3>
+      <p className="muted small-note">Takie same domki połącz w typ — strona pokaże je razem (np. „Mały domek · 3 domki”) i sama wybierze wolny, a ceny ustawiasz raz dla całego typu.</p>
+      <ul className="type-assign">
+        {p.units.map((u) => (
+          <li key={u.id}>
+            <span className="type-unit"><i className="unit-dot" style={{ background: u.color }} /> {u.name}</span>
+            <select value={u.type_name.trim() ? groups.find((g) => g.type!.toLowerCase() === u.type_name.trim().toLowerCase())?.type ?? '' : ''} disabled={busy}
+              onChange={(e) => assign(u, e.target.value)} aria-label={`Typ — ${u.name}`}>
+              <option value="">osobno (bez typu)</option>
+              {groups.map((g) => <option key={g.key} value={g.type!}>{g.type}</option>)}
+              <option value="__new">＋ Nowy typ…</option>
+            </select>
+          </li>
+        ))}
+      </ul>
+      {groups.map((g) => <TypeNames key={g.key} type={g.type!} units={g.units} onSaved={onSaved} />)}
+      {error && <div className="banner error">{error}</div>}
+    </div>
+  );
+}
+
+function TypeNames({ type, units, onSaved }: { type: string; units: Unit[]; onSaved: () => void }) {
+  const [name, setName] = useState(type);
+  const [en, setEn] = useState(units[0].type_name_en);
+  const [error, setError] = useState('');
+  const dirty = name.trim() !== type || en.trim() !== units[0].type_name_en;
+  const save = async () => {
+    setError('');
+    try { await api.renameType(units[0].id, name.trim(), en.trim()); onSaved(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+  return (
+    <div className="type-names">
+      <div className="row">
+        <label>Nazwa typu ({units.length} {units.length === 1 ? 'domek' : units.length < 5 ? 'domki' : 'domków'})<input maxLength={60} value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label>Po angielsku<input maxLength={60} placeholder="np. Small cottage" value={en} onChange={(e) => setEn(e.target.value)} /></label>
+        {dirty && <button className="btn primary small" disabled={!name.trim()} onClick={save}>Zapisz</button>}
+      </div>
+      {error && <div className="banner error">{error}</div>}
+    </div>
+  );
+}
+
+const sameRates = (a: Rate[], b: Rate[]) => {
+  const key = (l: Rate[]) => l.map((r) => `${r.date}|${r.price}|${r.min_nights}|${r.closed}`).sort().join(';');
+  return key(a) === key(b);
+};
+
+function UnitPricingCard({ units, typeName, rates: allRates, onSaved, onAddDays, onEditRange, onRatesChanged, onUnified }: {
+  units: Unit[]; typeName: string | null; rates: Rate[]; onSaved: () => void; onAddDays: () => void; onEditRange: (from: string, to: string) => void; onRatesChanged: () => void; onUnified: () => void;
+}) {
+  const u = units[0];
+  const rates = allRates.filter((r) => r.unit_id === u.id);
+  // domki typu z różnymi cenami (np. ustawione osobno przed połączeniem w typ) → propozycja ujednolicenia
+  const differs = units.slice(1).some((x) => x.base_price !== u.base_price || x.min_nights !== u.min_nights || (x.weekday_prices ?? '') !== (u.weekday_prices ?? '')
+    || !sameRates(rates, allRates.filter((r) => r.unit_id === x.id).map((r) => ({ ...r, unit_id: u.id }))));
   const initialWeek = useMemo(() => weekdayPrices(u).map((v) => (v == null ? '' : String(v))), [u]);
   const [base, setBase] = useState(u.base_price == null ? '' : String(u.base_price));
   const [week, setWeek] = useState<string[]>(initialWeek);
@@ -217,7 +322,7 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
   const ranges = groupRanges(rates);
 
   const dirty = base !== (u.base_price == null ? '' : String(u.base_price)) || week.some((v, i) => v !== initialWeek[i])
-    || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable || typeName !== u.type_name || typeNameEn !== u.type_name_en;
+    || minNights !== (u.min_nights || 1) || bookable !== !!u.bookable;
 
   const setDay = (dow: number, value: string) => setWeek(week.map((v, i) => (i === dow ? value : v)));
   const weekendShortcut = () => {
@@ -232,17 +337,22 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
     setBusy(true);
     setMsg(null);
     try {
-      const pricing = { base_price: basePrice, min_nights: minNights, bookable, weekday_prices: weekPrices, type_name: typeName.trim(), type_name_en: typeName.trim() ? typeNameEn.trim() : '' };
-      await api.saveUnitPricing(u.id, pricing);
-      // te same ceny dla pozostałych domków tego typu (każdy zachowuje swoją widoczność)
-      if (applyToType) for (const x of sameType) await api.saveUnitPricing(x.id, { ...pricing, bookable: !!x.bookable });
-      setMsg({ ok: true, text: applyToType && sameType.length ? `Zapisano cennik dla ${sameType.length + 1} domków typu „${typeName.trim()}”.` : 'Zapisano cennik.' });
+      // serwer zapisuje cennik dla wszystkich domków typu
+      await api.saveUnitPricing(u.id, { base_price: basePrice, min_nights: minNights, bookable, weekday_prices: weekPrices });
+      setMsg({ ok: true, text: units.length > 1 ? `Zapisano cennik dla ${units.length} domków typu „${typeName}”.` : 'Zapisano cennik.' });
       onSaved();
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
     }
+  };
+  const unify = async () => {
+    if (!confirm(`Ustawić wszystkim domkom typu „${typeName}” ceny takie jak ${u.name}?`)) return;
+    try {
+      for (const x of units.slice(1)) await api.setUnitType(x.id, typeName!);
+      onUnified();
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
   };
 
   const removeRange = async (r: Range) => {
@@ -260,20 +370,16 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
     <div className="panel pricing-card">
       <div className="pricing-card-head">
         <i className="unit-dot big" style={{ background: u.color }} />
-        <h3 className="pricing-unit-name">{u.name}</h3>
-        <span className="muted">do {u.capacity} os.</span>
+        <h3 className="pricing-unit-name">{typeName ?? u.name}</h3>
+        <span className="muted">do {Math.min(...units.map((x) => x.capacity))} os.</span>
         {!u.bookable && <span className="badge">ukryty na stronie</span>}
       </div>
-
-      <label className="type-field">Typ na stronie <small className="muted">— takie same domki strona pokazuje jako jeden (np. „Mały domek · 3 domki”)</small>
-        <input list={typesListId} maxLength={60} placeholder="np. Mały domek (puste = osobno)" value={typeName} onChange={(e) => changeType(e.target.value)} />
-      </label>
-      {typeName.trim() && (
-        <label className="type-field">Typ po angielsku <small className="muted">— na angielskiej wersji strony i w e-mailach do gości z zagranicy</small>
-          <input maxLength={60} placeholder="np. Small cottage (puste = jak po polsku)" value={typeNameEn} onChange={(e) => setTypeNameEn(e.target.value)} />
-        </label>
+      {units.length > 1 && <p className="muted small-note type-note">Wspólny cennik dla {units.length} domków: {units.map((x) => x.name).join(', ')}</p>}
+      {differs && (
+        <div className="banner error">
+          Domki tego typu mają teraz różne ceny. <button type="button" className="link strong" onClick={unify}>Ujednolić wg {u.name}</button>
+        </div>
       )}
-      {sameType.length > 0 && <p className="muted small-note type-note">Ten sam typ: {sameType.map((x) => x.name).join(', ')}</p>}
       <div className="row">
         <label>Cena podstawowa za noc (zł)<input inputMode="decimal" placeholder="np. 300" value={base} onChange={(e) => setBase(e.target.value)} /></label>
         <label className="narrow">Min. nocy<input type="number" min={1} max={60} value={minNights} onChange={(e) => setMinNights(Math.max(1, Number(e.target.value) || 1))} /></label>
@@ -294,11 +400,8 @@ function UnitPricingCard({ unit: u, siblings, typesListId, rates, onSaved, onAdd
 
       <label className="switch-row">
         <input type="checkbox" checked={bookable} onChange={(e) => setBookable(e.target.checked)} />
-        <span><b>Widoczny na stronie</b><small>Goście widzą ceny i wolne terminy i mogą wysłać zapytanie przyciskiem „Zarezerwuj”</small></span>
+        <span><b>{units.length > 1 ? 'Widoczne na stronie' : 'Widoczny na stronie'}</b><small>Goście widzą ceny i wolne terminy i mogą wysłać zapytanie przyciskiem „Zarezerwuj”</small></span>
       </label>
-      {dirty && sameType.length > 0 && (
-        <label className="check-row"><input type="checkbox" checked={applyToType} onChange={(e) => setApplyToType(e.target.checked)} /> Te same ceny dla wszystkich domków typu „{typeName.trim()}” ({sameType.length + 1})</label>
-      )}
       {dirty && <button className="btn primary" disabled={busy} onClick={save}>{busy ? 'Zapisywanie…' : 'Zapisz cennik'}</button>}
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
 

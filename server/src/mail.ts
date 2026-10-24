@@ -1,10 +1,13 @@
 import nodemailer from 'nodemailer';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 // Wysyłka e-maili: Resend (RESEND_API_KEY) albo dowolny serwer SMTP (SMTP_HOST, np. skrzynka u hostingodawcy).
 // Bez konfiguracji e-maile są wyłączone — zapytania i tak trafiają do aplikacji (powiadomienia push).
 
-export type Mail = { to: string[]; subject: string; html: string; text: string; replyTo?: string };
-export type Mailer = { send: (m: Mail) => Promise<void>; from: string; kind: 'resend' | 'smtp' };
+export type Attachment = { filename: string; content: Buffer; contentType?: string };
+export type Mail = { to: string[]; subject: string; html: string; text: string; replyTo?: string; attachments?: Attachment[] };
+export type Mailer = { send: (m: Mail) => Promise<void>; from: string; kind: 'resend' | 'smtp' | 'log' };
 
 export function createMailer(env: NodeJS.ProcessEnv = process.env): Mailer | undefined {
   const from = env.MAIL_FROM || 'Od Morza do Gór <rezerwacje@odmorzadogor.pl>';
@@ -17,7 +20,10 @@ export function createMailer(env: NodeJS.ProcessEnv = process.env): Mailer | und
         const res = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from, to: m.to, subject: m.subject, html: m.html, text: m.text, reply_to: m.replyTo }),
+          body: JSON.stringify({
+            from, to: m.to, subject: m.subject, html: m.html, text: m.text, reply_to: m.replyTo,
+            attachments: m.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString('base64') })),
+          }),
           signal: AbortSignal.timeout(20_000),
         });
         if (!res.ok) throw new Error(`Resend HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -36,7 +42,22 @@ export function createMailer(env: NodeJS.ProcessEnv = process.env): Mailer | und
       from,
       kind: 'smtp',
       send: async (m) => {
-        await transport.sendMail({ from, to: m.to, subject: m.subject, html: m.html, text: m.text, replyTo: m.replyTo });
+        await transport.sendMail({ from, to: m.to, subject: m.subject, html: m.html, text: m.text, replyTo: m.replyTo, attachments: m.attachments });
+      },
+    };
+  }
+  // Tylko do testów lokalnych: e-maile (HTML i załączniki) zapisywane do katalogu mail-outbox obok bazy zamiast wysyłki
+  if (env.MAIL_LOG === '1') {
+    const dir = join(dirname(env.DB_PATH || './data/x'), 'mail-outbox');
+    return {
+      from,
+      kind: 'log',
+      send: async (m) => {
+        mkdirSync(dir, { recursive: true });
+        const base = `${new Date().toISOString().replace(/[:.]/g, '-')}-${m.subject.replace(/[^\w]+/g, '-').slice(0, 50)}`;
+        writeFileSync(join(dir, `${base}.html`), m.html);
+        for (const a of m.attachments ?? []) writeFileSync(join(dir, `${base}-${a.filename}`), a.content);
+        console.log(`[MAIL_LOG] ${m.to.join(', ')} · ${m.subject}`);
       },
     };
   }

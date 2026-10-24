@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
 import type { BookingRequest, ChosenExtra, Reservation } from '../types';
 import { SOURCES } from '../types';
-import { diffDays, formatShort, nightsLabel } from '../dates';
+import { addDays, diffDays, formatShort, nightsLabel, today } from '../dates';
+import OfferSheet from './OfferSheet';
+import NumInput from './NumInput';
 
 type Props = {
   version: number;
@@ -38,7 +40,7 @@ export default function Requests({ version, readOnly, focusId, onChanged, onOpen
     <section className="requests">
       <div className="page-intro">
         <h1>Zapytania ze strony</h1>
-        <p className="muted">Goście wysyłają je przyciskiem <b>Zarezerwuj</b> na odmorzadogor.pl. Po akceptacji rezerwacja trafia do kalendarza, a gość dostaje e-mail z potwierdzeniem.</p>
+        <p className="muted">Goście wysyłają je przyciskiem <b>Zarezerwuj</b> na odmorzadogor.pl. Możesz je od razu zaakceptować albo <b>zaproponować cenę</b> — gość akceptuje ją linkiem z e-maila (z obowiązkiem zapłaty), a rezerwacja sama trafia do kalendarza.</p>
       </div>
       {error && <div className="banner error">{error}</div>}
       {cancels.length > 0 && (
@@ -142,6 +144,10 @@ function CancelCard({ r, readOnly, focused, onDone }: { r: BookingRequest; readO
 
 function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: BookingRequest; readOnly: boolean; focused: boolean; onDone: () => void; onOpenReservation: (r: Reservation) => void }) {
   const [mode, setMode] = useState<'idle' | 'accept' | 'reject'>('idle');
+  const [offerOpen, setOfferOpen] = useState(false);
+  const [deposit, setDeposit] = useState<number | null>(null);
+  const [depositDue, setDepositDue] = useState(addDays(today(), 3) > r.check_in ? r.check_in : addDays(today(), 3));
+  const offer = r.offer;
   const [price, setPrice] = useState(r.quoted_price == null ? '' : String(r.quoted_price));
   const [note, setNote] = useState('');
   const [sendEmail, setSendEmail] = useState(true);
@@ -164,6 +170,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
         if (isGroup && manual && !unitChoice) { setBusy(false); return setError('Wybierz domek, do którego przydzielić rezerwację'); }
         const res = await api.acceptRequest(r.id, {
           price: price.trim() === '' ? null : Number(price.replace(',', '.')), note, email: sendEmail, force,
+          deposit, deposit_due: deposit ? depositDue : null,
           ...(unitChoice ? { unit_id: Number(unitChoice) } : {}),
         });
         onDone();
@@ -218,11 +225,36 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
         <a className="btn small" href={`mailto:${r.guest_email}`}>{r.guest_email}</a>
       </div>
 
+      {offer && (
+        <div className={`offer-status offer-${offer.expired ? 'expired' : offer.status}`}>
+          <b>Oferta {zl(offer.price)}{offer.deposit ? ` · zaliczka ${zl(offer.deposit)}` : ''}</b>
+          <span>
+            {offer.expired ? 'wygasła' : { sent: 'wysłana — czeka na akceptację gościa', accepted: 'zaakceptowana ✓', declined: 'gość odrzucił', withdrawn: 'wycofana' }[offer.status]}
+            {offer.status === 'sent' && offer.valid_until && !offer.expired ? ` (ważna do ${formatShort(offer.valid_until)})` : ''}
+          </span>
+          {offer.decline_reason && <span className="muted">„{offer.decline_reason}”</span>}
+          {offer.status === 'sent' && !offer.expired && !readOnly && (
+            <span className="offer-links">
+              <button type="button" className="link" onClick={() => navigator.clipboard?.writeText(offer.url).then(() => alert('Skopiowano link do oferty'), () => prompt('Link:', offer.url))}>Kopiuj link</button>
+              <button type="button" className="link danger-link" onClick={() => api.withdrawOffer(offer.id).then(onDone).catch((e) => setError(e.message))}>Wycofaj</button>
+            </span>
+          )}
+        </div>
+      )}
+
       {!readOnly && mode === 'idle' && (
         <div className="request-actions">
           <button className="btn primary" onClick={() => setMode('accept')}>Akceptuj</button>
+          <button className="btn" onClick={() => setOfferOpen(true)}>{offer && offer.status !== 'withdrawn' ? 'Nowa oferta' : 'Zaproponuj cenę'}</button>
           <button className="btn danger-outline" onClick={() => setMode('reject')}>Odrzuć</button>
         </div>
+      )}
+      {offerOpen && (
+        <OfferSheet
+          target={{ kind: 'request', id: r.id, price: r.quoted_price, checkIn: r.check_in, email: r.guest_email, phone: r.guest_phone, lang: r.lang, guest: r.guest_name }}
+          onClose={() => { setOfferOpen(false); onDone(); }}
+          onSent={() => {}}
+        />
       )}
 
       {mode !== 'idle' && (
@@ -241,8 +273,15 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
               <input inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="np. 1500" />
             </label>
           )}
-          <label>{mode === 'accept' ? 'Informacja dla gościa (np. zaliczka, numer konta, godzina przyjazdu)' : 'Wiadomość dla gościa (opcjonalnie)'}
-            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder={mode === 'accept' ? 'Prosimy o wpłatę zaliczki 30% w ciągu 3 dni na konto…' : 'Niestety ten termin jest już zajęty. Wolne mamy…'} />
+          {mode === 'accept' && (
+            <div className="row">
+              <label>Zaliczka (zł, opcjonalnie)<NumInput value={deposit} onChange={setDeposit} placeholder="bez zaliczki" /></label>
+              {deposit ? <label>Wpłata do<input type="date" value={depositDue} min={today()} onChange={(e) => setDepositDue(e.target.value)} /></label> : null}
+            </div>
+          )}
+          {mode === 'accept' && deposit ? <p className="muted small-note">E-mail z potwierdzeniem zawiera kwotę zaliczki, termin i numer konta z ustawień.</p> : null}
+          <label>{mode === 'accept' ? 'Informacja dla gościa (np. godzina przyjazdu, kod do skrzynki)' : 'Wiadomość dla gościa (opcjonalnie)'}
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder={mode === 'accept' ? 'Zameldowanie od 15:00, wymeldowanie do 11:00.' : 'Niestety ten termin jest już zajęty. Wolne mamy…'} />
           </label>
           <label className="check-row">
             <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />

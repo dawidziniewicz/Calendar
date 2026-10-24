@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+COPY assets ./assets
 RUN rm -f src/*.test.ts && mkdir -p /data && chown node:node /data
 USER node
 ENV DB_PATH=/data/kalendarz.sqlite PORT=8787

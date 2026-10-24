@@ -30,6 +30,79 @@ function migrate(db: DatabaseSync) {
   if (user_version < 13) migrateV13(db);
   if (user_version < 14) migrateV14(db);
   if (user_version < 15) migrateV15(db);
+  if (user_version < 16) migrateV16(db);
+}
+
+// Płatności i korespondencja z gościem:
+// - rezerwacja: język e-maili, zaliczka (kwota i termin)
+// - offers: oferta cenowa z linkiem „Akceptuję” (do zapytania ze strony albo do dowolnej rezerwacji);
+//   gość akceptuje cenę z obowiązkiem zapłaty (i zaliczki) — zapisujemy datę i adres IP akceptacji
+// - guest_messages: historia e-maili wysłanych gościom z aplikacji
+// - invoices: rachunki (dane wystawcy i nabywcy zapisane w chwili wystawienia, pozycje w JSON)
+function migrateV16(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE reservations ADD COLUMN lang TEXT NOT NULL DEFAULT 'pl';
+    ALTER TABLE reservations ADD COLUMN deposit REAL;
+    ALTER TABLE reservations ADD COLUMN deposit_due TEXT;
+    CREATE TABLE offers (
+      id INTEGER PRIMARY KEY,
+      token TEXT NOT NULL UNIQUE,
+      request_id INTEGER REFERENCES booking_requests(id) ON DELETE CASCADE,
+      reservation_id INTEGER REFERENCES reservations(id) ON DELETE CASCADE,
+      unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
+      price REAL NOT NULL,
+      deposit REAL,
+      deposit_due TEXT,
+      valid_until TEXT,
+      message TEXT NOT NULL DEFAULT '',
+      lang TEXT NOT NULL DEFAULT 'pl',
+      status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sent', 'accepted', 'declined', 'withdrawn')),
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      decided_at TEXT,
+      decided_ip TEXT NOT NULL DEFAULT '',
+      decline_reason TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX offers_request ON offers(request_id);
+    CREATE INDEX offers_reservation ON offers(reservation_id);
+    CREATE TABLE guest_messages (
+      id INTEGER PRIMARY KEY,
+      reservation_id INTEGER REFERENCES reservations(id) ON DELETE CASCADE,
+      request_id INTEGER REFERENCES booking_requests(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      to_email TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      sent_by TEXT NOT NULL DEFAULT '',
+      sent_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX guest_messages_reservation ON guest_messages(reservation_id, sent_at);
+    CREATE TABLE invoices (
+      id INTEGER PRIMARY KEY,
+      number TEXT NOT NULL,
+      reservation_id INTEGER REFERENCES reservations(id) ON DELETE SET NULL,
+      issue_date TEXT NOT NULL,
+      sale_date TEXT NOT NULL DEFAULT '',
+      place TEXT NOT NULL DEFAULT '',
+      seller TEXT NOT NULL DEFAULT '{}',
+      buyer TEXT NOT NULL DEFAULT '{}',
+      items TEXT NOT NULL DEFAULT '[]',
+      total REAL NOT NULL DEFAULT 0,
+      payment_method TEXT NOT NULL DEFAULT '',
+      payment_due TEXT NOT NULL DEFAULT '',
+      paid REAL,
+      note TEXT NOT NULL DEFAULT '',
+      footer TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX invoices_reservation ON invoices(reservation_id);
+    UPDATE reservations SET lang = COALESCE((SELECT r.lang FROM booking_requests r WHERE r.reservation_id = reservations.id), 'pl');
+    PRAGMA user_version = 16;
+    COMMIT;
+  `);
 }
 
 // Angielska nazwa typu domku (np. „Small cottage”) — dla angielskiej wersji strony i e-maili.
