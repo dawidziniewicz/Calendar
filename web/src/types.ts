@@ -101,6 +101,7 @@ export type InvoiceData = {
   number: string; issue_date: string; sale_date: string; place: string;
   seller: Party & { account: string; bank: string }; buyer: Party; items: InvoiceItem[];
   payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
+  signatures: boolean; seller_signature: string; buyer_signature: string; // pola na podpisy; podpisy palcem (PNG)
   reservation_id?: number | null;
 };
 export type Invoice = InvoiceData & { id: number; reservation_id: number | null; total: number; created_by: string; created_at: string; updated_at: string };
@@ -108,4 +109,5 @@ export type InvoiceListItem = { id: number; number: string; issue_date: string; 
 export type InvoiceTemplate = Party & {
   account: string; bank: string; place: string; note: string; footer: string | null; payment_method: string; payment_days: number | null;
   numbering: 'yearly' | 'monthly'; show_account: boolean; auto_footer: string;
+  signatures: boolean; seller_signature: string;
 };

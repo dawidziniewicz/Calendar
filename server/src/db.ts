@@ -31,6 +31,19 @@ function migrate(db: DatabaseSync) {
   if (user_version < 14) migrateV14(db);
   if (user_version < 15) migrateV15(db);
   if (user_version < 16) migrateV16(db);
+  if (user_version < 17) migrateV17(db);
+}
+
+// Rachunki: pola na podpisy (opcjonalne) i podpisy złożone palcem w aplikacji (PNG jako data URL).
+function migrateV17(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE invoices ADD COLUMN signatures INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE invoices ADD COLUMN seller_signature TEXT NOT NULL DEFAULT '';
+    ALTER TABLE invoices ADD COLUMN buyer_signature TEXT NOT NULL DEFAULT '';
+    PRAGMA user_version = 17;
+    COMMIT;
+  `);
 }
 
 // Płatności i korespondencja z gościem:

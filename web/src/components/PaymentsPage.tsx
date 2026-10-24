@@ -98,6 +98,14 @@ export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; 
               </select>
             </label>
             <label className="check-row"><input type="checkbox" checked={tpl.show_account} onChange={(e) => t('show_account', e.target.checked)} /> Numer konta na rachunku</label>
+            <label className="check-row"><input type="checkbox" checked={tpl.signatures} onChange={(e) => t('signatures', e.target.checked)} /> Pola na podpisy</label>
+            {tpl.seller_signature && (
+              <div className="sig-row full">
+                <div className="sig-row-head"><span>Zapamiętany podpis wystawcy</span></div>
+                <img className="sig-preview" src={tpl.seller_signature} alt="Podpis wystawcy" />
+                <div className="sig-row-actions"><button type="button" className="link danger-link" onClick={() => t('seller_signature', '')}>Usuń podpis z szablonu</button></div>
+              </div>
+            )}
             <label className="full">Dopisek pod pozycjami<textarea rows={2} value={tpl.note} onChange={(e) => t('note', e.target.value)} placeholder="np. Sprzedawca zwolniony z VAT na podstawie art. 113 ust. 1 ustawy o VAT" /></label>
             <label className="full">Stopka (dół strony)<textarea rows={2} value={tpl.footer ?? tpl.auto_footer} onChange={(e) => t('footer', e.target.value)} placeholder="puste = bez stopki" /></label>
           </fieldset>

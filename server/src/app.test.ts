@@ -1055,3 +1055,29 @@ test('typ domku z listy: dołączenie przejmuje ceny typu, zmiana nazwy dla wszy
   const back = await (await call('PUT', '/api/settings/booking', { horizon_days: 90 })).json();
   assert.equal(back.horizon_until, null);
 });
+
+test('rachunek: pola na podpisy opcjonalne, podpisy palcem (PNG) w PDF, podpis wystawcy w szablonie', async () => {
+  const { call, login } = setupWithMail();
+  await login();
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const r = await (await call('POST', '/api/reservations', { unit_id: 1, check_in: '2026-08-01', check_out: '2026-08-03', guest_name: 'Ola Nowak', guest_email: 'ola@example.com', price: 800 })).json();
+  const draft = await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json();
+  assert.equal(draft.signatures, true, 'domyślnie z polami na podpisy');
+  assert.equal(draft.seller_signature, '');
+  const inv = await (await call('POST', '/api/invoices', { ...draft, reservation_id: r.id, seller_signature: png, buyer_signature: 'javascript:alert(1)' })).json();
+  assert.equal(inv.seller_signature, png);
+  assert.equal(inv.buyer_signature, '', 'tylko obraz PNG');
+  // podpis gościa złożony później (np. przy wymeldowaniu)
+  const signed = await (await call('PUT', `/api/invoices/${inv.id}`, { ...inv, buyer_signature: png, save_template: false })).json();
+  assert.equal(signed.buyer_signature, png);
+  const pdf = await call('GET', `/api/invoices/${inv.id}/pdf`);
+  assert.equal(pdf.status, 200);
+  assert.match(new TextDecoder('latin1').decode(new Uint8Array(await pdf.arrayBuffer())), /\/Subtype \/Image/, 'podpis jako obraz w PDF');
+  // szablon pamięta podpis wystawcy; bez pól na podpisy
+  const next = await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json();
+  assert.equal(next.seller_signature, png);
+  const plain = await (await call('POST', '/api/invoices', { ...next, reservation_id: r.id, signatures: false, seller_signature: '' })).json();
+  assert.equal(plain.signatures, false);
+  assert.equal((await call('GET', `/api/invoices/${plain.id}/pdf`)).status, 200);
+  assert.equal((await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json()).signatures, false, 'zapamiętane jako szablon');
+});

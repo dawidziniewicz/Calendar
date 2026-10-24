@@ -13,16 +13,19 @@ export type InvoiceSettings = Party & {
   account: string; bank: string; // puste = konto z ustawień płatności
   place: string; note: string; footer: string | null; // null = stopka z danych wystawcy
   payment_method: string; payment_days: number | null; numbering: 'yearly' | 'monthly'; show_account: boolean;
+  signatures: boolean; // pola na podpisy na rachunku
+  seller_signature: string; // zapamiętany podpis wystawcy (PNG, data URL) — '' = brak
 };
 export type InvoiceData = {
   number: string; issue_date: string; sale_date: string; place: string;
   seller: Seller; buyer: Party; items: InvoiceItem[];
   payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
+  signatures: boolean; seller_signature: string; buyer_signature: string; // podpisy złożone palcem (PNG, data URL)
 };
 
 export const INVOICE_SETTINGS_KEY = 'invoice_settings';
 const EMPTY_PARTY: Party = { name: '', address: '', city: '', nip: '', phone: '', email: '' };
-export const DEFAULT_INVOICE_SETTINGS: InvoiceSettings = { ...EMPTY_PARTY, account: '', bank: '', place: '', note: '', footer: null, payment_method: 'przelew', payment_days: 7, numbering: 'yearly', show_account: true };
+export const DEFAULT_INVOICE_SETTINGS: InvoiceSettings = { ...EMPTY_PARTY, account: '', bank: '', place: '', note: '', footer: null, payment_method: 'przelew', payment_days: 7, numbering: 'yearly', show_account: true, signatures: true, seller_signature: '' };
 
 const s = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const num = (v: unknown) => {
@@ -42,6 +45,7 @@ export function readInvoiceSettings(v: unknown): InvoiceSettings {
     ...readParty(o), account: s(o.account, 60), bank: s(o.bank, 120), place: s(o.place, 120), note: s(o.note, 1000), footer: o.footer == null ? null : s(o.footer, 300),
     payment_method: s(o.payment_method, 60), payment_days: o.payment_days == null || o.payment_days === '' ? null : Math.min(365, Math.max(0, Math.trunc(num(o.payment_days)))),
     numbering: o.numbering === 'monthly' ? 'monthly' : 'yearly', show_account: o.show_account !== false,
+    signatures: o.signatures !== false, seller_signature: readSignature(o.seller_signature),
   };
 }
 
@@ -49,6 +53,12 @@ export function invoiceSettings(db: DatabaseSync): InvoiceSettings {
   const raw = (db.prepare('SELECT value FROM settings WHERE key = ?').get(INVOICE_SETTINGS_KEY) as { value: string } | undefined)?.value;
   try { return raw ? readInvoiceSettings(JSON.parse(raw)) : { ...DEFAULT_INVOICE_SETTINGS }; } catch { return { ...DEFAULT_INVOICE_SETTINGS }; }
 }
+
+/** Podpis z pola do podpisu (PNG jako data URL, maks. ~300 KB); cokolwiek innego = brak podpisu. */
+export function readSignature(v: unknown): string {
+  return typeof v === 'string' && v.length < 400_000 && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(v) ? v : '';
+}
+const signatureImage = (v: string) => (v ? Buffer.from(v.slice(v.indexOf(',') + 1), 'base64') : null);
 
 export function readItems(v: unknown): InvoiceItem[] {
   if (!Array.isArray(v)) return [];
@@ -261,15 +271,27 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
     y = doc.y + 14;
   }
 
-  // Podpisy
-  const sigY = Math.max(y + 50, H - 150);
-  if (sigY < H - 80) {
+  // Podpisy (opcjonalne): pola z linią, nad linią podpis złożony palcem w aplikacji
+  const sides = [
+    { label: 'Podpis osoby upoważnionej do odbioru', image: signatureImage(inv.buyer_signature) },
+    { label: 'Podpis osoby upoważnionej do wystawienia', image: signatureImage(inv.seller_signature) },
+  ];
+  if (inv.signatures || sides.some((x) => x.image)) {
+    const sigH = 56; // miejsce na podpis nad linią
+    if (y + sigH + 40 > H - 60) { doc.addPage(); y = M; }
+    const sigY = Math.max(y + sigH + 16, H - 140);
     const sw = 190;
-    for (const [i, label] of ['Podpis osoby upoważnionej do odbioru', 'Podpis osoby upoważnionej do wystawienia'].entries()) {
+    sides.forEach((side, i) => {
+      if (!inv.signatures && !side.image) return;
       const sx = i === 0 ? M : W - M - sw;
+      if (side.image) {
+        try {
+          doc.image(side.image, sx + 10, sigY - sigH - 2, { fit: [sw - 20, sigH], align: 'center', valign: 'bottom' });
+        } catch { /* uszkodzony obraz — samo pole */ }
+      }
       doc.moveTo(sx, sigY).lineTo(sx + sw, sigY).lineWidth(0.6).dash(2, { space: 2 }).strokeColor(SAND).stroke().undash();
-      doc.font('regular').fontSize(8).fillColor(MUTED).text(label, sx, sigY + 6, { width: sw, align: 'center' });
-    }
+      doc.font('regular').fontSize(8).fillColor(MUTED).text(side.label, sx, sigY + 6, { width: sw, align: 'center' });
+    });
   }
 
   // Stopka (edytowalna, pusta = brak)
@@ -289,6 +311,7 @@ export const autoFooter = (p: Party) => [p.name, p.address && p.city ? `${p.addr
 export type InvoiceRow = {
   id: number; number: string; reservation_id: number | null; issue_date: string; sale_date: string; place: string;
   seller: string; buyer: string; items: string; total: number; payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
+  signatures: number; seller_signature: string; buyer_signature: string;
   created_by: string; created_at: string; updated_at: string;
 };
 const parse = <T>(raw: string, fallback: T): T => { try { return JSON.parse(raw) as T; } catch { return fallback; } };
@@ -297,6 +320,7 @@ export function invoiceData(row: InvoiceRow): InvoiceData {
     number: row.number, issue_date: row.issue_date, sale_date: row.sale_date, place: row.place,
     seller: { ...EMPTY_PARTY, account: '', bank: '', ...parse<Partial<Seller>>(row.seller, {}) }, buyer: { ...EMPTY_PARTY, ...parse<Partial<Party>>(row.buyer, {}) },
     items: readItems(parse(row.items, [])), payment_method: row.payment_method, payment_due: row.payment_due, paid: row.paid, note: row.note, footer: row.footer ?? '',
+    signatures: row.signatures !== 0, seller_signature: row.seller_signature ?? '', buyer_signature: row.buyer_signature ?? '',
   };
 }
 export const invoiceFileName = (number: string) => `Rachunek-${(number || 'bez-numeru').replace(/[^\w-]+/g, '-')}.pdf`;

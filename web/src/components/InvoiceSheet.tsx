@@ -3,6 +3,7 @@ import { api } from '../api';
 import type { Invoice, InvoiceData, InvoiceItem } from '../types';
 import PdfPreview from './PdfPreview';
 import NumInput from './NumInput';
+import SignaturePad from './SignaturePad';
 import { useWide } from './useWide';
 
 type Props = {
@@ -19,6 +20,7 @@ const PAYMENT_METHODS = ['przelew', 'gotówka', 'karta', 'BLIK'];
 // Rachunek: edycja (wszystkie pola opcjonalne) + podgląd PDF A4; po zapisaniu — pobranie, udostępnienie, wysyłka e-mailem.
 export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onClose, onChanged }: Props) {
   const [inv, setInv] = useState<InvoiceData | null>(null);
+  const [signing, setSigning] = useState<'seller' | 'buyer' | null>(null);
   const [saved, setSaved] = useState<Invoice | null>(null);
   const [mode, setMode] = useState<'edit' | 'view'>(invoiceId ? 'view' : 'edit');
   const [tab, setTab] = useState<'form' | 'preview'>('form');
@@ -45,10 +47,11 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
   }, [invoiceId, reservationId]);
 
   useEffect(() => {
+    if (signing) return; // Escape zamyka najpierw pole do podpisu
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, signing]);
 
   // Podgląd: zapisany rachunek z serwera, wersja robocza na żywo (z opóźnieniem po pisaniu)
   const previewVisible = mode === 'view' || wide || tab === 'preview';
@@ -93,6 +96,26 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
       setInv(res);
       setMode('view');
       setInfo(saved ? 'Zapisano zmiany.' : `Wystawiono rachunek nr ${res.number}.`);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Podpis palcem: w edycji trafia do formularza, w podglądzie zapisuje się od razu (np. gość podpisuje przy wymeldowaniu)
+  const applySignature = async (who: 'seller' | 'buyer', png: string) => {
+    setSigning(null);
+    const key = who === 'seller' ? 'seller_signature' : 'buyer_signature';
+    if (mode === 'edit' || !saved) { setInv({ ...inv, [key]: png }); return; }
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.saveInvoice({ ...saved, [key]: png, save_template: false }, saved.id);
+      setSaved(res);
+      setInv(res);
+      setInfo(who === 'buyer' ? 'Dodano podpis gościa.' : 'Dodano Twój podpis.');
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -223,6 +246,19 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
               </fieldset>
 
               <fieldset>
+                <legend>Podpisy</legend>
+                <label className="check-row full">
+                  <input type="checkbox" checked={inv.signatures} onChange={(e) => set('signatures', e.target.checked)} />
+                  Pola na podpisy na rachunku
+                </label>
+                <SignatureRow label="Podpis wystawcy" note={saveTemplate ? 'zapamięta się w szablonie' : undefined} value={inv.seller_signature}
+                  onSign={() => setSigning('seller')} onClear={() => set('seller_signature', '')} />
+                <SignatureRow label="Podpis odbiorcy (gościa)" value={inv.buyer_signature}
+                  onSign={() => setSigning('buyer')} onClear={() => set('buyer_signature', '')} />
+                {!inv.signatures && <p className="full muted">Bez pól na podpisy — złożony podpis i tak pojawi się na rachunku.</p>}
+              </fieldset>
+
+              <fieldset>
                 <legend>Dopisek i stopka</legend>
                 <label className="full">Dopisek pod pozycjami<textarea rows={2} value={inv.note} onChange={(e) => set('note', e.target.value)} placeholder="np. Sprzedawca zwolniony z VAT na podstawie art. 113 ust. 1 ustawy o VAT" /></label>
                 <label className="full">Stopka (dół strony)<textarea rows={2} value={inv.footer} onChange={(e) => set('footer', e.target.value)} placeholder="puste = bez stopki" /></label>
@@ -248,6 +284,12 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                     <button type="button" className="btn" disabled={!blob} onClick={share}>Udostępnij / drukuj</button>
                     {saved?.reservation_id && <button type="button" className="btn primary" onClick={() => setSendTo(sendTo == null ? guestEmail ?? '' : null)}>Wyślij gościowi</button>}
                   </div>
+                  {saved && (
+                    <div className="invoice-buttons sign-buttons">
+                      <button type="button" className="btn small" disabled={busy} onClick={() => setSigning('buyer')}>✍ {saved.buyer_signature ? 'Podpisz ponownie (gość)' : 'Podpis gościa'}</button>
+                      <button type="button" className="btn small" disabled={busy} onClick={() => setSigning('seller')}>✍ {saved.seller_signature ? 'Podpisz ponownie (Ty)' : 'Mój podpis'}</button>
+                    </div>
+                  )}
                   {sendTo != null && (
                     <div className="send-row">
                       <label>Adres e-mail<input type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="e-mail gościa" /></label>
@@ -261,6 +303,29 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
             </div>
           )}
         </div>
+      </div>
+      {signing && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <SignaturePad
+            title={signing === 'buyer' ? 'Podpis odbiorcy (gościa)' : 'Podpis wystawcy'}
+            hint={signing === 'buyer' ? 'Podaj telefon gościowi — podpis pojawi się nad linią „osoby upoważnionej do odbioru”.' : undefined}
+            onCancel={() => setSigning(null)}
+            onSave={(png) => applySignature(signing, png)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignatureRow({ label, note, value, onSign, onClear }: { label: string; note?: string; value: string; onSign: () => void; onClear: () => void }) {
+  return (
+    <div className="sig-row full">
+      <div className="sig-row-head"><span>{label}</span>{note && value && <small className="muted">{note}</small>}</div>
+      {value ? <img className="sig-preview" src={value} alt={label} /> : <div className="sig-empty">brak podpisu</div>}
+      <div className="sig-row-actions">
+        <button type="button" className="btn small" onClick={onSign}>✍ {value ? 'Podpisz ponownie' : 'Podpisz palcem'}</button>
+        {value && <button type="button" className="link danger-link" onClick={onClear}>Usuń</button>}
       </div>
     </div>
   );
