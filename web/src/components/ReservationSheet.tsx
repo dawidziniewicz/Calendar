@@ -45,9 +45,21 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
     if (g) setR((prev) => ({ ...prev, guest_phone: prev.guest_phone || g.guest_phone, guest_email: prev.guest_email || g.guest_email }));
   };
 
+  // Rezerwacje prywatne / ze strony: obowiązkowe imię i nazwisko, telefon i e-mail (Booking/Airbnb nie podają kontaktu)
+  const contactRequired = !imported && !['booking', 'airbnb'].includes(r.source) && r.status !== 'cancelled';
+  const contactError = () => {
+    if (!contactRequired) return '';
+    if (r.guest_name.trim().split(/\s+/).filter((w) => w.length >= 2).length < 2) return 'Podaj imię i nazwisko gościa';
+    if (!/^[+\d][\d\s()-]{6,}$/.test(r.guest_phone.trim())) return 'Podaj numer telefonu gościa';
+    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(r.guest_email.trim())) return 'Podaj adres e-mail gościa';
+    return '';
+  };
+
   const save = async (e?: FormEvent, force = false) => {
     e?.preventDefault();
     if (r.check_out <= r.check_in) { setError('Data wyjazdu musi być późniejsza niż przyjazdu'); return; }
+    const missing = contactError();
+    if (missing) { setError(missing); return; }
     setSaving(true);
     setError('');
     try {
@@ -76,7 +88,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
     }
   };
 
-  const numberField = (key: 'price' | 'paid', v: string) => set(key, v === '' ? null : Number(v.replace(',', '.')));
+  const numberField = (key: 'price' | 'paid' | 'deposit', v: string) => set(key, v === '' ? null : Number(v.replace(',', '.')));
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -137,20 +149,20 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
           <fieldset>
             <legend>Gość</legend>
             <label className="full">
-              Imię i nazwisko
-              <input list="guest-suggestions" autoComplete="off" value={r.guest_name}
+              Imię i nazwisko{contactRequired && <span className="req"> *</span>}
+              <input list="guest-suggestions" required={contactRequired} autoComplete="off" value={r.guest_name}
                 onChange={(e) => { set('guest_name', e.target.value); pickGuest(e.target.value); }} />
               <datalist id="guest-suggestions">
                 {guests.map((g) => <option key={`${g.guest_name}${g.guest_phone}`} value={g.guest_name}>{g.guest_phone} · {g.stays}× pobyt</option>)}
               </datalist>
             </label>
             <label>
-              Telefon
-              <input type="tel" inputMode="tel" value={r.guest_phone} onChange={(e) => set('guest_phone', e.target.value)} />
+              Telefon{contactRequired && <span className="req"> *</span>}
+              <input type="tel" inputMode="tel" required={contactRequired} value={r.guest_phone} onChange={(e) => set('guest_phone', e.target.value)} />
             </label>
             <label>
-              E-mail
-              <input type="email" inputMode="email" value={r.guest_email} onChange={(e) => set('guest_email', e.target.value)} />
+              E-mail{contactRequired && <span className="req"> *</span>}
+              <input type="email" inputMode="email" required={contactRequired} value={r.guest_email} onChange={(e) => set('guest_email', e.target.value)} />
             </label>
             <div className="field">
               Dorośli
@@ -186,6 +198,21 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             <label>
               Wpłacono (zł)
               <input inputMode="decimal" value={r.paid ?? ''} onChange={(e) => numberField('paid', e.target.value)} />
+            </label>
+            <label>
+              Zaliczka (zł)
+              <input inputMode="decimal" value={r.deposit ?? ''} placeholder="brak" onChange={(e) => numberField('deposit', e.target.value)} />
+            </label>
+            <label>
+              Zaliczka do
+              <input type="date" value={r.deposit_due ?? ''} disabled={!r.deposit} onChange={(e) => set('deposit_due', e.target.value || null)} />
+            </label>
+            <label>
+              Język e-maili do gościa
+              <select value={r.lang ?? 'pl'} onChange={(e) => set('lang', e.target.value as 'pl' | 'en')}>
+                <option value="pl">polski</option>
+                <option value="en">angielski</option>
+              </select>
             </label>
             {r.price != null && r.price > 0 && (r.paid ?? 0) < r.price && (
               <button type="button" className="chip full paid-chip" onClick={() => set('paid', r.price)}>✓ Zapłacone w całości</button>

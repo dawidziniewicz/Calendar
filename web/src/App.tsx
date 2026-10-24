@@ -10,6 +10,7 @@ import Login from './components/Login';
 import ReservationView from './components/ReservationView';
 import UsersPage from './components/UsersPage';
 import PricingPage from './components/PricingPage';
+import PaymentsPage from './components/PaymentsPage';
 import ConflictMark from './components/ConflictMark';
 import Requests from './components/Requests';
 import { conflictIds } from './conflicts';
@@ -41,6 +42,9 @@ export const emptyDraft = (unitId: number, checkIn: string): Draft => ({
   price: null,
   paid: null,
   notes: '',
+  lang: 'pl',
+  deposit: null,
+  deposit_due: null,
 });
 
 export default function App() {
@@ -62,10 +66,10 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const readOnly = user.role === 'viewer';
   const limited = user.properties !== null;
   // Podstrona „Użytkownicy i uprawnienia” (z obsługą przycisku Wstecz / gestu cofania na iPhonie)
-  type Page = 'main' | 'users' | 'pricing';
+  type Page = 'main' | 'users' | 'pricing' | 'payments';
   const [page, setPage] = useState<Page>('main');
   useEffect(() => {
-    const onPop = () => setPage(['users', 'pricing'].includes(history.state?.page) ? history.state.page : 'main');
+    const onPop = () => setPage(['users', 'pricing', 'payments'].includes(history.state?.page) ? history.state.page : 'main');
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -183,8 +187,9 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         )}
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
+        {page === 'payments' && <PaymentsPage canEdit={user.canManageUsers} onBack={closeUsers} />}
         {page === 'pricing' && <PricingPage properties={properties} canEditHorizon={user.canManageUsers} onBack={closeUsers} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
-        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onOpenPayments={() => openPage('payments')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">

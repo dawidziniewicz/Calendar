@@ -18,3 +18,15 @@ export function weekdayPrices(u: Pick<Unit, 'weekday_prices'>): (number | null)[
 export function nightPrice(u: Unit, date: string, rate?: Rate) {
   return rate?.price ?? weekdayPrices(u)[fromIso(date).getDay()] ?? u.base_price;
 }
+
+/** Domki pogrupowane wg typu (wspólny cennik); domki bez typu osobno. */
+export function groupUnits<U extends { id: number; type_name: string }>(units: U[]) {
+  const out: { key: string; type: string | null; units: U[] }[] = [];
+  for (const u of units) {
+    const t = u.type_name.trim();
+    const key = t ? `t:${t.toLowerCase()}` : `u:${u.id}`;
+    const g = out.find((x) => x.key === key);
+    if (g) g.units.push(u); else out.push({ key, type: t || null, units: [u] });
+  }
+  return out;
+}

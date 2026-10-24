@@ -14,11 +14,21 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, HORIZON_KEY, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, type RequestRow,
+  DEFAULT_HORIZON, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
 } from './booking.ts';
+import {
+  composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
+  plusDays, MESSAGE_KINDS, PAYMENT_SETTINGS_KEY, type MessageKind, type OfferRow, type Stay,
+} from './payments.ts';
+import {
+  autoFooter, invoiceData, invoiceFileName, invoiceSettings, itemsTotal, nextInvoiceNumber, readInvoiceSettings, readItems, readParty, renderInvoicePdf,
+  INVOICE_SETTINGS_KEY, type InvoiceData, type InvoiceRow,
+} from './invoice.ts';
+import { dateRange } from './changes.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = ['confirmed', 'tentative', 'cancelled'];
+const PHONE_RE = /^[+\d][\d\s()-]{6,}$/;
 
 function bad(message: string): never {
   throw new HTTPException(400, { message });
@@ -187,9 +197,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!DATE_RE.test(r.check_in) || !DATE_RE.test(r.check_out) || r.check_out <= r.check_in) bad(t('Wybierz daty przyjazdu i wyjazdu', 'Please choose check-in and check-out dates'));
     if (r.check_in < warsawToday()) bad(t('Data przyjazdu już minęła', 'The check-in date is in the past'));
     if (nightsBetween(r.check_in, r.check_out) > 60) bad(t('Pobyt może trwać maksymalnie 60 nocy — w sprawie dłuższych zadzwoń do nas', 'Stays are limited to 60 nights online — please call us about longer stays'));
-    if (r.guest_name.length < 2) bad(t('Podaj imię i nazwisko', 'Please enter your full name'));
+    if (r.guest_name.split(/\s+/).filter((w) => w.length >= 2).length < 2) bad(t('Podaj imię i nazwisko', 'Please enter your first and last name'));
     if (!isEmail(r.guest_email)) bad(t('Podaj poprawny adres e-mail', 'Please enter a valid e-mail address'));
-    if (r.guest_phone && !/^[+\d][\d\s()-]{6,}$/.test(r.guest_phone)) bad(t('Podaj poprawny numer telefonu', 'Please enter a valid phone number'));
+    if (!PHONE_RE.test(r.guest_phone)) bad(t('Podaj numer telefonu', 'Please enter your phone number'));
     if (r.adults < 1) bad(t('Podaj liczbę dorosłych', 'Please enter the number of adults'));
     // domki, które pomieszczą gości (w typie zwykle wszystkie mają tę samą pojemność)
     const fits = group.filter((u) => !u.capacity || r.adults + r.children <= u.capacity);
@@ -249,6 +259,126 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const row = get('SELECT * FROM booking_requests WHERE id = ?', r.id) as RequestRow;
     announceCancelRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o anulacji nie powiodło się', err));
     return c.json({ ok: true, state: 'requested' });
+  });
+
+  // ---- Oferta cenowa: gość akceptuje cenę z obowiązkiem zapłaty (link z e-maila: /oferta/?t=KOD) ----
+  const offerByToken = (token: string) => (/^[a-f0-9]{48}$/.test(token) ? get('SELECT * FROM offers WHERE token = ?', token) as OfferRow | undefined : undefined);
+  /** Pobyt, którego dotyczy oferta (zapytanie albo rezerwacja) z ceną i zaliczką z oferty */
+  const offerStay = (o: OfferRow): (Stay & { request?: RequestRow; reservation?: Record<string, unknown> }) | null => {
+    if (o.request_id) {
+      const r = get('SELECT * FROM booking_requests WHERE id = ?', o.request_id) as RequestRow | undefined;
+      return r ? { ...r, unit_id: o.unit_id ?? r.unit_id, lang: o.lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, paid: 0, request: r } : null;
+    }
+    const res = o.reservation_id ? get('SELECT * FROM reservations WHERE id = ?', o.reservation_id) as Record<string, unknown> | undefined : undefined;
+    return res ? { ...(res as unknown as Stay), lang: o.lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, reservation: res } : null;
+  };
+  const offerState = (o: OfferRow, st: ReturnType<typeof offerStay>) => {
+    if (o.status !== 'sent') return o.status;
+    if (!st) return 'withdrawn';
+    if (st.request && (st.request.status !== 'pending' || st.request.expired_at)) return 'withdrawn';
+    if (st.reservation && st.reservation.status === 'cancelled') return 'withdrawn';
+    if (offerExpired(o) || st.check_in < warsawToday()) return 'expired';
+    return 'open';
+  };
+  const offerView = (o: OfferRow) => {
+    const st = offerStay(o);
+    const ps = paymentSettings(db);
+    const en = o.lang === 'en';
+    const u = st ? get(`SELECT u.name, u.type_name, u.type_name_en, p.name AS property FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`, st.unit_id) as
+      { name: string; type_name: string; type_name_en: string; property: string } | undefined : undefined;
+    const state = offerState(o, st);
+    return {
+      state, lang: o.lang, guest: st ? st.guest_name.split(/\s+/)[0] : '',
+      property: u?.property ?? '', unit: u ? (en && u.type_name_en) || u.type_name || u.name : '',
+      check_in: st?.check_in ?? null, check_out: st?.check_out ?? null, adults: st?.adults ?? 0, children: st?.children ?? 0,
+      extras: st ? extrasLines(parseChosenExtras(st.extras), en ? 'en' : 'pl') : [],
+      price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, valid_until: o.valid_until, message: o.message,
+      terms: (en && ps.terms_en) || ps.terms, decided_at: o.decided_at,
+      // dane do przelewu dopiero po akceptacji
+      payment: state === 'accepted' && ps.account_number ? {
+        account_number: ps.account_number, account_name: ps.account_name, bank_name: ps.bank_name,
+        title: st ? `${en ? 'Deposit' : 'Zaliczka'} – ${st.guest_name}, ${dateRange(st.check_in, st.check_out)}` : '',
+      } : null,
+    };
+  };
+  pub.get('/offer', (c) => {
+    const o = offerByToken(str(c.req.query('t'), 64));
+    if (!o) return c.json({ error: 'Nieprawidłowy lub nieaktualny link', code: 'not_found' }, 404);
+    c.header('Cache-Control', 'no-store');
+    return c.json(offerView(o));
+  });
+  pub.post('/offer', async (c) => {
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const ip = c.req.header('x-client-ip') || 'unknown';
+    const en = b.lang === 'en';
+    const t = (pl: string, eng: string) => (en ? eng : pl);
+    if (!allowHit(`offer:${ip}`, 10)) return c.json({ error: t('Za dużo prób — zadzwoń do nas.', 'Too many attempts — please call us.') }, 429);
+    const o = offerByToken(str(b.t, 64));
+    if (!o) return c.json({ error: t('Nieprawidłowy lub nieaktualny link', 'Invalid or expired link'), code: 'not_found' }, 404);
+    const st = offerStay(o);
+    const state = offerState(o, st);
+    if (state === 'accepted' || state === 'declined') return c.json(offerView(o));
+    if (state !== 'open' || !st) bad(state === 'expired' ? t('Oferta wygasła — skontaktuj się z nami', 'This offer has expired — please contact us') : t('Ta oferta jest już nieaktualna', 'This offer is no longer valid'));
+    const range = dateRange(st.check_in, st.check_out);
+    const url = st.request ? `/?tab=requests&request=${st.request.id}` : `/?reservation=${o.reservation_id}`;
+
+    if (b.action === 'decline') {
+      const reason = str(b.reason, 1000);
+      run(`UPDATE offers SET status = 'declined', decided_at = datetime('now'), decided_ip = ?, decline_reason = ? WHERE id = ?`, ip.slice(0, 64), reason, o.id);
+      notifyStaff(db, pushSender, mailer, st.unit_id, { title: `Oferta odrzucona · ${st.guest_name}`, body: `${range}${reason ? ` · „${reason.slice(0, 80)}”` : ''}`, url, tag: `offer-${o.id}` }, {
+        subject: `Gość odrzucił ofertę: ${st.guest_name} · ${range}`,
+        content: { preheader: `${st.guest_name} odrzucił(a) ofertę`, title: 'Gość odrzucił ofertę', intro: [`${st.guest_name} odrzucił(a) ofertę ${zl(o.price)}. Możesz wysłać nową ofertę albo odrzucić zapytanie w aplikacji.`],
+          rows: staffRows(db, st, o.price), note: reason ? { label: 'Powód', text: reason } : undefined },
+        replyTo: st.guest_email,
+      }).catch(() => {});
+      return c.json(offerView(get('SELECT * FROM offers WHERE id = ?', o.id) as OfferRow));
+    }
+
+    if (b.consent !== true) bad(t('Zaznacz akceptację ceny i obowiązku zapłaty', 'Please confirm the price and your obligation to pay'));
+    const stamp = `${new Date().toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })}, IP ${ip}`;
+    let reservationId: number;
+    let cancelUrl: string | null = null;
+    if (st.request) {
+      const r = st.request;
+      const candidates = [...new Set([o.unit_id ?? r.unit_id, ...requestGroup(r)])];
+      const unitId = candidates.find((id) => !conflicts({ unit_id: id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0).length);
+      if (!unitId) {
+        notifyStaff(db, pushSender, mailer, r.unit_id, { title: `Termin zajęty — oferta ${r.guest_name}`, body: `Gość chciał zaakceptować ofertę (${range}), ale termin jest już zajęty`, url, tag: `offer-${o.id}` }, {
+          subject: `Oferta nie mogła zostać zaakceptowana: ${r.guest_name} · ${range}`,
+          content: { preheader: 'Termin zajęty', title: 'Gość chciał zaakceptować ofertę — termin jest zajęty', intro: [`${r.guest_name} kliknął(-ęła) „Akceptuję”, ale wszystkie pasujące domki są już zajęte. Skontaktuj się z gościem.`], rows: [...staffRows(db, st, o.price), ['Telefon', r.guest_phone || '—'], ['E-mail', r.guest_email]] },
+          replyTo: r.guest_email,
+        }).catch(() => {});
+        return c.json({ error: t('Niestety ten termin został właśnie zajęty. Skontaktujemy się z Tobą.', 'Unfortunately these dates have just been booked. We will contact you.'), code: 'unavailable' }, 409);
+      }
+      const made = reservationFromRequest(r, unitId, o.price, {
+        by: 'gość (akceptacja oferty)', note: o.message, deposit: o.deposit, deposit_due: o.deposit_due,
+        extraNote: `Gość zaakceptował ofertę ${zl(o.price)}${o.deposit ? ` (zaliczka ${zl(o.deposit)})` : ''} z obowiązkiem zapłaty: ${stamp}.`,
+      });
+      reservationId = made.created.id as number;
+      cancelUrl = `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${o.lang === 'en' ? '/en/cancel/' : '/anulacja/'}?t=${made.cancelToken}`;
+      notify([{ kind: 'created', row: made.created, by: 'gość (oferta)' }], null);
+    } else {
+      const before = st.reservation!;
+      const line = `Gość zaakceptował ofertę ${zl(o.price)}${o.deposit ? ` (zaliczka ${zl(o.deposit)})` : ''} z obowiązkiem zapłaty: ${stamp}.`;
+      run(`UPDATE reservations SET price = ?, deposit = ?, deposit_due = ?, status = CASE WHEN status = 'tentative' THEN 'confirmed' ELSE status END,
+        notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END, updated_at = datetime('now') WHERE id = ?`,
+        o.price, o.deposit, o.deposit_due, line, line, before.id as number);
+      reservationId = before.id as number;
+      notify([{ kind: 'updated', before, after: get('SELECT * FROM reservations WHERE id = ?', reservationId) as Record<string, unknown>, by: 'gość (oferta)' }], null);
+    }
+    run(`UPDATE offers SET status = 'accepted', decided_at = datetime('now'), decided_ip = ?, reservation_id = ? WHERE id = ?`, ip.slice(0, 64), reservationId, o.id);
+    const accepted = { ...st, unit_id: (get('SELECT unit_id FROM reservations WHERE id = ?', reservationId) as { unit_id: number }).unit_id };
+    if (mailer) {
+      sendGuestMessage(db, mailer, accepted, { kind: 'offer_accepted', cancelUrl, offerNote: '' }, { reservation_id: reservationId, request_id: o.request_id, sent_by: 'automatycznie' })
+        .catch((err) => console.error('E-mail po akceptacji oferty nie wysłany', err));
+    }
+    notifyStaff(db, pushSender, mailer, accepted.unit_id, { title: `Oferta zaakceptowana ✓ · ${st.guest_name}`, body: `${range} · ${zl(o.price)}${o.deposit ? ` · zaliczka ${zl(o.deposit)}` : ''}`, url: `/?reservation=${reservationId}`, tag: `offer-${o.id}` }, {
+      subject: `Gość zaakceptował ofertę: ${st.guest_name} · ${range} · ${zl(o.price)}`,
+      content: { preheader: 'Oferta zaakceptowana', title: 'Gość zaakceptował ofertę ✓', intro: [`${st.guest_name} zaakceptował(a) ofertę z obowiązkiem zapłaty (${stamp}). Rezerwacja jest w kalendarzu.`],
+        rows: [...staffRows(db, accepted, o.price), ...(o.deposit ? [['Zaliczka', `${zl(o.deposit)}${o.deposit_due ? ` do ${o.deposit_due}` : ''}`] as [string, string]] : [])] },
+      replyTo: st.guest_email,
+    }).catch(() => {});
+    return c.json(offerView(get('SELECT * FROM offers WHERE id = ?', o.id) as OfferRow));
   });
 
   app.route('/public', pub);
@@ -605,6 +735,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       price: money(b.price),
       paid: money(b.paid),
       notes: str(b.notes, 5000),
+      lang: b.lang === 'en' ? 'en' : 'pl',
+      deposit: money(b.deposit),
+      deposit_due: DATE_RE.test(str(b.deposit_due, 10)) ? str(b.deposit_due, 10) : null,
     };
     if (!DATE_RE.test(r.check_in) || !DATE_RE.test(r.check_out)) bad('Nieprawidłowe daty');
     if (r.check_out <= r.check_in) bad('Wyjazd musi być po przyjeździe');
@@ -624,9 +757,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const found = conflicts(r, 0);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email,
-      adults, children, price, paid, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      adults, children, price, paid, notes, lang, deposit, deposit_due) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes);
+      r.adults, r.children, r.price, r.paid, r.notes, r.lang, r.deposit, r.deposit_due);
     const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
     notify([{ kind: 'created', row: created, by: c.get('user').username }], c.get('user').id);
     return c.json(created, 201);
@@ -645,9 +778,10 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const found = conflicts(r, id);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     run(`UPDATE reservations SET unit_id = ?, check_in = ?, check_out = ?, status = ?, source = ?, guest_name = ?, guest_phone = ?,
-      guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, updated_at = datetime('now') WHERE id = ?`,
+      guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, lang = ?, deposit = ?, deposit_due = ?,
+      updated_at = datetime('now') WHERE id = ?`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, id);
+      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, r.lang, r.deposit, r.deposit_due, id);
     const updated = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown>;
     notify([{ kind: 'updated', before: existing, after: updated, by: c.get('user').username }], c.get('user').id);
     return c.json(updated);
@@ -697,6 +831,12 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   });
 
   // ---- Ceny (cennik na stronie www) ----
+  /** Domki tego samego typu w obiekcie (np. 3 × „Mały domek”) — ceny zawsze wspólne; bez typu = sam domek. */
+  const typeMembers = (id: number): number[] => {
+    const u = get('SELECT property_id, type_name FROM units WHERE id = ?', id) as { property_id: number; type_name: string } | undefined;
+    if (!u || !u.type_name.trim()) return [id];
+    return (all(`SELECT id FROM units WHERE property_id = ? AND type_name != '' AND lower(trim(type_name)) = lower(trim(?)) ORDER BY sort, id`, u.property_id, u.type_name) as { id: number }[]).map((x) => x.id);
+  };
   const unitIdsIn = (user: User, raw: unknown) => {
     const ids = Array.isArray(raw) ? [...new Set(raw.map(Number).filter(Number.isInteger))] : [];
     if (!ids.length) bad('Wybierz domek');
@@ -704,7 +844,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       if (!get('SELECT 1 FROM units WHERE id = ?', id)) bad('Nieznany domek');
       requireUnit(user, id);
     }
-    return ids;
+    return [...new Set(ids.flatMap(typeMembers))];
   };
 
   api.get('/rates', (c) => {
@@ -766,11 +906,61 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (price != null && (price < 0 || price > 1_000_000)) bad('Nieprawidłowa cena');
     const weekday = b.weekday_prices === undefined ? undefined : parseWeekdayPrices(b.weekday_prices);
     if (weekday?.some((v) => v != null && v > 1_000_000)) bad('Nieprawidłowa cena');
-    run('UPDATE units SET base_price = ?, min_nights = ?, bookable = ? WHERE id = ?', price, Math.min(60, Math.max(1, int(b.min_nights) || 1)), b.bookable === false ? 0 : 1, id);
-    if (weekday) run('UPDATE units SET weekday_prices = ? WHERE id = ?', weekday.some((v) => v != null) ? JSON.stringify(weekday) : null, id);
-    if (b.type_name !== undefined) run('UPDATE units SET type_name = ? WHERE id = ?', str(b.type_name, 60), id);
-    if (b.type_name_en !== undefined) run('UPDATE units SET type_name_en = ? WHERE id = ?', str(b.type_name_en, 60), id);
+    if (b.type_name !== undefined) assignType(id, str(b.type_name, 60));
+    // cennik wspólny dla wszystkich domków typu
+    for (const m of typeMembers(id)) {
+      run('UPDATE units SET base_price = ?, min_nights = ?, bookable = ? WHERE id = ?', price, Math.min(60, Math.max(1, int(b.min_nights) || 1)), b.bookable === false ? 0 : 1, m);
+      if (weekday) run('UPDATE units SET weekday_prices = ? WHERE id = ?', weekday.some((v) => v != null) ? JSON.stringify(weekday) : null, m);
+    }
+    if (b.type_name_en !== undefined) for (const m of typeMembers(id)) run('UPDATE units SET type_name_en = ? WHERE id = ?', str(b.type_name_en, 60), m);
     return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices, type_name, type_name_en FROM units WHERE id = ?', id));
+  });
+
+  /**
+   * Przypisanie domku do typu (wybór z listy w aplikacji). Dołączając do istniejącego typu domek przejmuje
+   * jego nazwę (także angielską), cennik i ceny na konkretne dni — wszystkie domki typu mają zawsze te same ceny.
+   */
+  const assignType = (id: number, name: string) => {
+    const u = get('SELECT property_id FROM units WHERE id = ?', id) as { property_id: number };
+    if (!name) { run(`UPDATE units SET type_name = '', type_name_en = '' WHERE id = ?`, id); return; }
+    const model = get(`SELECT * FROM units WHERE property_id = ? AND id != ? AND type_name != '' AND lower(trim(type_name)) = lower(trim(?)) ORDER BY sort, id LIMIT 1`, u.property_id, id, name) as
+      { id: number; type_name: string; type_name_en: string; base_price: number | null; min_nights: number; bookable: number; weekday_prices: string | null } | undefined;
+    if (!model) { run('UPDATE units SET type_name = ? WHERE id = ?', name, id); return; }
+    db.exec('BEGIN');
+    try {
+      run('UPDATE units SET type_name = ?, type_name_en = ?, base_price = ?, min_nights = ?, bookable = ?, weekday_prices = ? WHERE id = ?',
+        model.type_name, model.type_name_en, model.base_price, model.min_nights, model.bookable, model.weekday_prices, id);
+      const from = warsawToday();
+      run('DELETE FROM rates WHERE unit_id = ? AND date >= ?', id, from);
+      run('INSERT INTO rates (unit_id, date, price, min_nights, closed) SELECT ?, date, price, min_nights, closed FROM rates WHERE unit_id = ? AND date >= ?', id, model.id, from);
+      db.exec('COMMIT');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  };
+  api.put('/rates/unit/:id/type', async (c) => {
+    const id = int(c.req.param('id'));
+    if (!get('SELECT 1 FROM units WHERE id = ?', id)) return c.json({ error: 'Nie znaleziono' }, 404);
+    requireUnit(c.get('user'), id);
+    const b = await c.req.json();
+    assignType(id, str(b.type_name, 60));
+    return c.json(get('SELECT id, base_price, min_nights, bookable, weekday_prices, type_name, type_name_en FROM units WHERE id = ?', id));
+  });
+  // Zmiana nazwy typu (PL/EN) dla wszystkich jego domków
+  api.put('/rates/type', async (c) => {
+    const b = await c.req.json();
+    const id = int(b.unit_id);
+    if (!get('SELECT 1 FROM units WHERE id = ?', id)) return c.json({ error: 'Nie znaleziono' }, 404);
+    requireUnit(c.get('user'), id);
+    const members = typeMembers(id);
+    const name = str(b.type_name, 60);
+    if (!name) bad('Podaj nazwę typu');
+    const u = get('SELECT property_id FROM units WHERE id = ?', id) as { property_id: number };
+    const clash = get(`SELECT 1 FROM units WHERE property_id = ? AND type_name != '' AND lower(trim(type_name)) = lower(trim(?)) AND id NOT IN (${members.join(',')})`, u.property_id, name);
+    if (clash) bad(`Typ „${name}” już istnieje — przypisz domki do niego z listy`);
+    for (const m of members) run('UPDATE units SET type_name = ?, type_name_en = ? WHERE id = ?', name, str(b.type_name_en, 60), m);
+    return c.json({ ok: true, unit_ids: members });
   });
 
   // ---- Zamknięcie obiektu (remont, poza sezonem…) — konto ograniczone może zamykać swoje obiekty ----
@@ -827,7 +1017,10 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // Na ile dni do przodu strona pokazuje ceny i przyjmuje zapytania; jak przydzielać domek przy akceptacji
   const ASSIGN_KEY = 'assign_mode';
   const assignMode = () => ((get('SELECT value FROM settings WHERE key = ?', ASSIGN_KEY) as { value: string } | undefined)?.value === 'manual' ? 'manual' : 'auto');
-  const bookingSettings = () => ({ horizon_days: bookingHorizon(db), default_days: DEFAULT_HORIZON, assign_mode: assignMode() });
+  const bookingSettings = () => ({
+    horizon_days: bookingHorizon(db), horizon_until: horizonUntil(db), horizon_last: addDays(horizonEnd(db), -1),
+    default_days: DEFAULT_HORIZON, assign_mode: assignMode(),
+  });
   const setSetting = (key: string, value: string) => run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value);
   api.get('/settings/booking', (c) => c.json(bookingSettings()));
   api.put('/settings/booking', async (c) => {
@@ -837,6 +1030,16 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       const days = int(b.horizon_days);
       if (days < 7 || days > 730) bad('Podaj liczbę dni od 7 do 730');
       setSetting(HORIZON_KEY, String(days));
+      run('DELETE FROM settings WHERE key = ?', HORIZON_UNTIL_KEY);
+    }
+    if (b.horizon_until !== undefined) {
+      const until = str(b.horizon_until, 10);
+      if (!until) run('DELETE FROM settings WHERE key = ?', HORIZON_UNTIL_KEY);
+      else {
+        if (!DATE_RE.test(until) || until < warsawToday()) bad('Wybierz datę w przyszłości');
+        if (nightsBetween(warsawToday(), until) > 1100) bad('Maksymalnie 3 lata do przodu');
+        setSetting(HORIZON_UNTIL_KEY, until);
+      }
     }
     if (b.assign_mode !== undefined) setSetting(ASSIGN_KEY, b.assign_mode === 'manual' ? 'manual' : 'auto');
     return c.json(bookingSettings());
@@ -866,7 +1069,11 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
         const u = get('SELECT id, name, type_name FROM units WHERE id = ?', id) as { id: number; name: string; type_name: string } | undefined;
         return u && { ...u, free: !conflicts({ unit_id: id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0).length };
       }).filter(Boolean);
-      return { ...r, conflicts: conflicts({ ...r, status: 'confirmed' }, 0), group_units: groupUnits, assign_mode: assignMode() };
+      const offer = get('SELECT * FROM offers WHERE request_id = ? ORDER BY id DESC LIMIT 1', r.id) as OfferRow | undefined;
+      return {
+        ...r, conflicts: conflicts({ ...r, status: 'confirmed' }, 0), group_units: groupUnits, assign_mode: assignMode(),
+        offer: offer ? { ...publicOffer(offer), expired: offerExpired(offer) } : null,
+      };
     }));
   });
 
@@ -884,6 +1091,33 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (r.check_in < warsawToday()) bad('Termin przyjazdu z tego zapytania już minął — zapytanie jest w archiwum');
     return r;
   };
+
+  /** Zapytanie → rezerwacja w kalendarzu (akceptacja przez admina albo przez gościa z linku w ofercie). */
+  const reservationFromRequest = (r: RequestRow, unitId: number, price: number | null,
+    o: { by: string; note: string; deposit?: number | null; deposit_due?: string | null; extraNote?: string }) => {
+    const chosen = parseChosenExtras(r.extras);
+    const notes = [r.message && `Wiadomość od gościa: ${r.message}`, chosen.length && `Opcje dodatkowe: ${extrasLines(chosen).join('; ')}`,
+      `Rezerwacja ze strony www (zapytanie #${r.id}).`, o.extraNote].filter(Boolean).join('\n');
+    // kod do linku „Poproś o anulację” w e-mailu z potwierdzeniem
+    const cancelToken = newToken();
+    db.exec('BEGIN');
+    try {
+      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes, lang, deposit, deposit_due)
+        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+        r.adults, r.children, price, notes, r.lang === 'en' ? 'en' : 'pl', o.deposit ?? null, o.deposit_due ?? null);
+      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ?,
+        cancel_token = ? WHERE id = ?`, o.by, o.note, res.lastInsertRowid, unitId, cancelToken, r.id);
+      const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
+      db.exec('COMMIT');
+      return { created, cancelToken };
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
+  };
+  /** Nowa oferta / decyzja unieważnia poprzednie niezaakceptowane oferty */
+  const withdrawOffers = (col: 'request_id' | 'reservation_id', id: number) =>
+    run(`UPDATE offers SET status = 'withdrawn', decided_at = datetime('now') WHERE ${col} = ? AND status = 'sent'`, id);
 
   api.post('/requests/:id/accept', async (c) => {
     const user = c.get('user');
@@ -904,27 +1138,13 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const price = b.price === undefined ? r.quoted_price : money(b.price);
     const note = str(b.note, 3000);
-    const chosen = parseChosenExtras(r.extras);
-    const notes = [r.message && `Wiadomość od gościa: ${r.message}`, chosen.length && `Opcje dodatkowe: ${extrasLines(chosen).join('; ')}`,
-      `Rezerwacja ze strony www (zapytanie #${r.id}).`].filter(Boolean).join('\n');
-    // kod do linku „Poproś o anulację” w e-mailu z potwierdzeniem
-    const cancelToken = newToken();
-    db.exec('BEGIN');
-    let created: Record<string, unknown>;
-    try {
-      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes)
-        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-        r.adults, r.children, price, notes);
-      run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ?,
-        cancel_token = ? WHERE id = ?`, user.username, note, res.lastInsertRowid, unitId, cancelToken, r.id);
-      created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
+    const deposit = money(b.deposit);
+    const depositDue = DATE_RE.test(str(b.deposit_due, 10)) ? str(b.deposit_due, 10) : null;
+    const { created, cancelToken } = reservationFromRequest(r, unitId, price, { by: user.username, note, deposit, deposit_due: depositDue });
+    withdrawOffers('request_id', r.id);
     notify([{ kind: 'created', row: created, by: user.username }], user.id);
-    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note, cancel_token: cancelToken }, true, price)
+    const stay = { ...r, unit_id: unitId, deposit, deposit_due: depositDue };
+    const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, unit_id: unitId, decision_note: note, cancel_token: cancelToken }, true, price, depositRows(db, stay))
       .catch((err) => { console.error('E-mail z potwierdzeniem nie wysłany', err); return false; });
     return c.json({ request: requestRow(r.id), reservation: created, emailed });
   });
@@ -975,9 +1195,311 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const b = await c.req.json().catch(() => ({}));
     const note = str(b.note, 3000);
     run(`UPDATE booking_requests SET status = 'rejected', decided_by = ?, decided_at = datetime('now'), decision_note = ? WHERE id = ?`, user.username, note, r.id);
+    withdrawOffers('request_id', r.id);
     const emailed = b.email === false ? false : await mailDecision(db, mailer, { ...r, decision_note: note }, false, null)
       .catch((err) => { console.error('E-mail z odmową nie wysłany', err); return false; });
     return c.json({ request: requestRow(r.id), emailed });
+  });
+
+  // ---- Oferty cenowe (link „Akceptuję” z obowiązkiem zapłaty) ----
+  const publicOffer = (o: OfferRow) => ({
+    id: o.id, status: o.status, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, valid_until: o.valid_until, message: o.message,
+    lang: o.lang, created_by: o.created_by, created_at: o.created_at, decided_at: o.decided_at, decline_reason: o.decline_reason,
+    request_id: o.request_id, reservation_id: o.reservation_id, url: offerUrl(o), expired: offerExpired(o),
+  });
+  const readOffer = (b: Record<string, unknown>, checkIn: string) => {
+    const price = money(b.price);
+    if (price == null || price <= 0 || price > 10_000_000) bad('Podaj cenę za cały pobyt');
+    const deposit = money(b.deposit);
+    if (deposit != null && (deposit < 0 || deposit > price)) bad('Zaliczka nie może być większa niż cena');
+    const depositDue = str(b.deposit_due, 10);
+    if (depositDue && !DATE_RE.test(depositDue)) bad('Nieprawidłowy termin zaliczki');
+    let validUntil = str(b.valid_until, 10);
+    if (validUntil && !DATE_RE.test(validUntil)) bad('Nieprawidłowa data ważności oferty');
+    if (!validUntil) {
+      const days = paymentSettings(db).offer_days;
+      validUntil = days ? plusDays(warsawToday(), days) : '';
+    }
+    if (validUntil && validUntil > checkIn) validUntil = checkIn;
+    return { price, deposit: deposit || null, deposit_due: deposit ? depositDue || null : null, valid_until: validUntil || null, message: str(b.message, 3000) };
+  };
+  const createOffer = async (user: User, stay: Stay, link: { request_id?: number; reservation_id?: number; unit_id: number }, b: Record<string, unknown>) => {
+    const o = readOffer(b, stay.check_in);
+    const lang = stay.lang === 'en' ? 'en' : 'pl';
+    const sendEmail = b.email !== false;
+    if (sendEmail && !isEmail(stay.guest_email)) bad('Brak adresu e-mail gościa — uzupełnij go albo wyślij gościowi link w SMS/WhatsApp');
+    if (sendEmail && !mailer) bad('Wysyłka e-maili nie jest skonfigurowana — odznacz e-mail i wyślij gościowi link w SMS/WhatsApp');
+    withdrawOffers(link.request_id ? 'request_id' : 'reservation_id', (link.request_id ?? link.reservation_id)!);
+    const res = run(`INSERT INTO offers (token, request_id, reservation_id, unit_id, price, deposit, deposit_due, valid_until, message, lang, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, newToken(), link.request_id ?? null, link.reservation_id ?? null, link.unit_id,
+      o.price, o.deposit, o.deposit_due, o.valid_until, o.message, lang, user.username);
+    const offer = get('SELECT * FROM offers WHERE id = ?', res.lastInsertRowid) as OfferRow;
+    let emailed = false;
+    if (sendEmail && mailer) {
+      await sendGuestMessage(db, mailer, { ...stay, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due }, {
+        kind: 'offer', body: typeof b.body === 'string' ? str(b.body, 3000) : undefined, offerUrl: offerUrl(offer), validUntil: o.valid_until, offerNote: o.message,
+      }, { reservation_id: link.reservation_id ?? null, request_id: link.request_id ?? null, sent_by: user.username });
+      emailed = true;
+    }
+    return { offer: publicOffer(offer), emailed };
+  };
+
+  api.post('/requests/:id/offers', async (c) => {
+    const user = c.get('user');
+    const r = pendingRequest(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const group = requestGroup(r);
+    const unitId = b.unit_id ? int(b.unit_id) : r.unit_id;
+    if (!group.includes(unitId)) bad('Wybierz domek z listy');
+    const lang = b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang;
+    return c.json(await createOffer(user, { ...r, unit_id: unitId, lang }, { request_id: r.id, unit_id: unitId }, b), 201);
+  });
+
+  const visibleReservation = (user: User, id: number) => {
+    const row = get('SELECT * FROM reservations WHERE id = ?', id) as (Stay & Record<string, unknown> & { id: number; status: string }) | undefined;
+    if (!row || !canSee(user, row.unit_id)) throw new HTTPException(404, { message: 'Nie znaleziono rezerwacji' });
+    return row;
+  };
+
+  api.post('/reservations/:id/offers', async (c) => {
+    const user = c.get('user');
+    const r = visibleReservation(user, int(c.req.param('id')));
+    if (r.status === 'cancelled') bad('Rezerwacja jest anulowana');
+    const b = await c.req.json().catch(() => ({}));
+    if (b.lang === 'en' || b.lang === 'pl') run('UPDATE reservations SET lang = ? WHERE id = ?', b.lang, r.id);
+    const stay = { ...r, lang: b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang };
+    return c.json(await createOffer(user, stay, { reservation_id: r.id, unit_id: r.unit_id }, b), 201);
+  });
+
+  api.post('/offers/:id/withdraw', (c) => {
+    const o = get('SELECT * FROM offers WHERE id = ?', int(c.req.param('id'))) as OfferRow | undefined;
+    const unit = o && (o.unit_id ?? (o.request_id ? (get('SELECT unit_id FROM booking_requests WHERE id = ?', o.request_id) as { unit_id: number } | undefined)?.unit_id : undefined));
+    if (!o || !canSee(c.get('user'), unit)) return c.json({ error: 'Nie znaleziono oferty' }, 404);
+    if (o.status !== 'sent') bad('Tej oferty nie można już wycofać');
+    run(`UPDATE offers SET status = 'withdrawn', decided_at = datetime('now') WHERE id = ?`, o.id);
+    return c.json(publicOffer(get('SELECT * FROM offers WHERE id = ?', o.id) as OfferRow));
+  });
+
+  // ---- Korespondencja z gościem: zaliczka, dopłata, potwierdzenie wpłaty, dowolna wiadomość ----
+  const cancelUrlFor = (reservationId: number) => {
+    const req = get(`SELECT cancel_token, lang FROM booking_requests WHERE reservation_id = ? AND cancel_token IS NOT NULL ORDER BY id DESC LIMIT 1`, reservationId) as { cancel_token: string; lang: string } | undefined;
+    return req ? `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${req.lang === 'en' ? '/en/cancel/' : '/anulacja/'}?t=${req.cancel_token}` : null;
+  };
+  const readKind = (v: unknown) => (MESSAGE_KINDS.includes(v as MessageKind) && v !== 'invoice' ? v as MessageKind : bad('Wybierz rodzaj wiadomości'));
+  const messageInput = (b: Record<string, unknown>, kind: MessageKind, reservationId: number) => ({
+    kind, subject: str(b.subject, 200) || undefined, body: typeof b.body === 'string' ? str(b.body, 5000) : undefined,
+    amount: b.amount === undefined ? undefined : money(b.amount), due: b.due === undefined ? undefined : (DATE_RE.test(str(b.due, 10)) ? str(b.due, 10) : null),
+    title: str(b.title, 140) || undefined, cancelUrl: kind === 'confirmation' ? cancelUrlFor(reservationId) : null,
+  });
+
+  api.get('/reservations/:id/activity', (c) => {
+    const r = visibleReservation(c.get('user'), int(c.req.param('id')));
+    const reqIds = (all('SELECT id FROM booking_requests WHERE reservation_id = ?', r.id) as { id: number }[]).map((x) => x.id);
+    const reqList = reqIds.join(',') || 'NULL';
+    return c.json({
+      offers: (all(`SELECT * FROM offers WHERE reservation_id = ? OR request_id IN (${reqList}) ORDER BY id DESC`, r.id) as OfferRow[]).map(publicOffer),
+      messages: all(`SELECT id, kind, to_email, subject, body, sent_by, sent_at FROM guest_messages WHERE reservation_id = ? OR request_id IN (${reqList}) ORDER BY sent_at DESC, id DESC`, r.id),
+      invoices: all('SELECT id, number, issue_date, total FROM invoices WHERE reservation_id = ? ORDER BY id DESC', r.id),
+      email_configured: !!mailer,
+    });
+  });
+
+  api.get('/reservations/:id/messages/draft', (c) => {
+    const r = visibleReservation(c.get('user'), int(c.req.param('id')));
+    const kind = readKind(c.req.query('kind'));
+    const lang = c.req.query('lang');
+    const stay = { ...r, lang: lang === 'en' || lang === 'pl' ? lang : r.lang };
+    const amount = c.req.query('amount'), due = c.req.query('due');
+    const ps = paymentSettings(db);
+    return c.json({
+      ...draftMessage(db, stay, kind, amount === undefined ? undefined : money(amount), due === undefined ? undefined : (DATE_RE.test(due) ? due : null)),
+      has_account: !!ps.account_number, default_deposit: defaultDeposit(ps, r.price as number | null, r.check_in),
+    });
+  });
+
+  api.post('/reservations/:id/messages/preview', async (c) => {
+    const r = visibleReservation(c.get('user'), int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const kind = readKind(b.kind);
+    const stay = { ...r, lang: b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang };
+    const m = composeMessage(db, stay, messageInput(b, kind, r.id));
+    return c.json({ subject: m.subject, html: m.html });
+  });
+
+  api.post('/reservations/:id/messages', async (c) => {
+    const user = c.get('user');
+    const r = visibleReservation(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const kind = readKind(b.kind);
+    if (!mailer) bad('Wysyłka e-maili nie jest skonfigurowana na serwerze (RESEND_API_KEY albo SMTP_HOST w .env)');
+    if (!isEmail(r.guest_email)) bad('Brak adresu e-mail gościa — uzupełnij go w rezerwacji');
+    if (kind === 'custom' && !str(b.body)) bad('Wpisz treść wiadomości');
+    const lang = b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang;
+    if (lang !== r.lang) run('UPDATE reservations SET lang = ? WHERE id = ?', lang, r.id);
+    const input = messageInput(b, kind, r.id);
+    // prośba o zaliczkę zapisuje kwotę i termin w rezerwacji
+    if (kind === 'deposit' && input.amount != null) run('UPDATE reservations SET deposit = ?, deposit_due = ?, updated_at = datetime(\'now\') WHERE id = ?', input.amount, input.due ?? null, r.id);
+    const stay = { ...(get('SELECT * FROM reservations WHERE id = ?', r.id) as unknown as Stay) };
+    try {
+      await sendGuestMessage(db, mailer!, stay, input, { reservation_id: r.id, sent_by: user.username });
+    } catch (err) {
+      console.error('Wiadomość do gościa nie wysłana', err);
+      return c.json({ error: `Nie udało się wysłać: ${err instanceof Error ? err.message : err}` }, 502);
+    }
+    return c.json({ ok: true, reservation: get('SELECT * FROM reservations WHERE id = ?', r.id) });
+  });
+
+  // ---- Ustawienia płatności (konto, zaliczka, warunki) ----
+  api.get('/settings/payments', (c) => c.json(paymentSettings(db)));
+  api.put('/settings/payments', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const ps = readPaymentSettings(await c.req.json());
+    setSetting(PAYMENT_SETTINGS_KEY, JSON.stringify(ps));
+    return c.json(ps);
+  });
+
+  // ---- Rachunki ----
+  const invoiceTemplate = () => {
+    const t = invoiceSettings(db);
+    const ps = paymentSettings(db);
+    return { ...t, account: t.account || ps.account_number, bank: t.bank || ps.bank_name, auto_footer: autoFooter(t) };
+  };
+  api.get('/settings/invoice', (c) => c.json(invoiceTemplate()));
+  api.put('/settings/invoice', async (c) => {
+    const t = readInvoiceSettings(await c.req.json());
+    setSetting(INVOICE_SETTINGS_KEY, JSON.stringify(t));
+    return c.json(invoiceTemplate());
+  });
+
+  const invoiceRow = (user: User, id: number) => {
+    const row = get('SELECT * FROM invoices WHERE id = ?', id) as InvoiceRow | undefined;
+    if (!row) throw new HTTPException(404, { message: 'Nie znaleziono rachunku' });
+    const res = row.reservation_id ? get('SELECT unit_id FROM reservations WHERE id = ?', row.reservation_id) as { unit_id: number } | undefined : undefined;
+    if (res ? !canSee(user, res.unit_id) : !isFullAdmin(user)) throw new HTTPException(404, { message: 'Nie znaleziono rachunku' });
+    return row;
+  };
+  const readInvoice = (b: Record<string, unknown>): InvoiceData => {
+    const issue = str(b.issue_date, 10);
+    const sale = str(b.sale_date, 10), due = str(b.payment_due, 10);
+    const seller = (b.seller && typeof b.seller === 'object' ? b.seller : {}) as Record<string, unknown>;
+    return {
+      number: str(b.number, 40), issue_date: DATE_RE.test(issue) ? issue : warsawToday(), sale_date: DATE_RE.test(sale) ? sale : '', place: str(b.place, 120),
+      seller: { ...readParty(seller), account: str(seller.account, 60), bank: str(seller.bank, 120) }, buyer: readParty(b.buyer), items: readItems(b.items),
+      payment_method: str(b.payment_method, 60), payment_due: DATE_RE.test(due) ? due : '', paid: money(b.paid), note: str(b.note, 1000), footer: str(b.footer, 300),
+    };
+  };
+  const invoiceOut = (row: InvoiceRow) => ({ id: row.id, reservation_id: row.reservation_id, created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at, total: row.total, ...invoiceData(row) });
+  const pdfResponse = (c: { body: (b: Uint8Array, s: 200, h: Record<string, string>) => Response }, pdf: Buffer, number: string, download: boolean) =>
+    c.body(new Uint8Array(pdf), 200, {
+      'Content-Type': 'application/pdf', 'Cache-Control': 'no-store',
+      'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${invoiceFileName(number)}"`,
+    });
+  /** Zapamiętanie danych z rachunku jako szablonu na następny raz */
+  const saveInvoiceTemplate = (inv: InvoiceData) => {
+    const cur = invoiceSettings(db);
+    const days = inv.payment_due && inv.issue_date ? Math.round((Date.parse(inv.payment_due) - Date.parse(inv.issue_date)) / 86_400_000) : null;
+    const { account, bank, ...party } = inv.seller;
+    setSetting(INVOICE_SETTINGS_KEY, JSON.stringify(readInvoiceSettings({
+      ...cur, ...party, account, bank, place: inv.place, note: inv.note, footer: inv.footer, payment_method: inv.payment_method,
+      payment_days: days != null && days >= 0 ? days : cur.payment_days,
+    })));
+  };
+
+  api.get('/invoices', (c) => {
+    const user = c.get('user');
+    const resId = c.req.query('reservation_id');
+    const rows = all(`SELECT i.id, i.number, i.issue_date, i.total, i.buyer, i.reservation_id, r.unit_id, r.check_in, r.check_out FROM invoices i
+      LEFT JOIN reservations r ON r.id = i.reservation_id ${resId ? 'WHERE i.reservation_id = ?' : ''} ORDER BY i.issue_date DESC, i.id DESC LIMIT 500`, ...(resId ? [int(resId)] : [])) as
+      { id: number; number: string; issue_date: string; total: number; buyer: string; reservation_id: number | null; unit_id: number | null; check_in: string | null; check_out: string | null }[];
+    return c.json(rows.filter((r) => (r.unit_id ? canSee(user, r.unit_id) : isFullAdmin(user))).map(({ buyer, ...r }) => {
+      let name = '';
+      try { name = (JSON.parse(buyer) as { name?: string }).name ?? ''; } catch { name = ''; }
+      return { ...r, buyer_name: name };
+    }));
+  });
+
+  api.get('/invoices/draft', (c) => {
+    const t = invoiceTemplate();
+    const today = warsawToday();
+    const resId = int(c.req.query('reservation_id'));
+    const r = resId ? visibleReservation(c.get('user'), resId) : undefined;
+    if (!r && !isFullAdmin(c.get('user'))) bad('Wybierz rezerwację');
+    const u = r ? get(`SELECT u.name, u.type_name, p.name AS property FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`, r.unit_id) as { name: string; type_name: string; property: string } : undefined;
+    const nightsCount = r ? nightsBetween(r.check_in, r.check_out) : 0;
+    const draft: InvoiceData = {
+      number: nextInvoiceNumber(db, today, t.numbering), issue_date: today, sale_date: r ? r.check_out : today, place: t.place,
+      seller: { name: t.name, address: t.address, city: t.city, nip: t.nip, phone: t.phone, email: t.email, account: t.show_account ? t.account : '', bank: t.show_account ? t.bank : '' },
+      buyer: { name: r?.guest_name ?? '', address: '', city: '', nip: '', phone: '', email: '' },
+      items: r ? [{
+        name: `Usługa noclegowa — ${u?.type_name || u?.name} (${u?.property}), ${dateRange(r.check_in, r.check_out)}, ${nightsCount} ${nightsCount === 1 ? 'noc' : nightsCount % 10 >= 2 && nightsCount % 10 <= 4 && (nightsCount % 100 < 12 || nightsCount % 100 > 14) ? 'noce' : 'nocy'}`,
+        qty: 1, unit: 'usł.', price: (r.price as number | null) ?? 0,
+      }] : [{ name: '', qty: 1, unit: 'usł.', price: 0 }],
+      payment_method: t.payment_method, payment_due: t.payment_days != null ? plusDays(today, t.payment_days) : '', paid: r ? (r.paid as number | null) : null,
+      note: t.note, footer: t.footer ?? t.auto_footer,
+    };
+    return c.json({ ...draft, reservation_id: r?.id ?? null });
+  });
+
+  api.post('/invoices/preview', async (c) => {
+    const inv = readInvoice(await c.req.json().catch(() => ({})));
+    if (!inv.number) inv.number = nextInvoiceNumber(db, inv.issue_date, invoiceSettings(db).numbering);
+    return pdfResponse(c, await renderInvoicePdf(inv), inv.number, false);
+  });
+
+  const writeInvoice = async (c: { get: (k: 'user') => User; req: { json: () => Promise<unknown> } }, existing?: InvoiceRow) => {
+    const user = c.get('user');
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const inv = readInvoice(b);
+    const resId = existing ? existing.reservation_id : (b.reservation_id ? int(b.reservation_id) : null);
+    if (resId && !existing) visibleReservation(user, resId);
+    if (!resId && !isFullAdmin(user)) bad('Wybierz rezerwację');
+    if (!inv.number) inv.number = nextInvoiceNumber(db, inv.issue_date, invoiceSettings(db).numbering);
+    if (get('SELECT 1 FROM invoices WHERE number = ? AND id != ?', inv.number, existing?.id ?? 0)) bad(`Rachunek nr ${inv.number} już istnieje — zmień numer`);
+    const vals = [inv.number, inv.issue_date, inv.sale_date, inv.place, JSON.stringify(inv.seller), JSON.stringify(inv.buyer), JSON.stringify(inv.items),
+      itemsTotal(inv.items), inv.payment_method, inv.payment_due, inv.paid, inv.note, inv.footer];
+    let id: number;
+    if (existing) {
+      run(`UPDATE invoices SET number = ?, issue_date = ?, sale_date = ?, place = ?, seller = ?, buyer = ?, items = ?, total = ?, payment_method = ?, payment_due = ?,
+        paid = ?, note = ?, footer = ?, updated_at = datetime('now') WHERE id = ?`, ...vals, existing.id);
+      id = existing.id;
+    } else {
+      id = Number(run(`INSERT INTO invoices (number, issue_date, sale_date, place, seller, buyer, items, total, payment_method, payment_due, paid, note, footer, reservation_id, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...vals, resId, user.username).lastInsertRowid);
+    }
+    if (b.save_template !== false) saveInvoiceTemplate(inv);
+    return invoiceOut(get('SELECT * FROM invoices WHERE id = ?', id) as InvoiceRow);
+  };
+  api.post('/invoices', async (c) => c.json(await writeInvoice(c), 201));
+  api.get('/invoices/:id{[0-9]+}', (c) => c.json(invoiceOut(invoiceRow(c.get('user'), int(c.req.param('id'))))));
+  api.put('/invoices/:id{[0-9]+}', async (c) => c.json(await writeInvoice(c, invoiceRow(c.get('user'), int(c.req.param('id'))))));
+  api.delete('/invoices/:id{[0-9]+}', (c) => {
+    const row = invoiceRow(c.get('user'), int(c.req.param('id')));
+    run('DELETE FROM invoices WHERE id = ?', row.id);
+    return c.json({ ok: true });
+  });
+  api.get('/invoices/:id{[0-9]+}/pdf', async (c) => {
+    const row = invoiceRow(c.get('user'), int(c.req.param('id')));
+    return pdfResponse(c, await renderInvoicePdf(invoiceData(row)), row.number, c.req.query('download') === '1');
+  });
+  api.post('/invoices/:id{[0-9]+}/send', async (c) => {
+    const user = c.get('user');
+    const row = invoiceRow(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    if (!mailer) bad('Wysyłka e-maili nie jest skonfigurowana na serwerze');
+    if (!row.reservation_id) bad('Rachunek nie jest przypisany do rezerwacji');
+    const r = visibleReservation(user, row.reservation_id);
+    const to = str(b.to, 200) || r.guest_email;
+    if (!isEmail(to)) bad('Podaj adres e-mail gościa');
+    const pdf = await renderInvoicePdf(invoiceData(row));
+    try {
+      await sendGuestMessage(db, mailer!, { ...r, guest_email: to }, {
+        kind: 'invoice', subject: str(b.subject, 200) || undefined, body: typeof b.body === 'string' ? str(b.body, 3000) : undefined,
+      }, { reservation_id: r.id, sent_by: user.username }, [{ filename: invoiceFileName(row.number), content: pdf, contentType: 'application/pdf' }]);
+    } catch (err) {
+      console.error('Rachunek nie wysłany', err);
+      return c.json({ error: `Nie udało się wysłać: ${err instanceof Error ? err.message : err}` }, 502);
+    }
+    return c.json({ ok: true, to });
   });
 
   // ---- Powiadomienia e-mail (adresy właściciela) ----

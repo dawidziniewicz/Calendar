@@ -82,8 +82,17 @@ export function bookingHorizon(db: DatabaseSync): number {
   return Number.isInteger(v) && v >= 7 && v <= 730 ? v : DEFAULT_HORIZON;
 }
 const warsawToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
-/** Pierwsza noc, której strona już nie pokazuje (dziś + horyzont). */
-export const horizonEnd = (db: DatabaseSync) => addDays(warsawToday(), bookingHorizon(db));
+// Albo konkretna data: ostatnia noc z ceną na stronie (np. koniec sezonu) — ma pierwszeństwo przed liczbą dni
+export const HORIZON_UNTIL_KEY = 'booking_horizon_until';
+export function horizonUntil(db: DatabaseSync): string | null {
+  const v = (db.prepare('SELECT value FROM settings WHERE key = ?').get(HORIZON_UNTIL_KEY) as { value: string } | undefined)?.value;
+  return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+}
+/** Pierwsza noc, której strona już nie pokazuje (dzień po dacie „ceny do” albo dziś + horyzont). */
+export const horizonEnd = (db: DatabaseSync) => {
+  const until = horizonUntil(db);
+  return until ? addDays(until, 1) : addDays(warsawToday(), bookingHorizon(db));
+};
 
 /** Noce od `from` (włącznie) do `to` (wyłącznie) z ceną, minimalną długością pobytu i zajętością. */
 export function nights(db: DatabaseSync, unit: UnitPricing, from: string, to: string): Night[] {
@@ -144,7 +153,7 @@ export type RequestRow = {
   id: number; unit_id: number; check_in: string; check_out: string; guest_name: string; guest_phone: string; guest_email: string;
   adults: number; children: number; message: string; quoted_price: number | null; status: string; decision_note: string;
   reservation_id: number | null; created_at: string; lang?: string; extras?: string | null; group_unit_ids?: string | null;
-  cancel_token?: string | null; cancel_reason?: string; cancel_note?: string;
+  cancel_token?: string | null; cancel_reason?: string; cancel_note?: string; expired_at?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -191,16 +200,16 @@ export function extrasLines(list: ChosenExtra[], lang: Lang = 'pl') {
   });
 }
 
-type UnitInfo = { unit: string; type: string; type_en: string; property: string; location: string; address: string };
-function unitInfo(db: DatabaseSync, unitId: number): UnitInfo {
+export type UnitInfo = { unit: string; type: string; type_en: string; property: string; location: string; address: string };
+export function unitInfo(db: DatabaseSync, unitId: number): UnitInfo {
   return (db.prepare(`SELECT u.name AS unit, u.type_name AS type, u.type_name_en AS type_en, p.name AS property, p.location, p.address FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`)
     .get(unitId) as UnitInfo | undefined) ?? { unit: '', type: '', type_en: '', property: '', location: '', address: '' };
 }
 /** Gość widzi typ domku (np. „Mały domek” / „Small cottage”), a nie wewnętrzną nazwę konkretnego domku. */
-const guestUnitName = (u: UnitInfo, lang: Lang = 'pl') => (lang === 'en' && u.type_en) || u.type || u.unit;
+export const guestUnitName = (u: UnitInfo, lang: Lang = 'pl') => (lang === 'en' && u.type_en) || u.type || u.unit;
 const groupSize = (r: RequestRow) => { try { return r.group_unit_ids ? (JSON.parse(r.group_unit_ids) as number[]).length : 1; } catch { return 1; } };
 
-const TXT = {
+export const TXT = {
   pl: {
     property: 'Obiekt', arrival: 'Przyjazd', departure: 'Wyjazd', length: 'Długość pobytu', guests: 'Goście', price: 'Cena za pobyt', estimate: 'Szacunkowa cena',
     tbd: 'do ustalenia', address: 'Adres', nights: nightsPl, locale: 'pl-PL',
@@ -250,7 +259,7 @@ const TXT = {
 };
 const txt = (r: RequestRow) => TXT[r.lang === 'en' ? 'en' : 'pl'];
 
-const longDate = (iso: string, locale: string) =>
+export const longDate = (iso: string, locale: string) =>
   new Date(`${iso}T12:00:00Z`).toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 
 function stayRows(db: DatabaseSync, r: RequestRow, price: number | null, t = TXT.pl, priceLabel = t.price): MailRow[] {
@@ -277,9 +286,9 @@ export function adminEmails(db: DatabaseSync): string[] {
   return parseEmails(saved ?? process.env.ADMIN_EMAIL ?? '');
 }
 
-const appUrl = () => (process.env.APP_URL || 'https://kalendarz.odmorzadogor.pl').replace(/\/$/, '');
-const siteUrl = () => (process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '');
-const firstName = (full: string) => full.trim().split(/\s+/)[0] || '';
+export const appUrl = () => (process.env.APP_URL || 'https://kalendarz.odmorzadogor.pl').replace(/\/$/, '');
+export const siteUrl = () => (process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '');
+export const firstName = (full: string) => full.trim().split(/\s+/)[0] || '';
 
 /** Nowe zapytanie: push do obsługi (z dostępem do obiektu), e-mail do właściciela i potwierdzenie dla gościa. */
 export async function announceRequest(db: DatabaseSync, push: Sender | undefined, mailer: Mailer | undefined, r: RequestRow) {
@@ -333,7 +342,7 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
 }
 
 /** Odpowiedź do gościa po decyzji (akceptacja / odrzucenie). */
-export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined, r: RequestRow, accepted: boolean, price: number | null) {
+export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined, r: RequestRow, accepted: boolean, price: number | null, extraRows: MailRow[] = []) {
   if (!mailer) return false;
   const u = unitInfo(db, r.unit_id);
   const t = txt(r);
@@ -344,7 +353,7 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
         preheader: t.okPre(u.property, range),
         title: t.okTitle,
         intro: [t.hello(firstName(r.guest_name)), t.okIntro],
-        rows: [...stayRows(db, r, price, t), ...(u.address ? [[t.address, u.address] as MailRow] : [])],
+        rows: [...stayRows(db, r, price, t), ...extraRows, ...(u.address ? [[t.address, u.address] as MailRow] : [])],
         note: r.decision_note ? { label: t.fromUs, text: r.decision_note } : undefined,
         outro: t.okOutro,
         link: r.cancel_token ? { text: t.cancelText, label: t.cancelLabel, url: `${siteUrl()}${t.cancelPath}?t=${r.cancel_token}` } : undefined,

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, type RatePatch } from '../api';
 import type { Property } from '../types';
 import { diffDays, formatShort, nightsLabel } from '../dates';
+import { groupUnits } from '../pricing';
 
 type Props = {
   properties: Property[];
@@ -18,7 +19,11 @@ const WEEKDAYS = [[1, 'Pn'], [2, 'Wt'], [3, 'Śr'], [4, 'Cz'], [5, 'Pt'], [6, 'S
 export default function PriceSheet({ properties, unitId, from: initialFrom, to: initialTo, onClose, onSaved }: Props) {
   const units = properties.flatMap((p) => p.units.map((u) => ({ ...u, property: p.name })));
   const unit = units.find((u) => u.id === unitId);
-  const [selected, setSelected] = useState<number[]>([unitId]);
+  // Domki tego samego typu mają wspólne ceny — wybiera się cały typ (pierwszy domek grupy reprezentuje typ)
+  const groups = properties.map((p) => ({ property: p, groups: groupUnits(p.units) }));
+  const groupOf = (id: number) => groups.flatMap((x) => x.groups).find((g) => g.units.some((u) => u.id === id));
+  const [selected, setSelected] = useState<number[]>([groupOf(unitId)?.units[0].id ?? unitId]);
+  const unitCount = selected.reduce((n, id) => n + (groupOf(id)?.units.length ?? 1), 0);
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
   const [weekdays, setWeekdays] = useState<number[]>([]); // puste = wszystkie dni
@@ -116,13 +121,14 @@ export default function PriceSheet({ properties, unitId, from: initialFrom, to: 
           <fieldset>
             <legend>Domki</legend>
             <div className="full unit-picks">
-              {properties.map((p) => (
+              {groups.map(({ property: p, groups: gs }) => (
                 <div key={p.id}>
                   <div className="muted unit-picks-prop">{p.name}</div>
-                  {p.units.map((u) => (
-                    <label key={u.id} className="check-row">
-                      <input type="checkbox" checked={selected.includes(u.id)} onChange={() => setSelected(toggle(selected, u.id))} />
-                      <i className="unit-dot" style={{ background: u.color }} /> {u.name}
+                  {gs.map((g) => (
+                    <label key={g.key} className="check-row">
+                      <input type="checkbox" checked={selected.includes(g.units[0].id)} onChange={() => setSelected(toggle(selected, g.units[0].id))} />
+                      <i className="unit-dot" style={{ background: g.units[0].color }} /> {g.type ?? g.units[0].name}
+                      {g.units.length > 1 && <small className="muted"> · {g.units.length} domki, wspólna cena</small>}
                     </label>
                   ))}
                 </div>
@@ -131,7 +137,7 @@ export default function PriceSheet({ properties, unitId, from: initialFrom, to: 
           </fieldset>
           {error && <div className="banner error">{error}</div>}
           <button type="submit" className="btn primary big" disabled={busy || nothing || !selected.length || days < 1}>
-            {busy ? 'Zapisywanie…' : `Zapisz dla ${selected.length === 1 ? '1 domku' : `${selected.length} domków`}`}
+            {busy ? 'Zapisywanie…' : `Zapisz dla ${unitCount === 1 ? '1 domku' : `${unitCount} domków`}`}
           </button>
         </div>
       </form>

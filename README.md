@@ -236,15 +236,24 @@ Strona [odmorzadogor.pl](https://github.com/dawidziniewicz/osadajantar) pobiera 
   - cena podstawowa za noc, minimalny pobyt i widoczność każdego domku na stronie,
   - **ceny wg dnia tygodnia** — np. 300 zł w tygodniu i 600 zł w piątek i sobotę (przycisk *Ustaw weekend*),
   - **ceny na wybrane dni** (święta, sezon) z listą i usuwaniem; to samo w *Kalendarz → Ceny* (zaznaczasz zakres na osi czasu),
-  - **na ile dni do przodu** strona pokazuje ceny i przyjmuje zapytania (domyślnie 365),
+  - **do kiedy** strona pokazuje ceny i przyjmuje zapytania — konkretna data (np. koniec wakacji) albo stała liczba dni do przodu (domyślnie 365),
   - **opcje płatne** — parking, zwierzę, łóżeczko… z ceną za pobyt albo za noc, ilością i wyborem obiektów; gość zaznacza je w formularzu, a cena dolicza się do wyceny.
   - Kolejność ceny nocy: cena na konkretny dzień → cena dnia tygodnia → cena podstawowa.
-  - **Typ domku** (np. „Mały domek”): domki tego samego typu strona pokazuje jako jedną opcję („3 × Mały domek”). Termin jest wolny, jeśli którykolwiek z nich jest wolny przez cały pobyt; przy zapisie cennika można ustawić te same ceny dla wszystkich domków typu.
+  - **Typ domku** (np. „Mały domek”): przypisujesz go z listy w panelu *Typy domków* (bez wpisywania — bez literówek). Domki tego samego typu strona pokazuje jako jedną opcję („3 × Mały domek”); termin jest wolny, jeśli którykolwiek z nich jest wolny przez cały pobyt. **Cennik typu jest wspólny** — cena podstawowa, dni tygodnia i ceny na wybrane dni zawsze zmieniają się dla wszystkich jego domków (osobno się nie da). Domek dołączający do typu przejmuje jego ceny.
   - **Przydział domku**: zapytanie przychodzi z proponowanym wolnym domkiem; przy akceptacji wybierasz domek z listy (wolny / zajęty) albo zostawiasz automatyczny wybór. W trybie „Zawsze wybieram ręcznie” bez wyboru nie da się zaakceptować.
   - **Obiekt zamknięty**: do odwołania (strona pokazuje komunikat zamiast kalendarza) albo w terminie (dni niedostępne, komunikat nad kalendarzem); na osi czasu w aplikacji dni są zakreskowane.
 - **Zapytanie** od gościa: powiadomienie push („Zapytania ze strony www” w *Powiadomieniach*), e-mail na adresy z *Ustawienia → Powiadomienia e-mail*, a gość dostaje e-mail „Otrzymaliśmy Twoje zapytanie”. Zapytania ze strony angielskiej dostają e-maile po angielsku.
 - **Anulacja przez gościa**: e-mail z potwierdzeniem ma link „Poproś o anulację” (`odmorzadogor.pl/anulacja/?t=…`, unikalny kod). Gość podaje powód, Ty dostajesz push i e-mail, a w *Zapytania* pojawia się „Prośby o anulację”: **Potwierdź anulację** (rezerwacja anulowana, termin wolny, e-mail do gościa) albo **Odrzuć prośbę** (rezerwacja zostaje, e-mail z Twoją wiadomością).
 - **Akceptacja** tworzy rezerwację „Strona www” (można poprawić cenę i dopisać informację dla gościa, np. o zaliczce). Gdy termin w międzyczasie się zajął, aplikacja ostrzeże.
+
+## Płatności, oferty, wiadomości i rachunki
+
+*Ustawienia → Płatności i rachunki*: numer konta, odbiorca, bank, domyślna zaliczka (% ceny), ile dni na wpłatę, ile dni oferta jest ważna, warunki rezerwacji (PL/EN), szablon rachunku i lista wystawionych rachunków. Wszystkie pola są opcjonalne.
+
+- **Oferta cenowa** — w *Zapytania* przycisk **Zaproponuj cenę** (albo korekta ceny z cennika), a w każdej rezerwacji **Oferta do akceptacji** (np. po rozmowie telefonicznej). Cena, zaliczka z terminem, ważność oferty, wiadomość. Gość dostaje e-mail z przyciskiem *Zobacz ofertę i zaakceptuj* → strona `odmorzadogor.pl/oferta/?t=…` (`/en/offer/` po angielsku), gdzie zaznacza „Akceptuję cenę … i zobowiązuję się do zapłaty (oraz wpłaty zaliczki …)” i klika **Akceptuję i rezerwuję**. Zapisujemy datę, godzinę i adres IP akceptacji (w notatkach rezerwacji). Zapytanie od razu staje się rezerwacją w kalendarzu (wolny domek z typu), gość dostaje potwierdzenie z danymi do przelewu, a Ty push i e-mail. Gość może też ofertę odrzucić (z powodem). Link można wysłać SMS-em / WhatsAppem (gdy gość nie ma e-maila).
+- **Wiadomości do gościa** z każdej rezerwacji (także z Bookingu czy telefonicznych, jeśli jest e-mail): prośba o zaliczkę (kwota, termin, numer konta, tytuł przelewu), prośba o dopłatę, potwierdzenie wpłaty, potwierdzenie rezerwacji, dowolna wiadomość. Treść można edytować, jest podgląd e-maila, wszystko trafia do historii rezerwacji. Język e-maili ustawiasz w rezerwacji (PL/EN).
+- **Zaliczka** w rezerwacji: kwota i termin, status „wpłacona ✓ / minął termin”, przycisk *Klient wpłacił zaliczkę*.
+- **Rachunki** (PDF A4, czcionki strony, kwota słownie): z rezerwacji przycisk *Wystaw rachunek* — nabywca, pozycje, płatność wpisują się same. Edycja z podglądem PDF na żywo (na komputerze obok formularza, na telefonie w zakładce). Wystawca, miejsce, sposób płatności, dopisek (np. zwolnienie z VAT) i stopka zapamiętują się jako szablon. Numeracja roczna (1/2026) albo miesięczna (1/10/2026). Gotowy rachunek: pobierz, udostępnij / wydrukuj, wyślij gościowi e-mailem z PDF w załączniku.
 
 ### E-maile (do ustawienia w `.env` na serwerze w domu)
 
@@ -258,6 +267,8 @@ Bez tej konfiguracji wszystko działa, tylko bez e-maili (zostają powiadomienia
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | `poczta.example.pl`, `465`, `kontakt@odmorzadogor.pl`, hasło | **wariant B:** istniejąca skrzynka pocztowa (używane, gdy `RESEND_API_KEY` jest pusty) |
 | `APP_URL` | `https://kalendarz.odmorzadogor.pl` | link „Otwórz w kalendarzu” w e-mailu |
 | `SITE_URL` | `https://new.odmorzadogor.pl` → potem `https://odmorzadogor.pl` | link do strony w e-mailach do gości |
+
+Lokalnie (programowanie) `MAIL_LOG=1` zapisuje e-maile do `data/mail-outbox/` zamiast je wysyłać.
 
 Po zmianie `.env`: `docker compose up -d` (restart kontenera). Test: *Ustawienia → Powiadomienia e-mail → Wyślij test*. W logach serwera przy starcie: `E-maile: resend, nadawca …`.
 

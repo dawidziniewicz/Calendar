@@ -618,8 +618,10 @@ test('zapytanie ze strony → akceptacja tworzy rezerwację i wysyła e-maile', 
 test('odrzucenie zapytania, walidacja i ochrona przed spamem', async () => {
   const { call, login, sent } = setupWithMail();
   await login();
-  const base = { unit_id: 1, check_in: inDays(5), check_out: inDays(7), name: 'Anna Nowak', email: 'anna@example.com', adults: 2, consent: true };
+  const base = { unit_id: 1, check_in: inDays(5), check_out: inDays(7), name: 'Anna Nowak', phone: '600 100 200', email: 'anna@example.com', adults: 2, consent: true };
   assert.equal((await call('POST', '/public/requests', { ...base, email: 'zly-adres' })).status, 400);
+  assert.equal((await call('POST', '/public/requests', { ...base, phone: '' }, { 'x-client-ip': '2.2.9.1' })).status, 400, 'telefon jest obowiązkowy');
+  assert.equal((await call('POST', '/public/requests', { ...base, name: 'Anna' }, { 'x-client-ip': '2.2.9.1' })).status, 400, 'imię i nazwisko');
   assert.equal((await call('POST', '/public/requests', { ...base, consent: false })).status, 400);
   assert.equal((await call('POST', '/public/requests', { ...base, adults: 20 })).status, 400);
   assert.equal((await call('POST', '/public/requests', { ...base, check_in: inDays(-3) })).status, 400);
@@ -685,7 +687,7 @@ test('ceny wg dni tygodnia, pierwszeństwo ceny na dzień i horyzont rezerwacji'
   assert.equal((await (await call('PUT', '/api/settings/booking', { horizon_days: 30 })).json()).horizon_days, 30);
   const short = await (await call('GET', `/public/calendar?unit=1&from=${inDays(0)}&to=${inDays(200)}`)).json();
   assert.equal(short.to, inDays(30));
-  const late = await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(40), check_out: inDays(42), name: 'Jan Nowak', email: 'jan@example.com', adults: 2, consent: true }, { 'x-client-ip': '3.3.3.3' });
+  const late = await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(40), check_out: inDays(42), name: 'Jan Nowak', phone: '600 100 200', email: 'jan@example.com', adults: 2, consent: true }, { 'x-client-ip': '3.3.3.3' });
   assert.equal(late.status, 409);
   assert.match((await late.json()).error, /30 dni/);
 });
@@ -705,7 +707,7 @@ test('opcje płatne: admin ustawia, gość wybiera, cena dolicza się do wyceny 
   assert.equal(catalog.find((p: { name: string }) => p.name === 'Apartament Sopot').extras.length, 3);
 
   const res = await call('POST', '/public/requests', {
-    unit_id: 1, check_in: inDays(10), check_out: inDays(13), name: 'Ola Kowal', email: 'ola@example.com', adults: 2, consent: true,
+    unit_id: 1, check_in: inDays(10), check_out: inDays(13), name: 'Ola Kowal', phone: '600 100 200', email: 'ola@example.com', adults: 2, consent: true,
     extras: [{ id: parking.id, qty: 5 }, { id: pet.id, qty: 1 }, { id: hidden.id, qty: 1 }, { id: 9999, qty: 1 }],
   }, { 'x-client-ip': '4.4.4.4' });
   const body = await res.json();
@@ -730,12 +732,17 @@ test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przyd
   await login();
   // Jantar: 3 małe (id 1–3) i 2 duże (id 4–5)
   for (const id of [1, 2, 3]) await call('PUT', `/api/rates/unit/${id}`, { base_price: 400, min_nights: 1, type_name: 'Mały domek' });
-  await call('PUT', '/api/rates/unit/2', { base_price: 350, min_nights: 1, type_name: 'Mały domek' }); // najtańszy
+  // cena dla jednego domku typu zmienia ceny wszystkich trzech (osobno się nie da)
+  await call('PUT', '/api/rates/unit/2', { base_price: 350, min_nights: 1 });
+  assert.deepEqual((db.prepare('SELECT base_price FROM units WHERE id IN (1, 2, 3)').all() as { base_price: number }[]).map((u) => u.base_price), [350, 350, 350]);
+  await call('PUT', '/api/rates/unit/2', { base_price: 400, min_nights: 1 });
+  await call('PUT', '/api/rates', { unit_ids: [3], from: inDays(60), to: inDays(61), price: 999 });
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM rates WHERE price = 999').get() as { n: number }).n, 6, 'ceny na dni dla całego typu');
   const jantar = (await (await call('GET', '/public/catalog')).json())[0];
   const small = jantar.types.find((t: { name: string }) => t.name === 'Mały domek');
   assert.deepEqual(small.unit_ids, [1, 2, 3]);
   assert.equal(small.count, 3);
-  assert.equal(small.price_from, 350);
+  assert.equal(small.price_from, 400);
   assert.equal(jantar.types.filter((t: { count: number }) => t.count === 1).length, 2); // duże bez typu — osobno
 
   // domki 2 i 3 zajęte w tym terminie → wolny tylko 1
@@ -745,7 +752,7 @@ test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przyd
   assert.deepEqual(cal.unit_ids, [1, 2, 3]);
   assert.deepEqual(cal.days[0][3], 0b110); // bit 1 i 2 = zajęte
   const req = async (ip: string) => (await call('POST', '/public/requests', {
-    unit_ids: [1, 2, 3], check_in: a, check_out: b, name: 'Grupa Test', email: 'g@example.com', adults: 2, consent: true,
+    unit_ids: [1, 2, 3], check_in: a, check_out: b, name: 'Grupa Test', phone: '600 100 200', email: 'g@example.com', adults: 2, consent: true,
   }, { 'x-client-ip': ip })).json();
   const r1 = await req('5.5.5.1');
   assert.equal(r1.quoted_price, 1200); // jedyny wolny: domek 1 (3 × 400)
@@ -756,7 +763,7 @@ test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przyd
   // wszystkie zajęte → zapytanie odrzucone od razu
   db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (1, ?, ?)').run(inDays(30), inDays(32));
   for (const id of [2, 3]) db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (?, ?, ?)').run(id, inDays(30), inDays(32));
-  assert.equal((await call('POST', '/public/requests', { unit_ids: [1, 2, 3], check_in: inDays(30), check_out: inDays(32), name: 'Ktoś Nowy', email: 'k@example.com', adults: 2, consent: true }, { 'x-client-ip': '5.5.5.2' })).status, 409);
+  assert.equal((await call('POST', '/public/requests', { unit_ids: [1, 2, 3], check_in: inDays(30), check_out: inDays(32), name: 'Ktoś Nowy', phone: '600 100 200', email: 'k@example.com', adults: 2, consent: true }, { 'x-client-ip': '5.5.5.2' })).status, 409);
 
   // admin wybiera domek spoza grupy → błąd; ręcznie wybrany domek 1 → OK
   assert.equal((await call('POST', `/api/requests/${r1.id}/accept`, { unit_id: 4 })).status, 400);
@@ -769,12 +776,12 @@ test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przyd
   // tryb automatyczny: proponowany domek zajęty w międzyczasie → wybierany inny wolny
   await call('PUT', '/api/settings/booking', { assign_mode: 'auto' });
   const [c1, c2] = [inDays(40), inDays(42)];
-  const r2 = await (await call('POST', '/public/requests', { unit_ids: [1, 2, 3], check_in: c1, check_out: c2, name: 'Auto Test', email: 'a@example.com', adults: 2, consent: true }, { 'x-client-ip': '5.5.5.3' })).json();
+  const r2 = await (await call('POST', '/public/requests', { unit_ids: [1, 2, 3], check_in: c1, check_out: c2, name: 'Auto Test', phone: '600 100 200', email: 'a@example.com', adults: 2, consent: true }, { 'x-client-ip': '5.5.5.3' })).json();
   pending = (await (await call('GET', '/api/requests?status=pending')).json()).find((x: { id: number }) => x.id === r2.id);
-  assert.equal(pending.unit_id, 2); // najtańszy
-  db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (2, ?, ?)').run(c1, c2);
+  assert.equal(pending.unit_id, 1); // pierwszy wg kolejności
+  db.prepare('INSERT INTO reservations (unit_id, check_in, check_out) VALUES (1, ?, ?)').run(c1, c2);
   const auto = await (await call('POST', `/api/requests/${r2.id}/accept`, {})).json();
-  assert.equal(auto.reservation.unit_id, 1);
+  assert.equal(auto.reservation.unit_id, 2);
 });
 
 test('obiekt zamknięty: w terminie (dni zajęte) i do odwołania (komunikat, brak zapytań)', async () => {
@@ -788,7 +795,7 @@ test('obiekt zamknięty: w terminie (dni zajęte) i do odwołania (komunikat, br
   assert.deepEqual(cat.closed, { from, to, note: 'Remont basenu', note_en: 'Pool renovation' });
   const cal = await (await call('GET', `/public/calendar?unit=1&from=${inDays(9)}&to=${inDays(14)}`)).json();
   assert.deepEqual(cal.days.map((d: unknown[]) => d[3]), [0, 1, 1, 1, 0]);
-  const ask = (a: string, b: string, ip: string) => call('POST', '/public/requests', { unit_id: 1, check_in: a, check_out: b, name: 'Jan Test', email: 'j@example.com', adults: 2, consent: true }, { 'x-client-ip': ip });
+  const ask = (a: string, b: string, ip: string) => call('POST', '/public/requests', { unit_id: 1, check_in: a, check_out: b, name: 'Jan Test', phone: '600 100 200', email: 'j@example.com', adults: 2, consent: true }, { 'x-client-ip': ip });
   const blocked = await ask(inDays(11), inDays(14), '6.6.6.1');
   assert.equal(blocked.status, 409);
   assert.match((await blocked.json()).error, /zamknięty/);
@@ -807,7 +814,7 @@ test('obiekt zamknięty: w terminie (dni zajęte) i do odwołania (komunikat, br
 test('zapytanie z minioną datą przyjazdu trafia do archiwum', async () => {
   const { call, login, db } = setupWithMail();
   await login();
-  const ok = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(5), check_out: inDays(7), name: 'Stary Termin', email: 's@example.com', adults: 2, consent: true }, { 'x-client-ip': '7.7.7.1' })).json();
+  const ok = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(5), check_out: inDays(7), name: 'Stary Termin', phone: '600 100 200', email: 's@example.com', adults: 2, consent: true }, { 'x-client-ip': '7.7.7.1' })).json();
   assert.equal((await (await call('GET', '/api/requests?status=pending')).json()).length, 1);
   // data przyjazdu minęła (symulacja: przesuwamy zapytanie w przeszłość)
   db.prepare('UPDATE booking_requests SET check_in = ?, check_out = ? WHERE id = ?').run(inDays(-3), inDays(-1), ok.id);
@@ -823,7 +830,7 @@ test('prośba o anulację: link w e-mailu, prośba gościa, potwierdzenie lub od
   await login();
   await call('PUT', '/api/rates/unit/1', { base_price: 400, min_nights: 1 });
   const book = async (from: number, ip: string) => {
-    const r = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(from), check_out: inDays(from + 2), name: 'Ewa Lis', email: 'ewa@example.com', adults: 2, consent: true }, { 'x-client-ip': ip })).json();
+    const r = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(from), check_out: inDays(from + 2), name: 'Ewa Lis', phone: '600 100 200', email: 'ewa@example.com', adults: 2, consent: true }, { 'x-client-ip': ip })).json();
     await call('POST', `/api/requests/${r.id}/accept`, {});
     const mail = sent.at(-1)!;
     const token = mail.text.match(/anulacja\/\?t=([a-f0-9]{48})/)?.[1];
@@ -865,9 +872,186 @@ test('angielska nazwa typu domku: katalog i e-mail do gościa ze strony EN', asy
   const t = (await (await call('GET', '/public/catalog')).json())[0].types.find((x: { count: number }) => x.count === 2);
   assert.equal(t.name, 'Mały domek');
   assert.equal(t.name_en, 'Small cottage');
-  await call('POST', '/public/requests', { unit_ids: [1, 2], check_in: inDays(10), check_out: inDays(12), name: 'John Smith', email: 'john@example.com', adults: 2, consent: true, lang: 'en' }, { 'x-client-ip': '9.1.1.1' });
+  await call('POST', '/public/requests', { unit_ids: [1, 2], check_in: inDays(10), check_out: inDays(12), name: 'John Smith', phone: '600 100 200', email: 'john@example.com', adults: 2, consent: true, lang: 'en' }, { 'x-client-ip': '9.1.1.1' });
   await flush();
   const guest = sent.find((m) => m.to[0] === 'john@example.com')!;
   assert.match(guest.text, /Small cottage/);
   assert.doesNotMatch(guest.text, /Mały domek/);
+});
+
+test('oferta cenowa do zapytania: e-mail z linkiem, akceptacja gościa z obowiązkiem zapłaty, rezerwacja z zaliczką', async () => {
+  const { db, call, login, sent } = setupWithMail();
+  await login();
+  await call('PUT', '/api/settings/payments', { account_number: '12 3456 7890', account_name: 'Jan Kowalski', deposit_percent: 30, deposit_days: 3, offer_days: 3, terms: 'Zaliczka bezzwrotna.' });
+  const { id } = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(20), check_out: inDays(23), name: 'Ewa Nowak', phone: '600 100 200', email: 'ewa@example.com', adults: 2, consent: true }, { 'x-client-ip': '8.8.8.1' })).json();
+  await flush();
+  assert.equal((await call('POST', `/api/requests/${id}/offers`, { price: 0 })).status, 400);
+  assert.equal((await call('POST', `/api/requests/${id}/offers`, { price: 1000, deposit: 2000 })).status, 400);
+  const made = await (await call('POST', `/api/requests/${id}/offers`, { price: 1350, deposit: 400, deposit_due: inDays(5), message: 'Cena ze zniżką za 3 noce' })).json();
+  assert.equal(made.emailed, true);
+  assert.match(made.offer.url, /\/oferta\/\?t=[a-f0-9]{48}$/);
+  const mail = sent.at(-1)!;
+  assert.deepEqual(mail.to, ['ewa@example.com']);
+  assert.match(mail.text, /1350 zł/);
+  assert.match(mail.text, /zobowiązujesz się do zapłaty/);
+  assert.match(mail.text, new RegExp(made.offer.url.replace(/[?]/g, '\\?')));
+  // lista zapytań pokazuje ofertę
+  const list = await (await call('GET', '/api/requests?status=pending')).json();
+  assert.equal(list[0].offer.status, 'sent');
+
+  const t = made.offer.url.split('t=')[1];
+  const view = await (await call('GET', `/public/offer?t=${t}`)).json();
+  assert.equal(view.state, 'open');
+  assert.equal(view.price, 1350);
+  assert.equal(view.payment, null, 'konto dopiero po akceptacji');
+  assert.equal(view.terms, 'Zaliczka bezzwrotna.');
+  assert.equal((await call('POST', '/public/offer', { t, action: 'accept' }, { 'x-client-ip': '8.8.8.2' })).status, 400, 'bez zgody');
+  const acc = await (await call('POST', '/public/offer', { t, action: 'accept', consent: true }, { 'x-client-ip': '8.8.8.2' })).json();
+  assert.equal(acc.state, 'accepted');
+  assert.equal(acc.payment.account_number, '12 3456 7890');
+  await flush();
+  const res = db.prepare("SELECT * FROM reservations WHERE source = 'website'").get() as Record<string, unknown>;
+  assert.equal(res.price, 1350);
+  assert.equal(res.deposit, 400);
+  assert.match(res.notes as string, /zaakceptował ofertę 1350 zł .* z obowiązkiem zapłaty: .*IP 8\.8\.8\.2/);
+  assert.equal((db.prepare('SELECT status FROM booking_requests WHERE id = ?').get(id) as { status: string }).status, 'accepted');
+  const guestMail = sent.find((m) => m.to[0] === 'ewa@example.com' && /Rezerwacja potwierdzona/.test(m.subject))!;
+  assert.match(guestMail.text, /12 3456 7890/);
+  assert.match(guestMail.text, /anulacja\/\?t=/);
+  assert.ok(sent.some((m) => m.to[0] === 'wlasciciel@x.pl' && /zaakceptował ofertę/.test(m.subject)));
+  // ponowne kliknięcie nic nie psuje
+  assert.equal((await (await call('POST', '/public/offer', { t, action: 'accept', consent: true }, { 'x-client-ip': '8.8.8.2' })).json()).state, 'accepted');
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM reservations").get() as { n: number }).n, 1);
+});
+
+test('oferta: odrzucenie przez gościa, wycofanie, nowa oferta unieważnia poprzednią', async () => {
+  const { db, call, login, sent } = setupWithMail();
+  await login();
+  const { id } = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(30), check_out: inDays(32), name: 'Adam Lis', phone: '600 100 200', email: 'adam@example.com', adults: 2, consent: true, lang: 'en' }, { 'x-client-ip': '8.8.9.1' })).json();
+  const first = await (await call('POST', `/api/requests/${id}/offers`, { price: 900 })).json();
+  assert.match(first.offer.url, /\/en\/offer\//);
+  assert.match(sent.at(-1)!.text, /View and accept the offer/);
+  const second = await (await call('POST', `/api/requests/${id}/offers`, { price: 850, email: false })).json();
+  assert.equal(second.emailed, false);
+  const t1 = first.offer.url.split('t=')[1], t2 = second.offer.url.split('t=')[1];
+  assert.equal((await (await call('GET', `/public/offer?t=${t1}`)).json()).state, 'withdrawn');
+  const dec = await (await call('POST', '/public/offer', { t: t2, action: 'decline', reason: 'Too expensive', lang: 'en' }, { 'x-client-ip': '8.8.9.2' })).json();
+  assert.equal(dec.state, 'declined');
+  await flush();
+  assert.ok(sent.some((m) => /odrzucił ofertę/.test(m.subject)));
+  assert.equal((db.prepare('SELECT status FROM booking_requests WHERE id = ?').get(id) as { status: string }).status, 'pending', 'zapytanie czeka na decyzję admina');
+  // wycofanie
+  const third = await (await call('POST', `/api/requests/${id}/offers`, { price: 800, email: false })).json();
+  assert.equal((await (await call('POST', `/api/offers/${third.offer.id}/withdraw`)).json()).status, 'withdrawn');
+  assert.equal((await call('POST', '/public/offer', { t: third.offer.url.split('t=')[1], action: 'accept', consent: true })).status, 400);
+  // odrzucenie zapytania unieważnia oferty
+  const fourth = await (await call('POST', `/api/requests/${id}/offers`, { price: 800, email: false })).json();
+  await call('POST', `/api/requests/${id}/reject`, { email: false });
+  assert.equal((await (await call('GET', `/public/offer?t=${fourth.offer.url.split('t=')[1]}`)).json()).state, 'withdrawn');
+});
+
+test('rezerwacja z kalendarza: oferta do akceptacji, prośba o zaliczkę, potwierdzenie wpłaty, historia', async () => {
+  const { call, login, sent } = setupWithMail();
+  await login();
+  await call('PUT', '/api/settings/payments', { account_number: '98 7654', account_name: 'Od Morza do Gór', deposit_percent: 30 });
+  const r = await (await call('POST', '/api/reservations', { unit_id: 2, check_in: inDays(40), check_out: inDays(44), guest_name: 'Piotr Zieliński', guest_phone: '601', guest_email: 'piotr@example.com', price: 2000 })).json();
+  const draft = await (await call('GET', `/api/reservations/${r.id}/messages/draft?kind=deposit`)).json();
+  assert.equal(draft.amount, 600);
+  assert.match(draft.body, /600 zł/);
+  const prev = await (await call('POST', `/api/reservations/${r.id}/messages/preview`, { kind: 'deposit', amount: 500, due: inDays(10) })).json();
+  assert.match(prev.html, /98 7654/);
+  const sentDep = await (await call('POST', `/api/reservations/${r.id}/messages`, { kind: 'deposit', amount: 500, due: inDays(10), body: 'Prosimy o zaliczkę 500 zł.' })).json();
+  assert.equal(sentDep.reservation.deposit, 500);
+  assert.match(sent.at(-1)!.text, /Prosimy o zaliczkę 500 zł\./);
+  assert.match(sent.at(-1)!.text, /Numer konta: 98 7654/);
+  assert.equal((await call('POST', `/api/reservations/${r.id}/messages`, { kind: 'custom', body: '' })).status, 400);
+  await call('POST', `/api/reservations/${r.id}/messages`, { kind: 'custom', subject: 'Kod do domku', body: 'Kod do skrzynki: 1234' });
+  assert.equal(sent.at(-1)!.subject, 'Kod do domku');
+  // oferta do istniejącej rezerwacji (np. umówionej telefonicznie)
+  const of = await (await call('POST', `/api/reservations/${r.id}/offers`, { price: 1900, deposit: 500 })).json();
+  const acc = await (await call('POST', '/public/offer', { t: of.offer.url.split('t=')[1], action: 'accept', consent: true }, { 'x-client-ip': '8.8.7.1' })).json();
+  assert.equal(acc.state, 'accepted');
+  const after = await (await call('GET', `/api/reservations/${r.id}`)).json();
+  assert.equal(after.price, 1900);
+  assert.match(after.notes, /zaakceptował ofertę 1900 zł/);
+  await flush();
+  const act = await (await call('GET', `/api/reservations/${r.id}/activity`)).json();
+  assert.equal(act.offers[0].status, 'accepted');
+  assert.deepEqual(act.messages.map((m: { kind: string }) => m.kind).sort(), ['custom', 'deposit', 'offer', 'offer_accepted']);
+  // bez e-maila gościa
+  const noMail = await (await call('POST', '/api/reservations', { unit_id: 3, check_in: inDays(40), check_out: inDays(42), guest_name: 'Bez Maila' })).json();
+  assert.equal((await call('POST', `/api/reservations/${noMail.id}/messages`, { kind: 'confirmation' })).status, 400);
+  const linkOnly = await call('POST', `/api/reservations/${noMail.id}/offers`, { price: 500, email: false });
+  assert.equal(linkOnly.status, 201, 'link do wysłania SMS-em');
+});
+
+test('rachunki: szablon z ostatnich danych, numeracja, PDF A4, wysyłka e-mailem z załącznikiem', async () => {
+  const { call, login, sent } = setupWithMail();
+  await login();
+  const r = await (await call('POST', '/api/reservations', { unit_id: 1, check_in: '2026-07-01', check_out: '2026-07-05', guest_name: 'Anna Kowal', guest_email: 'anna@example.com', price: 1600, paid: 1600 })).json();
+  const draft = await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json();
+  assert.match(draft.number, /^1\/\d{4}$/);
+  assert.equal(draft.buyer.name, 'Anna Kowal');
+  assert.equal(draft.items[0].price, 1600);
+  assert.match(draft.items[0].name, /4 noce/);
+  // wszystkie pola wystawcy opcjonalne — PDF i tak powstaje
+  const pdf = await call('POST', '/api/invoices/preview', draft);
+  assert.equal(pdf.headers.get('content-type'), 'application/pdf');
+  const bytes = new Uint8Array(await pdf.arrayBuffer());
+  assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), '%PDF-');
+  assert.match(new TextDecoder('latin1').decode(bytes), /MediaBox \[0 0 595\.28 841\.89\]/, 'A4');
+  const inv = await (await call('POST', '/api/invoices', {
+    ...draft, reservation_id: r.id, place: 'Gdańsk', note: 'Zwolnienie z VAT', footer: 'Moja stopka',
+    seller: { name: 'Jan Kowalski', address: 'ul. Morska 1', city: '80-001 Gdańsk', nip: '', account: '11 2222' },
+  })).json();
+  assert.equal(inv.total, 1600);
+  // szablon zapamiętany na następny raz
+  const next = await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json();
+  assert.equal(next.seller.name, 'Jan Kowalski');
+  assert.equal(next.place, 'Gdańsk');
+  assert.equal(next.footer, 'Moja stopka');
+  assert.match(next.number, /^2\//);
+  assert.equal((await call('POST', '/api/invoices', { ...next, number: inv.number, reservation_id: r.id })).status, 400, 'numer zajęty');
+  const file = await call('GET', `/api/invoices/${inv.id}/pdf`);
+  assert.match(file.headers.get('content-disposition') ?? '', /Rachunek-1-\d{4}\.pdf/);
+  const send = await (await call('POST', `/api/invoices/${inv.id}/send`, {})).json();
+  assert.equal(send.to, 'anna@example.com');
+  const m = sent.at(-1)! as { attachments?: { filename: string; content: Buffer }[] };
+  assert.equal(m.attachments?.[0].filename.endsWith('.pdf'), true);
+  assert.equal((await (await call('GET', `/api/invoices?reservation_id=${r.id}`)).json()).length, 1);
+  await call('PUT', `/api/invoices/${inv.id}`, { ...inv, items: [{ name: 'Nocleg', qty: 4, unit: 'noc', price: 450 }] });
+  assert.equal((await (await call('GET', `/api/invoices/${inv.id}`)).json()).total, 1800);
+  assert.equal((await call('DELETE', `/api/invoices/${inv.id}`)).status, 200);
+});
+
+test('typ domku z listy: dołączenie przejmuje ceny typu, zmiana nazwy dla wszystkich; ceny widoczne do konkretnej daty', async () => {
+  const { call, login, db } = setupWithMail();
+  await login();
+  await call('PUT', '/api/rates/unit/1', { base_price: 400, min_nights: 2, weekday_prices: [null, null, null, null, null, 550, 550], type_name: 'Mały domek', type_name_en: 'Small cottage' });
+  await call('PUT', '/api/rates', { unit_ids: [1], from: inDays(10), to: inDays(11), price: 700 });
+  await call('PUT', '/api/rates/unit/2', { base_price: 999, min_nights: 1 });
+  const joined = await (await call('PUT', '/api/rates/unit/2/type', { type_name: 'mały domek' })).json();
+  assert.equal(joined.type_name, 'Mały domek');
+  assert.equal(joined.type_name_en, 'Small cottage');
+  assert.equal(joined.base_price, 400);
+  assert.equal(joined.min_nights, 2);
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM rates WHERE unit_id = 2 AND price = 700').get() as { n: number }).n, 2);
+  await call('PUT', '/api/rates/unit/3/type', { type_name: 'Duży domek' });
+  assert.equal((await call('PUT', '/api/rates/type', { unit_id: 1, type_name: 'Duży domek' })).status, 400, 'nazwa zajęta');
+  await call('PUT', '/api/rates/type', { unit_id: 1, type_name: 'Domek mały', type_name_en: 'Small house' });
+  assert.deepEqual((db.prepare('SELECT type_name, type_name_en FROM units WHERE id IN (1, 2)').all() as object[]).map((o) => ({ ...o })),
+    [{ type_name: 'Domek mały', type_name_en: 'Small house' }, { type_name: 'Domek mały', type_name_en: 'Small house' }]);
+  await call('PUT', '/api/rates/unit/2/type', { type_name: '' });
+  assert.equal((db.prepare('SELECT type_name FROM units WHERE id = 2').get() as { type_name: string }).type_name, '');
+
+  // ceny na stronie do konkretnej daty (włącznie)
+  assert.equal((await call('PUT', '/api/settings/booking', { horizon_until: inDays(-1) })).status, 400);
+  const set = await (await call('PUT', '/api/settings/booking', { horizon_until: inDays(20) })).json();
+  assert.equal(set.horizon_until, inDays(20));
+  assert.equal(set.horizon_last, inDays(20));
+  const cal = await (await call('GET', `/public/calendar?unit=1&from=${inDays(0)}&to=${inDays(60)}`)).json();
+  assert.equal(cal.days.at(-1)[0], inDays(20));
+  // powrót do liczby dni
+  const back = await (await call('PUT', '/api/settings/booking', { horizon_days: 90 })).json();
+  assert.equal(back.horizon_until, null);
 });

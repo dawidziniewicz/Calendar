@@ -9,6 +9,7 @@
     "icons": "node scripts/icons.mjs"
   },
   "dependencies": {
+    "pdfjs-dist": "^5.4.296",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
