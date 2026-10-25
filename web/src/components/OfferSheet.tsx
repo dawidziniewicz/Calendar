@@ -3,7 +3,7 @@ import { api } from '../api';
 import type { Offer, PaymentSettings } from '../types';
 import { addDays, formatShort, today } from '../dates';
 import NumInput from './NumInput';
-import { CURRENCIES, currencySymbol, fmt } from '../money';
+import { CURRENCIES, GUEST_LANGS, currencySymbol, fmt, guestLang, type GuestLang } from '../money';
 
 export type OfferTarget = {
   kind: 'request' | 'reservation';
@@ -35,7 +35,7 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
   const [depositDue, setDepositDue] = useState('');
   const [validUntil, setValidUntil] = useState('');
   const [message, setMessage] = useState('');
-  const [lang, setLang] = useState<'pl' | 'en'>(target.lang === 'en' ? 'en' : 'pl');
+  const [lang, setLang] = useState<GuestLang>(guestLang(target.lang));
   const [email, setEmail] = useState(!!target.email);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -159,8 +159,8 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
                 <legend>Szczegóły</legend>
                 <label>Oferta ważna do<input type="date" value={validUntil} min={today()} max={target.checkIn} onChange={(e) => setValidUntil(e.target.value)} /></label>
                 <label>Język
-                  <select value={lang} onChange={(e) => setLang(e.target.value as 'pl' | 'en')}>
-                    <option value="pl">polski</option><option value="en">angielski</option>
+                  <select value={lang} onChange={(e) => setLang(e.target.value as GuestLang)}>
+                    {GUEST_LANGS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
                   </select>
                 </label>
                 <label className="full">Wiadomość dla gościa (opcjonalnie)

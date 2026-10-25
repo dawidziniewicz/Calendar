@@ -307,6 +307,11 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               {r.deposit != null && r.deposit > 0 && !depositPaid && r.status !== 'cancelled' && (
                 <button type="button" className="btn big" disabled={busy} onClick={markDeposit}>✓ Klient wpłacił zaliczkę ({money(r.deposit)})</button>
               )}
+              {r.deposit != null && r.deposit > 0 && !depositPaid && r.status !== 'cancelled' && (
+                <button type="button" className={`btn ${depositLate ? 'danger' : 'danger-outline'}`} disabled={busy} onClick={() => setMessageKind('unpaid_cancel')}>
+                  Anuluj — brak zaliczki{depositLate ? ' (minął termin)' : ''}
+                </button>
+              )}
               {!fullyPaid && r.status !== 'cancelled' && (
                 <button type="button" className="btn paid-btn big" disabled={busy} onClick={markPaid}>
                   ✓ Klient zapłacił{due != null && due > 0 ? ` (${money(due)})` : ''}

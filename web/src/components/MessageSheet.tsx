@@ -3,7 +3,7 @@ import { api, type MessageInput } from '../api';
 import type { MessageKind, Reservation } from '../types';
 import { today } from '../dates';
 import NumInput from './NumInput';
-import { currencySymbol } from '../money';
+import { GUEST_LANGS, currencySymbol, guestLang, type GuestLang } from '../money';
 
 export const MESSAGE_LABELS: Record<MessageKind, string> = {
   deposit: 'Prośba o zaliczkę',
@@ -14,6 +14,7 @@ export const MESSAGE_LABELS: Record<MessageKind, string> = {
   invoice: 'Rachunek',
   offer: 'Oferta do akceptacji',
   offer_accepted: 'Potwierdzenie po akceptacji oferty',
+  unpaid_cancel: 'Anulacja — brak zaliczki',
 };
 const COMPOSE_KINDS: MessageKind[] = ['deposit', 'balance', 'received', 'confirmation', 'custom'];
 
@@ -22,7 +23,7 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
   reservation: Reservation; initialKind: MessageKind; onClose: () => void; onSent: (updated: Reservation) => void;
 }) {
   const [kind, setKind] = useState<MessageKind>(initialKind);
-  const [lang, setLang] = useState<'pl' | 'en'>(r.lang === 'en' ? 'en' : 'pl');
+  const [lang, setLang] = useState<GuestLang>(guestLang(r.lang));
   const [amount, setAmount] = useState<number | null>(null);
   const [due, setDue] = useState('');
   const [title, setTitle] = useState('');
@@ -79,6 +80,25 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Anulacja za brak zaliczki: rezerwacja anulowana + (opcjonalnie) e-mail do gościa
+  const cancelMode = kind === 'unpaid_cancel';
+  const [cancelEmail, setCancelEmail] = useState(!!r.guest_email);
+  const [cancelled, setCancelled] = useState(false);
+  const cancelUnpaid = async () => {
+    if (!confirm('Anulować rezerwację? Termin w kalendarzu się zwolni.')) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api.cancelUnpaid(r.id, { email: cancelEmail, subject, body });
+      setCancelled(true);
+      onSent(res.reservation);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const send = async () => {
     if (kind === 'custom' && !body.trim()) return setError('Wpisz treść wiadomości');
     setBusy(true);
@@ -99,15 +119,23 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
       <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Wiadomość do gościa">
         <header className="sheet-head">
           <button type="button" className="link" onClick={onClose}>{sent ? 'Gotowe' : 'Anuluj'}</button>
-          <h2>Wiadomość do gościa</h2>
-          {sent ? <span className="head-spacer" /> : <button type="button" className="link strong" disabled={busy || !r.guest_email} onClick={send}>{busy ? '…' : 'Wyślij'}</button>}
+          <h2>{cancelMode ? 'Anulacja — brak zaliczki' : 'Wiadomość do gościa'}</h2>
+          {sent || cancelled ? <span className="head-spacer" /> : cancelMode
+            ? <button type="button" className="link strong danger-link" disabled={busy} onClick={cancelUnpaid}>{busy ? '…' : 'Anuluj'}</button>
+            : <button type="button" className="link strong" disabled={busy || !r.guest_email} onClick={send}>{busy ? '…' : 'Wyślij'}</button>}
         </header>
         <div className="sheet-tabs" role="tablist">
           <button role="tab" aria-selected={tab === 'edit'} className={tab === 'edit' ? 'active' : ''} onClick={() => setTab('edit')}>Treść</button>
           <button role="tab" aria-selected={tab === 'preview'} className={tab === 'preview' ? 'active' : ''} onClick={() => setTab('preview')}>Podgląd e-maila</button>
         </div>
         <div className="sheet-body">
-          {sent ? (
+          {cancelled ? (
+            <div className="offer-done">
+              <div className="done-mark" aria-hidden>✓</div>
+              <h3>Rezerwacja anulowana</h3>
+              <p className="muted">{cancelEmail ? `Gość dostał e-mail na ${r.guest_email}.` : 'Bez e-maila do gościa.'} Termin w kalendarzu jest wolny.</p>
+            </div>
+          ) : sent ? (
             <div className="offer-done">
               <div className="done-mark" aria-hidden>✓</div>
               <h3>Wysłano na {r.guest_email}</h3>
@@ -118,11 +146,22 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
             <iframe className="mail-preview" title="Podgląd e-maila" srcDoc={html} sandbox="" />
           ) : (
             <>
-              {!r.guest_email && <div className="banner error">Brak adresu e-mail gościa — uzupełnij go w rezerwacji (Edytuj).</div>}
-              <div className="chips kind-chips">
+              {cancelMode && (
+                <div className="banner error">
+                  Rezerwacja zostanie <b>anulowana</b>, a termin w kalendarzu się zwolni{r.deposit ? ` (zaliczka ${r.deposit} ${r.currency === 'PLN' ? 'zł' : r.currency}${r.deposit_due ? `, termin ${r.deposit_due.split('-').reverse().join('.')}` : ''})` : ''}.
+                </div>
+              )}
+              {!r.guest_email && <div className="banner error">Brak adresu e-mail gościa{cancelMode ? ' — anulacja bez e-maila.' : ' — uzupełnij go w rezerwacji (Edytuj).'}</div>}
+              {!cancelMode && <div className="chips kind-chips">
                 {COMPOSE_KINDS.map((k) => <button type="button" key={k} className={`chip ${kind === k ? 'active' : ''}`} onClick={() => changeKind(k)}>{MESSAGE_LABELS[k]}</button>)}
-              </div>
-              <fieldset>
+              </div>}
+              {cancelMode && (
+                <label className="check-row">
+                  <input type="checkbox" checked={cancelEmail} disabled={!r.guest_email} onChange={(e) => setCancelEmail(e.target.checked)} />
+                  Wyślij gościowi e-mail o anulacji
+                </label>
+              )}
+              {(!cancelMode || cancelEmail) && <fieldset>
                 {(payment || kind === 'received') && (
                   <>
                     <label>{kind === 'received' ? 'Otrzymana kwota' : 'Kwota'} ({currencySymbol(r.currency)})<NumInput value={amount} onChange={setAmount} /></label>
@@ -134,8 +173,8 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
                 )}
                 {payment && !hasAccount && <p className="full warn">Brak numeru konta i Revolutu — uzupełnij w Ustawienia → Płatności i rachunki, inaczej e-mail nie będzie miał danych do płatności.</p>}
                 <label>Język
-                  <select value={lang} onChange={(e) => { edited.current = { subject: false, body: false, title: false }; setLang(e.target.value as 'pl' | 'en'); }}>
-                    <option value="pl">polski</option><option value="en">angielski</option>
+                  <select value={lang} onChange={(e) => { edited.current = { subject: false, body: false, title: false }; setLang(e.target.value as GuestLang); }}>
+                    {GUEST_LANGS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
                   </select>
                 </label>
                 <label className="full">Temat<input value={subject} onChange={(e) => { edited.current.subject = true; setSubject(e.target.value); }} /></label>
@@ -143,9 +182,11 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
                   <textarea rows={6} value={body} onChange={(e) => { edited.current.body = true; setBody(e.target.value); }} placeholder={kind === 'custom' ? 'np. Kod do skrzynki z kluczami: 1234. Zameldowanie od 15:00.' : ''} />
                 </label>
                 {kind === 'deposit' && <p className="full muted">Kwota i termin zaliczki zapiszą się w rezerwacji.</p>}
-              </fieldset>
+              </fieldset>}
               {error && <div className="banner error">{error}</div>}
-              <button type="button" className="btn primary big" disabled={busy || !r.guest_email} onClick={send}>{busy ? 'Wysyłanie…' : `Wyślij na ${r.guest_email || '—'}`}</button>
+              {cancelMode
+                ? <button type="button" className="btn danger big" disabled={busy} onClick={cancelUnpaid}>{busy ? 'Anulowanie…' : cancelEmail ? 'Anuluj rezerwację i wyślij e-mail' : 'Anuluj rezerwację'}</button>
+                : <button type="button" className="btn primary big" disabled={busy || !r.guest_email} onClick={send}>{busy ? 'Wysyłanie…' : `Wyślij na ${r.guest_email || '—'}`}</button>}
             </>
           )}
         </div>

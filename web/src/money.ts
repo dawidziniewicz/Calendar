@@ -13,3 +13,10 @@ export function fmt(n: number, currency = 'PLN', alwaysCents = false) {
   if (!currency || currency === 'PLN') return `${n.toLocaleString('pl-PL', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 })} zł`;
   return new Intl.NumberFormat('pl-PL', { style: 'currency', currency, minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 }).format(n);
 }
+
+// Języki strony www / gościa (e-maile: po polsku albo po angielsku; linki do strony w języku gościa)
+export type GuestLang = 'pl' | 'en' | 'cs' | 'de' | 'uk';
+export const GUEST_LANGS: [GuestLang, string][] = [
+  ['pl', 'polski'], ['en', 'angielski'], ['cs', 'czeski (e-mail po angielsku)'], ['de', 'niemiecki (e-mail po angielsku)'], ['uk', 'ukraiński (e-mail po angielsku)'],
+];
+export const guestLang = (v: string | null | undefined): GuestLang => (GUEST_LANGS.some(([k]) => k === v) ? v as GuestLang : 'pl');

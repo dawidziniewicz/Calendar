@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
+  DEFAULT_HORIZON, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
 } from './booking.ts';
 import {
   composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
@@ -176,7 +176,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const checkIn = str(c.req.query('check_in'), 10), checkOut = str(c.req.query('check_out'), 10);
     if (!unit || !unit.bookable) return c.json({ error: 'Nie znaleziono domku' }, 404);
     if (!DATE_RE.test(checkIn) || !DATE_RE.test(checkOut) || checkOut <= checkIn) bad('Nieprawidłowe daty');
-    return c.json(quote(db, unit, checkIn, checkOut, c.req.query('lang') === 'en' ? 'en' : 'pl'));
+    return c.json(quote(db, unit, checkIn, checkOut, mailLang(c.req.query('lang'))));
   });
 
   pub.post('/requests', async (c) => {
@@ -185,9 +185,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (str(b.website)) return c.json({ ok: true, id: 0 }, 201);
     const ip = c.req.header('x-client-ip') || 'unknown';
     if (!allowHit(`ip:${ip}`, PUBLIC_LIMIT_PER_IP) || !allowHit('total', PUBLIC_LIMIT_TOTAL)) {
-      return c.json({ error: b.lang === 'en' ? 'Too many requests. Please try again later or call +48 510 248 693.' : 'Za dużo zapytań. Spróbuj za jakiś czas albo zadzwoń: +48 510 248 693.' }, 429);
+      return c.json({ error: mailLang(b.lang) === 'en' ? 'Too many requests. Please try again later or call +48 510 248 693.' : 'Za dużo zapytań. Spróbuj za jakiś czas albo zadzwoń: +48 510 248 693.' }, 429);
     }
-    const en = b.lang === 'en';
+    const en = mailLang(b.lang) === 'en';
     const t = (pl: string, eng: string) => (en ? eng : pl);
     // unit_ids = typ domku (kilka takich samych domków), unit_id = jeden konkretny
     const group = unitGroup(db, Array.isArray(b.unit_ids) ? b.unit_ids : [b.unit_id]);
@@ -218,7 +218,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const total = q.total == null ? null : q.total + extrasTotal;
     const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang, extras, group_unit_ids)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unit.id, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.message, total, ip.slice(0, 64), b.lang === 'en' ? 'en' : 'pl', extras.length ? JSON.stringify(extras) : null,
+      r.adults, r.children, r.message, total, ip.slice(0, 64), readSiteLang(b.lang), extras.length ? JSON.stringify(extras) : null,
       group.length > 1 ? JSON.stringify(fits.map((u) => u.id)) : null);
     const row = get('SELECT * FROM booking_requests WHERE id = ?', res.lastInsertRowid) as RequestRow;
     announceRequest(db, pushSender, mailer, row).catch((err) => console.error('Powiadomienie o zapytaniu nie powiodło się', err));
@@ -244,13 +244,13 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     c.header('Cache-Control', 'no-store');
     // tylko to, co gość i tak ma w e-mailu — bez telefonu i adresu e-mail
     return c.json({
-      property: r.property_name, unit: (r.lang === 'en' && r.unit_type_en) || r.unit_type || r.unit_name, check_in: r.check_in, check_out: r.check_out,
+      property: r.property_name, unit: (mailLang(r.lang) === 'en' && r.unit_type_en) || r.unit_type || r.unit_name, check_in: r.check_in, check_out: r.check_out,
       guest: r.guest_name.split(/\s+/)[0], state: cancelState(r), requested_at: r.cancel_requested_at, lang: r.lang,
     });
   });
   pub.post('/cancel', async (c) => {
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-    const en = b.lang === 'en';
+    const en = mailLang(b.lang) === 'en';
     if (!allowHit(`cancel:${c.req.header('x-client-ip') || 'unknown'}`, 10)) return c.json({ error: en ? 'Too many attempts — please call us.' : 'Za dużo prób — zadzwoń do nas.' }, 429);
     const r = byCancelToken(str(b.t, 64));
     if (!r) return c.json({ error: en ? 'Invalid or expired link' : 'Nieprawidłowy lub nieaktualny link', code: 'not_found' }, 404);
@@ -294,7 +294,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   const offerView = (o: OfferRow) => {
     const st = offerStay(o);
     const ps = paymentSettings(db);
-    const en = o.lang === 'en';
+    const en = mailLang(o.lang) === 'en';
     const u = st ? get(`SELECT u.name, u.type_name, u.type_name_en, p.name AS property FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?`, st.unit_id) as
       { name: string; type_name: string; type_name_en: string; property: string } | undefined : undefined;
     const state = offerState(o, st);
@@ -327,7 +327,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   pub.post('/offer', async (c) => {
     const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
     const ip = c.req.header('x-client-ip') || 'unknown';
-    const en = b.lang === 'en';
+    const en = mailLang(b.lang) === 'en';
     const t = (pl: string, eng: string) => (en ? eng : pl);
     if (!allowHit(`offer:${ip}`, 10)) return c.json({ error: t('Za dużo prób — zadzwoń do nas.', 'Too many attempts — please call us.') }, 429);
     const o = offerByToken(str(b.t, 64));
@@ -372,7 +372,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
         extraNote: `Gość zaakceptował ofertę ${fmtMoney(o.price, o.currency)}${o.deposit ? ` (zaliczka ${fmtMoney(o.deposit, o.currency)})` : ''} z obowiązkiem zapłaty: ${stamp}.`,
       });
       reservationId = made.created.id as number;
-      cancelUrl = `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${o.lang === 'en' ? '/en/cancel/' : '/anulacja/'}?t=${made.cancelToken}`;
+      cancelUrl = `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${sitePath(o.lang, 'cancel')}?t=${made.cancelToken}`;
       notify([{ kind: 'created', row: made.created, by: 'gość (oferta)' }], null);
     } else {
       const before = st.reservation!;
@@ -752,7 +752,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       price: money(b.price),
       paid: money(b.paid),
       notes: str(b.notes, 5000),
-      lang: b.lang === 'en' ? 'en' : 'pl',
+      lang: readSiteLang(b.lang),
       deposit: money(b.deposit),
       deposit_due: DATE_RE.test(str(b.deposit_due, 10)) ? str(b.deposit_due, 10) : null,
       currency: readCurrency(b.currency),
@@ -1082,7 +1082,11 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       ORDER BY ${status === 'pending' ? 'r.created_at' : 'COALESCE(r.decided_at, r.expired_at, r.created_at) DESC'} LIMIT 200`) as (RequestRow & Record<string, unknown>)[];
     // Czy termin w międzyczasie się zajął (np. rezerwacja z Bookingu) + które domki z typu są wolne do przydziału
     return c.json(rows.map((r) => {
-      if (r.status !== 'pending' || r.expired_at) return { ...r, conflicts: [], group_units: [] };
+      if (r.status !== 'pending' || r.expired_at) {
+        const offer = get('SELECT * FROM offers WHERE request_id = ? ORDER BY id DESC LIMIT 1', r.id) as OfferRow | undefined;
+        const res = r.reservation_id ? get('SELECT status FROM reservations WHERE id = ?', r.reservation_id) as { status: string } | undefined : undefined;
+        return { ...r, conflicts: [], group_units: [], offer: offer ? { ...publicOffer(offer), expired: offerExpired(offer) } : null, reservation_status: res?.status ?? null };
+      }
       const groupUnits = requestGroup(r).map((id) => {
         const u = get('SELECT id, name, type_name FROM units WHERE id = ?', id) as { id: number; name: string; type_name: string } | undefined;
         return u && { ...u, free: !conflicts({ unit_id: id, check_in: r.check_in, check_out: r.check_out, status: 'confirmed' }, 0).length };
@@ -1122,7 +1126,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     try {
       const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes, lang, deposit, deposit_due, currency)
         VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-        r.adults, r.children, price, notes, r.lang === 'en' ? 'en' : 'pl', o.deposit ?? null, o.deposit_due ?? null, readCurrency(o.currency));
+        r.adults, r.children, price, notes, readSiteLang(r.lang), o.deposit ?? null, o.deposit_due ?? null, readCurrency(o.currency));
       run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ?,
         cancel_token = ? WHERE id = ?`, o.by, o.note, res.lastInsertRowid, unitId, cancelToken, r.id);
       const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
@@ -1136,6 +1140,24 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   /** Nowa oferta / decyzja unieważnia poprzednie niezaakceptowane oferty */
   const withdrawOffers = (col: 'request_id' | 'reservation_id', id: number) =>
     run(`UPDATE offers SET status = 'withdrawn', decided_at = datetime('now') WHERE ${col} = ? AND status = 'sent'`, id);
+
+  // Podgląd e-maila do gościa przed akceptacją / odrzuceniem (te same dane co w formularzu decyzji)
+  api.post('/requests/:id/preview', async (c) => {
+    const r = pendingRequest(c.get('user'), int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const accepted = b.action !== 'reject';
+    const note = str(b.note, 3000);
+    if (!accepted) return c.json(pick(composeDecision(db, { ...r, decision_note: note }, false, null)));
+    const groupIds = requestGroup(r);
+    const unitId = b.unit_id && groupIds.includes(int(b.unit_id)) ? int(b.unit_id) : r.unit_id;
+    const price = b.price === undefined ? r.quoted_price : money(b.price);
+    const deposit = money(b.deposit);
+    const depositDue = DATE_RE.test(str(b.deposit_due, 10)) ? str(b.deposit_due, 10) : null;
+    const stay = { ...r, unit_id: unitId, deposit, deposit_due: depositDue };
+    // kod do linku „Poproś o anulację” powstaje dopiero przy akceptacji — w podglądzie przykładowy
+    return c.json(pick(composeDecision(db, { ...r, unit_id: unitId, decision_note: note, cancel_token: '0'.repeat(48) }, true, price, depositRows(db, stay), depositImages(db, stay))));
+  });
+  const pick = (m: { subject: string; html: string }) => ({ subject: m.subject, html: m.html });
 
   api.post('/requests/:id/accept', async (c) => {
     const user = c.get('user');
@@ -1243,7 +1265,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   };
   const createOffer = async (user: User, stay: Stay, link: { request_id?: number; reservation_id?: number; unit_id: number }, b: Record<string, unknown>) => {
     const o = readOffer(b, stay.check_in);
-    const lang = stay.lang === 'en' ? 'en' : 'pl';
+    const lang = readSiteLang(stay.lang);
     const sendEmail = b.email !== false;
     if (sendEmail && !isEmail(stay.guest_email)) bad('Brak adresu e-mail gościa — uzupełnij go albo wyślij gościowi link w SMS/WhatsApp');
     if (sendEmail && !mailer) bad('Wysyłka e-maili nie jest skonfigurowana — odznacz e-mail i wyślij gościowi link w SMS/WhatsApp');
@@ -1269,7 +1291,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const group = requestGroup(r);
     const unitId = b.unit_id ? int(b.unit_id) : r.unit_id;
     if (!group.includes(unitId)) bad('Wybierz domek z listy');
-    const lang = b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang;
+    const lang = (SITE_LANGS as readonly string[]).includes(b.lang) ? b.lang : r.lang;
     return c.json(await createOffer(user, { ...r, unit_id: unitId, lang }, { request_id: r.id, unit_id: unitId }, b), 201);
   });
 
@@ -1284,8 +1306,8 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const r = visibleReservation(user, int(c.req.param('id')));
     if (r.status === 'cancelled') bad('Rezerwacja jest anulowana');
     const b = await c.req.json().catch(() => ({}));
-    if (b.lang === 'en' || b.lang === 'pl') run('UPDATE reservations SET lang = ? WHERE id = ?', b.lang, r.id);
-    const stay = { ...r, lang: b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang };
+    if ((SITE_LANGS as readonly string[]).includes(b.lang)) run('UPDATE reservations SET lang = ? WHERE id = ?', b.lang, r.id);
+    const stay = { ...r, lang: (SITE_LANGS as readonly string[]).includes(b.lang) ? b.lang : r.lang };
     return c.json(await createOffer(user, stay, { reservation_id: r.id, unit_id: r.unit_id }, b), 201);
   });
 
@@ -1301,7 +1323,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // ---- Korespondencja z gościem: zaliczka, dopłata, potwierdzenie wpłaty, dowolna wiadomość ----
   const cancelUrlFor = (reservationId: number) => {
     const req = get(`SELECT cancel_token, lang FROM booking_requests WHERE reservation_id = ? AND cancel_token IS NOT NULL ORDER BY id DESC LIMIT 1`, reservationId) as { cancel_token: string; lang: string } | undefined;
-    return req ? `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${req.lang === 'en' ? '/en/cancel/' : '/anulacja/'}?t=${req.cancel_token}` : null;
+    return req ? `${(process.env.SITE_URL || 'https://odmorzadogor.pl').replace(/\/$/, '')}${sitePath(req.lang, 'cancel')}?t=${req.cancel_token}` : null;
   };
   const readKind = (v: unknown) => (MESSAGE_KINDS.includes(v as MessageKind) && v !== 'invoice' ? v as MessageKind : bad('Wybierz rodzaj wiadomości'));
   const messageInput = (b: Record<string, unknown>, kind: MessageKind, reservationId: number) => ({
@@ -1326,7 +1348,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const r = visibleReservation(c.get('user'), int(c.req.param('id')));
     const kind = readKind(c.req.query('kind'));
     const lang = c.req.query('lang');
-    const stay = { ...r, lang: lang === 'en' || lang === 'pl' ? lang : r.lang };
+    const stay = { ...r, lang: (SITE_LANGS as readonly string[]).includes(lang ?? '') ? lang : r.lang };
     const amount = c.req.query('amount'), due = c.req.query('due');
     const ps = paymentSettings(db);
     return c.json({
@@ -1339,7 +1361,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const r = visibleReservation(c.get('user'), int(c.req.param('id')));
     const b = await c.req.json().catch(() => ({}));
     const kind = readKind(b.kind);
-    const stay = { ...r, lang: b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang };
+    const stay = { ...r, lang: (SITE_LANGS as readonly string[]).includes(b.lang) ? b.lang : r.lang };
     const m = composeMessage(db, stay, messageInput(b, kind, r.id));
     return c.json({ subject: m.subject, html: m.html });
   });
@@ -1352,7 +1374,8 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!mailer) bad('Wysyłka e-maili nie jest skonfigurowana na serwerze (RESEND_API_KEY albo SMTP_HOST w .env)');
     if (!isEmail(r.guest_email)) bad('Brak adresu e-mail gościa — uzupełnij go w rezerwacji');
     if (kind === 'custom' && !str(b.body)) bad('Wpisz treść wiadomości');
-    const lang = b.lang === 'en' || b.lang === 'pl' ? b.lang : r.lang;
+    if (kind === 'unpaid_cancel') bad('Użyj przycisku „Anuluj — brak zaliczki”');
+    const lang = (SITE_LANGS as readonly string[]).includes(b.lang) ? b.lang : r.lang;
     if (lang !== r.lang) run('UPDATE reservations SET lang = ? WHERE id = ?', lang, r.id);
     const input = messageInput(b, kind, r.id);
     // prośba o zaliczkę zapisuje kwotę i termin w rezerwacji
@@ -1365,6 +1388,34 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       return c.json({ error: `Nie udało się wysłać: ${err instanceof Error ? err.message : err}` }, 502);
     }
     return c.json({ ok: true, reservation: get('SELECT * FROM reservations WHERE id = ?', r.id) });
+  });
+
+  // ---- Anulacja z powodu niewpłaconej zaliczki (opcjonalnie e-mail do gościa) ----
+  api.post('/reservations/:id/cancel-unpaid', async (c) => {
+    const user = c.get('user');
+    const r = visibleReservation(user, int(c.req.param('id')));
+    if (r.status === 'cancelled') bad('Rezerwacja jest już anulowana');
+    const b = await c.req.json().catch(() => ({}));
+    const sendEmail = b.email !== false;
+    if (sendEmail && !mailer) bad('Wysyłka e-maili nie jest skonfigurowana — odznacz e-mail');
+    if (sendEmail && !isEmail(r.guest_email)) bad('Brak adresu e-mail gościa — odznacz e-mail');
+    const line = `Anulowana — brak wpłaty zaliczki (${new Date().toLocaleDateString('pl-PL', { timeZone: 'Europe/Warsaw' })}, ${user.username}).`;
+    run(`UPDATE reservations SET status = 'cancelled', notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END, updated_at = datetime('now') WHERE id = ?`, line, line, r.id);
+    withdrawOffers('reservation_id', r.id);
+    const after = get('SELECT * FROM reservations WHERE id = ?', r.id) as Record<string, unknown>;
+    notify([{ kind: 'updated', before: r as Record<string, unknown>, after, by: user.username }], user.id);
+    let emailed = false;
+    if (sendEmail) {
+      try {
+        await sendGuestMessage(db, mailer!, r, { kind: 'unpaid_cancel', subject: str(b.subject, 200) || undefined, body: typeof b.body === 'string' ? str(b.body, 5000) : undefined },
+          { reservation_id: r.id, sent_by: user.username });
+        emailed = true;
+      } catch (err) {
+        console.error('E-mail o anulacji nie wysłany', err);
+        return c.json({ error: `Rezerwacja anulowana, ale e-mail się nie wysłał: ${err instanceof Error ? err.message : err}`, reservation: after }, 502);
+      }
+    }
+    return c.json({ ok: true, emailed, reservation: after });
   });
 
   // ---- Ustawienia płatności (konto, zaliczka, warunki) ----
@@ -1545,17 +1596,25 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // ---- Powiadomienia e-mail (adresy właściciela) ----
   api.get('/settings/email', (c) => {
     requireFullAdmin(c.get('user'));
-    return c.json({ configured: !!mailer, kind: mailer?.kind ?? null, from: mailer?.from ?? null, emails: adminEmails(db).join(', ') });
+    return c.json({ configured: !!mailer, kind: mailer?.kind ?? null, from: mailer?.from ?? null, emails: adminEmails(db).join(', '), notify: emailNotify(db) });
   });
 
   api.put('/settings/email', async (c) => {
     requireFullAdmin(c.get('user'));
     const b = await c.req.json();
-    const raw = str(b.emails, 1000);
-    const emails = parseEmails(raw);
-    if (raw && !emails.length) bad('Podaj poprawny adres e-mail');
-    run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', NOTIFY_EMAILS_KEY, emails.join(', '));
-    return c.json({ configured: !!mailer, kind: mailer?.kind ?? null, from: mailer?.from ?? null, emails: emails.join(', ') });
+    if (b.emails !== undefined) {
+      const raw = str(b.emails, 1000);
+      const emails = parseEmails(raw);
+      if (raw && !emails.length) bad('Podaj poprawny adres e-mail');
+      run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', NOTIFY_EMAILS_KEY, emails.join(', '));
+    }
+    if (b.notify && typeof b.notify === 'object') {
+      const cur = emailNotify(db);
+      const n = b.notify as Record<string, unknown>;
+      const next = Object.fromEntries((Object.keys(cur) as (keyof typeof cur)[]).map((k) => [k, typeof n[k] === 'boolean' ? n[k] : cur[k]]));
+      setSetting(EMAIL_NOTIFY_KEY, JSON.stringify(next));
+    }
+    return c.json({ configured: !!mailer, kind: mailer?.kind ?? null, from: mailer?.from ?? null, emails: adminEmails(db).join(', '), notify: emailNotify(db) });
   });
 
   api.post('/settings/email/test', async (c) => {

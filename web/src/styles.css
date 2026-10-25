@@ -735,3 +735,11 @@ fieldset.plain { padding: 0; background: none; margin-bottom: 12px; }
 @media (orientation: landscape) and (max-height: 500px) { .sig-area { height: calc(var(--vv-height, 100vh) - 150px); margin: 8px 12px; } .sig-hint { display: none; } .sig-actions { padding: 8px 12px; } }
 .foreign-account { padding: 10px 0; border-top: 1px solid var(--line); border-radius: 0; }
 .revolut-title { margin-top: 18px; }
+.decided-toggle { all: unset; display: block; width: 100%; cursor: pointer; }
+.decided-toggle .chev { font-size: 0.8rem; }
+.request-card.decided.is-open { opacity: 1; }
+.decided-details { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.open-res { width: 100%; margin: 6px 0 8px; }
+.preview-btn { align-self: flex-start; }
+.mail-preview-box { display: flex; flex-direction: column; gap: 6px; }
+.mail-preview-box .mail-preview { height: 60vh; }

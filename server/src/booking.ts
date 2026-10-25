@@ -119,6 +119,21 @@ export function nights(db: DatabaseSync, unit: UnitPricing, from: string, to: st
 }
 
 export type Lang = 'pl' | 'en';
+// Języki strony www (zapytanie/rezerwacja zapamiętuje język gościa). E-maile: po polsku albo po angielsku
+// (dla gości z wersji czeskiej, niemieckiej i ukraińskiej), linki prowadzą do strony w języku gościa.
+export const SITE_LANGS = ['pl', 'en', 'cs', 'de', 'uk'] as const;
+export type SiteLang = typeof SITE_LANGS[number];
+export const readSiteLang = (v: unknown): SiteLang => ((SITE_LANGS as readonly string[]).includes(v as string) ? v as SiteLang : 'pl');
+export const mailLang = (v: unknown): Lang => (readSiteLang(v) === 'pl' ? 'pl' : 'en');
+const SITE_PATHS: Record<SiteLang, { home: string; cancel: string; offer: string }> = {
+  pl: { home: '/', cancel: '/anulacja/', offer: '/oferta/' },
+  en: { home: '/en/', cancel: '/en/cancel/', offer: '/en/offer/' },
+  cs: { home: '/cs/', cancel: '/cs/zruseni/', offer: '/cs/nabidka/' },
+  de: { home: '/de/', cancel: '/de/stornierung/', offer: '/de/angebot/' },
+  uk: { home: '/uk/', cancel: '/uk/skasuvannia/', offer: '/uk/propozytsiia/' },
+};
+export const sitePath = (lang: unknown, page: 'home' | 'cancel' | 'offer') => SITE_PATHS[readSiteLang(lang)][page];
+const LANG_NAMES: Record<SiteLang, string> = { pl: 'polskiej', en: 'angielskiej', cs: 'czeskiej', de: 'niemieckiej', uk: 'ukraińskiej' };
 export type Quote = { nights: number; total: number | null; min_nights: number; available: boolean; reason?: string };
 
 const nightsEn = (n: number) => (n === 1 ? '1 night' : `${n} nights`);
@@ -257,7 +272,7 @@ export const TXT = {
     cxOutro: ['If you have any questions, just reply to this e-mail or call +48 510 248 693.', 'Kind regards,\nthe Od Morza do Gór team'],
   },
 };
-const txt = (r: RequestRow) => TXT[r.lang === 'en' ? 'en' : 'pl'];
+const txt = (r: RequestRow) => TXT[mailLang(r.lang)];
 
 export const longDate = (iso: string, locale: string) =>
   new Date(`${iso}T12:00:00Z`).toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -281,6 +296,15 @@ const extrasRow = (r: RequestRow, lang: Lang): MailRow[] => {
 };
 
 export const NOTIFY_EMAILS_KEY = 'notify_emails';
+// Które e-maile wysyłać (wszystkie domyślnie włączone): do Ciebie — nowe zapytania, prośby o anulację, odpowiedzi
+// na oferty; do gościa — automatyczne „Otrzymaliśmy Twoje zapytanie”
+export const EMAIL_NOTIFY_KEY = 'email_notify';
+export type EmailNotify = { requests: boolean; cancellations: boolean; offers: boolean; guest_receipt: boolean };
+export function emailNotify(db: DatabaseSync): EmailNotify {
+  let v: Record<string, unknown> = {};
+  try { v = JSON.parse((db.prepare('SELECT value FROM settings WHERE key = ?').get(EMAIL_NOTIFY_KEY) as { value: string } | undefined)?.value ?? '{}'); } catch { v = {}; }
+  return { requests: v.requests !== false, cancellations: v.cancellations !== false, offers: v.offers !== false, guest_receipt: v.guest_receipt !== false };
+}
 export function adminEmails(db: DatabaseSync): string[] {
   const saved = (db.prepare('SELECT value FROM settings WHERE key = ?').get(NOTIFY_EMAILS_KEY) as { value: string } | undefined)?.value;
   return parseEmails(saved ?? process.env.ADMIN_EMAIL ?? '');
@@ -312,13 +336,14 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
   }
 
   if (mailer) {
-    const admins = adminEmails(db);
+    const flags = emailNotify(db);
+    const admins = flags.requests ? adminEmails(db) : [];
     if (admins.length) {
       const m = renderMail({
         preheader: `${r.guest_name} · ${u.property} · ${range}`,
         title: 'Nowe zapytanie o rezerwację',
         intro: [`${r.guest_name} chce zarezerwować ${guestUnitName(u)} (${u.property})${groupSize(r) > 1 ? ` — proponowany wolny domek: ${u.unit}` : ''}. Zaakceptuj albo odrzuć zapytanie w aplikacji — gość dostanie e-mail z odpowiedzią.`
-          + (r.lang === 'en' ? ' Zapytanie ze strony angielskiej — gość dostanie odpowiedź po angielsku.' : '')],
+          + (readSiteLang(r.lang) !== 'pl' ? ` Zapytanie z ${LANG_NAMES[readSiteLang(r.lang)]} wersji strony — gość dostanie odpowiedź po angielsku.` : '')],
         rows: [...stayRows(db, r, r.quoted_price, TXT.pl, 'Wycena wg cennika'), ['Telefon', r.guest_phone || '—'], ['E-mail', r.guest_email]],
         note: r.message ? { label: 'Wiadomość od gościa', text: r.message } : undefined,
         button: { label: 'Otwórz w kalendarzu', url: `${appUrl()}/?tab=requests&request=${r.id}` },
@@ -326,6 +351,7 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
       jobs.push(mailer.send({ to: admins, subject: `Zapytanie: ${u.property} · ${range} · ${r.guest_name}`, ...m, replyTo: r.guest_email }));
     }
     const t = txt(r);
+    if (flags.guest_receipt) {
     const g = renderMail({
       preheader: t.gotPre,
       title: t.gotTitle,
@@ -333,8 +359,9 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
       rows: stayRows(db, r, r.quoted_price, t, t.estimate),
       note: r.message ? { label: t.yourMsg, text: r.message } : undefined,
       outro: t.gotOutro,
-    }, r.lang === 'en' ? 'en' : 'pl');
+    }, mailLang(r.lang));
     jobs.push(mailer.send({ to: [r.guest_email], subject: t.gotSubject(u.property), ...g, replyTo: adminEmails(db)[0] }));
+    }
   }
 
   const results = await Promise.allSettled(jobs);
@@ -345,9 +372,17 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
 export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined, r: RequestRow, accepted: boolean, price: number | null, extraRows: MailRow[] = [],
   images: { src: string; caption: string; href?: string }[] = []) {
   if (!mailer) return false;
+  const m = composeDecision(db, r, accepted, price, extraRows, images);
+  await mailer.send({ to: [r.guest_email], subject: m.subject, html: m.html, text: m.text, replyTo: adminEmails(db)[0] });
+  return true;
+}
+
+/** Treść e-maila z decyzją (też do podglądu w aplikacji przed wysłaniem). */
+export function composeDecision(db: DatabaseSync, r: RequestRow, accepted: boolean, price: number | null, extraRows: MailRow[] = [],
+  images: { src: string; caption: string; href?: string }[] = []) {
   const u = unitInfo(db, r.unit_id);
   const t = txt(r);
-  const lang = r.lang === 'en' ? 'en' : 'pl';
+  const lang = mailLang(r.lang);
   const range = dateRange(r.check_in, r.check_out);
   const m = accepted
     ? renderMail({
@@ -358,7 +393,7 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
         images,
         note: r.decision_note ? { label: t.fromUs, text: r.decision_note } : undefined,
         outro: t.okOutro,
-        link: r.cancel_token ? { text: t.cancelText, label: t.cancelLabel, url: `${siteUrl()}${t.cancelPath}?t=${r.cancel_token}` } : undefined,
+        link: r.cancel_token ? { text: t.cancelText, label: t.cancelLabel, url: `${siteUrl()}${sitePath(r.lang, 'cancel')}?t=${r.cancel_token}` } : undefined,
       }, lang)
     : renderMail({
         preheader: t.noPre(u.property, range),
@@ -366,11 +401,10 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
         intro: [t.hello(firstName(r.guest_name)), t.noIntro(u.property)],
         rows: stayRows(db, r, r.quoted_price, t, t.estimate),
         note: r.decision_note ? { label: t.msgFromUs, text: r.decision_note } : undefined,
-        button: { label: t.otherDates, url: siteUrl() + t.site },
+        button: { label: t.otherDates, url: siteUrl() + sitePath(r.lang, 'home') },
         outro: t.noOutro,
       }, lang);
-  await mailer.send({ to: [r.guest_email], subject: accepted ? t.okSubject(u.property, range) : t.noSubject(u.property), ...m, replyTo: adminEmails(db)[0] });
-  return true;
+  return { subject: accepted ? t.okSubject(u.property, range) : t.noSubject(u.property), ...m };
 }
 
 /** Prośba gościa o anulację: push dla obsługi i e-mail do właściciela. */
@@ -386,7 +420,7 @@ export async function announceCancelRequest(db: DatabaseSync, push: Sender | und
       if (!allowed || allowed.has(r.unit_id)) jobs.push(sendToSubscriptions(db, push, user.id, msg));
     }
   }
-  const admins = adminEmails(db);
+  const admins = emailNotify(db).cancellations ? adminEmails(db) : [];
   if (mailer && admins.length) {
     const m = renderMail({
       preheader: `${r.guest_name} prosi o anulację · ${u.property} · ${range}`,
@@ -406,7 +440,7 @@ export async function mailCancelDecision(db: DatabaseSync, mailer: Mailer | unde
   if (!mailer) return false;
   const u = unitInfo(db, r.unit_id);
   const t = txt(r);
-  const lang = r.lang === 'en' ? 'en' : 'pl';
+  const lang = mailLang(r.lang);
   const range = dateRange(r.check_in, r.check_out);
   const m = renderMail({
     preheader: confirmed ? t.cxPre(u.property, range) : t.cdPre(u.property),
@@ -414,7 +448,7 @@ export async function mailCancelDecision(db: DatabaseSync, mailer: Mailer | unde
     intro: [t.hello(firstName(r.guest_name)), confirmed ? t.cxIntro : t.cdIntro],
     rows: stayRows(db, r, null, t).filter(([k]) => k !== t.price),
     note: r.cancel_note ? { label: t.msgFromUs, text: r.cancel_note } : undefined,
-    button: confirmed ? { label: t.otherDates, url: siteUrl() + t.site } : undefined,
+    button: confirmed ? { label: t.otherDates, url: siteUrl() + sitePath(r.lang, 'home') } : undefined,
     outro: t.cxOutro,
   }, lang);
   await mailer.send({ to: [r.guest_email], subject: confirmed ? t.cxSubject(u.property, range) : t.cdSubject(u.property), ...m, replyTo: adminEmails(db)[0] });

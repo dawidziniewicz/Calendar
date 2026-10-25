@@ -1137,3 +1137,43 @@ test('waluty i Revolut: oferta w EUR, dane IBAN/BIC, Revolut i kody QR po akcept
   assert.equal(inv.currency, 'EUR');
   assert.equal((await call('GET', `/api/invoices/${inv.id}/pdf`)).status, 200);
 });
+
+test('podgląd e-maila decyzji, anulacja za brak zaliczki, wyłączane powiadomienia e-mail, zapytania z wersji CZ', async () => {
+  const { db, call, login, sent } = setupWithMail();
+  await login();
+  await call('PUT', '/api/settings/payments', { account_number: '12 1020 1234 0000 1234 5678 9012', account_name: 'Jan Kowalski' });
+  // e-mail do mnie o nowym zapytaniu wyłączony, potwierdzenie dla gościa zostaje
+  const es = await (await call('PUT', '/api/settings/email', { notify: { requests: false } })).json();
+  assert.equal(es.notify.requests, false);
+  assert.equal(es.notify.guest_receipt, true);
+  const { id } = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(20), check_out: inDays(22), name: 'Jana Nováková', phone: '+420 601 222 333', email: 'jana@example.cz', adults: 2, consent: true, lang: 'cs' }, { 'x-client-ip': '9.9.9.1' })).json();
+  await flush();
+  assert.equal(sent.filter((m) => m.to.includes('wlasciciel@x.pl')).length, 0, 'bez e-maila do mnie');
+  assert.match(sent.at(-1)!.subject, /We have received your enquiry/, 'gość z CZ dostaje e-mail po angielsku');
+  assert.equal((db.prepare('SELECT lang FROM booking_requests WHERE id = ?').get(id) as { lang: string }).lang, 'cs');
+  // podgląd przed akceptacją (nic nie zapisuje ani nie wysyła)
+  const before = sent.length;
+  const prev = await (await call('POST', `/api/requests/${id}/preview`, { action: 'accept', price: 900, note: 'Klucze w skrzynce', deposit: 300, deposit_due: inDays(5) })).json();
+  assert.match(prev.subject, /Booking confirmation/);
+  assert.match(prev.html, /Klucze w skrzynce/);
+  assert.match(prev.html, /\/cs\/zruseni\/\?t=/, 'link do anulacji w języku gościa');
+  assert.match((await (await call('POST', `/api/requests/${id}/preview`, { action: 'reject', note: 'Zajęte' })).json()).html, /Zajęte/);
+  assert.equal(sent.length, before);
+  assert.equal((db.prepare('SELECT status FROM booking_requests WHERE id = ?').get(id) as { status: string }).status, 'pending');
+  const acc = await (await call('POST', `/api/requests/${id}/accept`, { price: 900, deposit: 300, deposit_due: inDays(5) })).json();
+  // archiwum: rozpatrzone zapytanie z odnośnikiem do rezerwacji
+  const decided = await (await call('GET', '/api/requests?status=decided')).json();
+  assert.equal(decided[0].reservation_id, acc.reservation.id);
+  assert.equal(decided[0].reservation_status, 'confirmed');
+  // anulacja za brak zaliczki + e-mail
+  assert.equal((await call('POST', `/api/reservations/${acc.reservation.id}/messages`, { kind: 'unpaid_cancel' })).status, 400);
+  const draft = await (await call('GET', `/api/reservations/${acc.reservation.id}/messages/draft?kind=unpaid_cancel`)).json();
+  assert.match(draft.body, /we have not received the deposit/);
+  const cx = await (await call('POST', `/api/reservations/${acc.reservation.id}/cancel-unpaid`, { email: true })).json();
+  assert.equal(cx.reservation.status, 'cancelled');
+  assert.match(cx.reservation.notes, /brak wpłaty zaliczki/);
+  assert.match(sent.at(-1)!.subject, /deposit not received/);
+  assert.equal((await call('POST', `/api/reservations/${acc.reservation.id}/cancel-unpaid`, { email: false })).status, 400, 'już anulowana');
+  const decided2 = await (await call('GET', '/api/requests?status=decided')).json();
+  assert.equal(decided2[0].reservation_status, 'cancelled');
+});

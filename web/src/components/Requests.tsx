@@ -67,17 +67,7 @@ export default function Requests({ version, readOnly, focusId, onChanged, onOpen
       </button>
       <p className="muted small-note archive-note">Zapytania bez decyzji, których data przyjazdu minęła, trafiają tu automatycznie.</p>
       {showDecided && (decided.length ? decided.map((r) => (
-        <div key={r.id} className={`request-card decided st-${r.status === 'pending' ? 'expired' : r.status}`}>
-          <div className="request-top">
-            {r.status === 'pending'
-              ? <span className="pill">Wygasłe — termin minął</span>
-              : <span className={`pill pill-${r.status}`}>{r.status === 'accepted' ? 'Zaakceptowane' : 'Odrzucone'}</span>}
-            <span className="muted small-meta">{r.status === 'pending' ? `wysłane ${when(r.created_at)}` : <>{r.decided_by} · {r.decided_at && when(r.decided_at)}</>}</span>
-          </div>
-          <div className="request-guest">{r.guest_name}</div>
-          <div className="muted">{r.unit_name} · {r.property_name} · {formatShort(r.check_in)} – {formatShort(r.check_out)}</div>
-          {r.decision_note && <p className="request-note">„{r.decision_note}”</p>}
-        </div>
+        <DecidedCard key={r.id} r={r} focused={r.id === focusId} onOpenReservation={onOpenReservation} />
       )) : <p className="empty">Brak rozpatrzonych zapytań.</p>)}
     </section>
   );
@@ -162,6 +152,21 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
   const manual = r.assign_mode === 'manual';
   const [unitChoice, setUnitChoice] = useState<string>('');
   const autoUnit = group.find((g) => g.free) ?? group[0];
+  const [preview, setPreview] = useState<{ subject: string; html: string } | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const showPreview = () => { setPreviewOpen(!previewOpen); if (previewOpen) setPreview(null); };
+  // podgląd odświeża się przy zmianie ceny, zaliczki, domku i wiadomości
+  useEffect(() => {
+    if (!previewOpen || mode === 'idle') return;
+    const t = setTimeout(() => {
+      api.requestPreview(r.id, {
+        action: mode === 'reject' ? 'reject' : 'accept', note,
+        price: price.trim() === '' ? null : Number(price.replace(',', '.')),
+        deposit, deposit_due: deposit ? depositDue : null, ...(unitChoice ? { unit_id: Number(unitChoice) } : {}),
+      }).then(setPreview).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    }, 350);
+    return () => clearTimeout(t);
+  }, [previewOpen, mode, note, price, deposit, depositDue, unitChoice, r.id]);
 
   const submit = async () => {
     setBusy(true);
@@ -192,7 +197,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
     <article id={`request-${r.id}`} className={`request-card ${focused ? 'focused' : ''}`}>
       <div className="request-top">
         <span className="pill pill-pending">Nowe</span>
-        {r.lang === 'en' && <span className="pill">EN</span>}
+        {r.lang !== 'pl' && <span className="pill">{r.lang.toUpperCase()}</span>}
         <span className="muted small-meta">wysłane {when(r.created_at)}</span>
       </div>
       <div className="request-guest">{r.guest_name}</div>
@@ -288,13 +293,83 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
             <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
             {mode === 'accept' ? 'Wyślij gościowi e-mail z potwierdzeniem' : 'Wyślij gościowi e-mail z odmową (odznacz przy spamie)'}
           </label>
+          {sendEmail && (
+            <button type="button" className="btn small preview-btn" onClick={showPreview}>{previewOpen ? 'Ukryj podgląd e-maila' : 'Podgląd e-maila do gościa'}</button>
+          )}
+          {previewOpen && preview && sendEmail && (
+            <div className="mail-preview-box">
+              <div className="muted small-note">Temat: <b>{preview.subject}</b></div>
+              <iframe className="mail-preview" title="Podgląd e-maila" srcDoc={preview.html} sandbox="" />
+            </div>
+          )}
           {error && <div className="banner error">{error}{force && mode === 'accept' && ' — kliknij jeszcze raz, żeby mimo to zapisać.'}</div>}
           <div className="request-actions">
             <button className={`btn ${mode === 'accept' ? 'primary' : 'danger'}`} disabled={busy} onClick={submit}>
               {busy ? 'Zapisywanie…' : mode === 'accept' ? (force ? 'Zapisz mimo konfliktu' : 'Potwierdź rezerwację') : 'Odrzuć zapytanie'}
             </button>
-            <button className="btn" disabled={busy} onClick={() => { setMode('idle'); setError(''); setForce(false); }}>Anuluj</button>
+            <button className="btn" disabled={busy} onClick={() => { setMode('idle'); setError(''); setForce(false); setPreviewOpen(false); setPreview(null); }}>Anuluj</button>
           </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+// Archiwum: stuknięcie rozwija szczegóły zapytania; zaakceptowane — przycisk do rezerwacji w kalendarzu
+function DecidedCard({ r, focused, onOpenReservation }: { r: BookingRequest; focused: boolean; onOpenReservation: (r: Reservation) => void }) {
+  const [open, setOpen] = useState(focused);
+  const [error, setError] = useState('');
+  const nights = diffDays(r.check_in, r.check_out);
+  const openReservation = async () => {
+    if (!r.reservation_id) return;
+    setError('');
+    try { onOpenReservation(await api.reservation(r.reservation_id)); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
+  const status = r.status === 'pending' ? 'Wygasłe — termin minął' : r.status === 'accepted' ? 'Zaakceptowane' : 'Odrzucone';
+  return (
+    <article id={`request-${r.id}`} className={`request-card decided st-${r.status === 'pending' ? 'expired' : r.status} ${open ? 'is-open' : ''}`}>
+      <button type="button" className="decided-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <div className="request-top">
+          <span className={`pill ${r.status === 'pending' ? '' : `pill-${r.status}`}`}>{status}</span>
+          {r.cancel_status === 'confirmed' && <span className="pill pill-rejected">Anulowane na prośbę gościa</span>}
+          {r.reservation_status === 'cancelled' && r.cancel_status !== 'confirmed' && <span className="pill pill-rejected">Rezerwacja anulowana</span>}
+          <span className="muted small-meta">{r.status === 'pending' ? `wysłane ${when(r.created_at)}` : <>{r.decided_by} · {r.decided_at && when(r.decided_at)}</>}</span>
+        </div>
+        <div className="request-guest">{r.guest_name} <span className="chev">{open ? '▴' : '▾'}</span></div>
+        <div className="muted">{r.unit_name} · {r.property_name} · {formatShort(r.check_in)} – {formatShort(r.check_out)}</div>
+      </button>
+      {open && (
+        <div className="decided-details">
+          <dl className="request-facts">
+            <div><dt>Termin</dt><dd>{formatShort(r.check_in)} – {formatShort(r.check_out)}</dd></div>
+            <div><dt>Noce</dt><dd>{nightsLabel(nights)}</dd></div>
+            <div><dt>Goście</dt><dd>{people(r)}</dd></div>
+            <div><dt>Wycena</dt><dd>{zl(r.quoted_price)}</dd></div>
+          </dl>
+          {chosenExtras(r).length > 0 && (
+            <ul className="request-extras">
+              {chosenExtras(r).map((e) => <li key={e.id}><span>{e.name}{e.qty > 1 && ` × ${e.qty}`}</span><b>{zl(e.total)}</b></li>)}
+            </ul>
+          )}
+          {r.message && <p className="request-message">{r.message}</p>}
+          {r.offer && (
+            <div className={`offer-status offer-${r.offer.expired ? 'expired' : r.offer.status}`}>
+              <b>Oferta {fmt(r.offer.price, r.offer.currency)}{r.offer.deposit ? ` · zaliczka ${fmt(r.offer.deposit, r.offer.currency)}` : ''}</b>
+              <span>{r.offer.expired ? 'wygasła' : { sent: 'czekała na gościa', accepted: 'zaakceptowana przez gościa ✓', declined: 'gość odrzucił', withdrawn: 'wycofana' }[r.offer.status]}</span>
+              {r.offer.decline_reason && <span className="muted">„{r.offer.decline_reason}”</span>}
+            </div>
+          )}
+          {r.decision_note && <p className="request-note"><span className="muted">Wiadomość do gościa:</span> „{r.decision_note}”</p>}
+          {r.cancel_reason && <p className="request-note"><span className="muted">Powód anulacji od gościa:</span> „{r.cancel_reason}”</p>}
+          <div className="request-contact">
+            {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
+            <a className="btn small" href={`mailto:${r.guest_email}`}>{r.guest_email}</a>
+          </div>
+          {r.reservation_id && (
+            <button type="button" className="btn primary open-res" onClick={openReservation}>Otwórz rezerwację w kalendarzu ›</button>
+          )}
+          {error && <div className="banner error">{error}</div>}
+          <p className="muted small-note">Zapytanie #{r.id} · wysłane {when(r.created_at)}{r.lang !== 'pl' ? ` · strona ${r.lang.toUpperCase()}` : ''}</p>
         </div>
       )}
     </article>
