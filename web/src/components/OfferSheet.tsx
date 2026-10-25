@@ -41,6 +41,9 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
   const [error, setError] = useState('');
   const [done, setDone] = useState<{ offer: Offer; emailed: boolean } | null>(null);
   const [copied, setCopied] = useState(false);
+  // podgląd e-maila z ofertą (przed wysłaniem)
+  const [tab, setTab] = useState<'edit' | 'preview'>('edit');
+  const [preview, setPreview] = useState<{ subject: string; html: string } | null>(null);
 
   useEffect(() => {
     api.paymentSettings().then((s) => {
@@ -64,6 +67,17 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  const body = () => ({
+    price: price ?? 0, currency, deposit: withDeposit ? deposit : null, deposit_due: withDeposit && depositDue ? depositDue : null,
+    valid_until: validUntil || null, message, email, lang,
+  });
+  useEffect(() => {
+    if (tab !== 'preview') return;
+    setPreview(null);
+    api.offerPreview(target.kind, target.id, body()).then(setPreview).catch((e) => { setError(e instanceof Error ? e.message : String(e)); setTab('edit'); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   const submit = async () => {
     if (price == null || price <= 0) return setError('Podaj cenę za cały pobyt');
@@ -100,8 +114,22 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
           <h2>Oferta dla gościa</h2>
           {done ? <span className="head-spacer" /> : <button type="button" className="link strong" disabled={busy} onClick={submit}>{busy ? '…' : 'Wyślij'}</button>}
         </header>
+        {!done && (
+          <div className="sheet-tabs" role="tablist">
+            <button role="tab" aria-selected={tab === 'edit'} className={tab === 'edit' ? 'active' : ''} onClick={() => setTab('edit')}>Oferta</button>
+            <button role="tab" aria-selected={tab === 'preview'} className={tab === 'preview' ? 'active' : ''} onClick={() => setTab('preview')}>Podgląd e-maila</button>
+          </div>
+        )}
         <div className="sheet-body">
-          {done ? (
+          {!done && tab === 'preview' ? (
+            preview ? (
+              <div className="mail-preview-box">
+                <div className="muted small-note">Temat: <b>{preview.subject}</b>{email ? ` · do: ${target.email}` : ' · e-mail nie zostanie wysłany (tylko link)'}</div>
+                <iframe className="mail-preview" title="Podgląd e-maila z ofertą" srcDoc={preview.html} sandbox="" />
+                <button type="button" className="btn primary big" disabled={busy} onClick={submit}>{busy ? 'Wysyłanie…' : email ? 'Wyślij ofertę' : 'Utwórz link do oferty'}</button>
+              </div>
+            ) : <p className="muted">Przygotowywanie podglądu…</p>
+          ) : done ? (
             <div className="offer-done">
               <div className="done-mark" aria-hidden>✓</div>
               <h3>{done.emailed ? `Oferta wysłana na ${target.email}` : 'Oferta gotowa'}</h3>

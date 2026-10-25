@@ -1311,6 +1311,28 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     return c.json(await createOffer(user, stay, { reservation_id: r.id, unit_id: r.unit_id }, b), 201);
   });
 
+  // Podgląd e-maila z ofertą (te same dane co w formularzu; link „Zobacz ofertę” przykładowy — powstaje przy wysyłce)
+  const offerPreview = (stay: Stay, b: Record<string, unknown>) => {
+    const o = readOffer(b, stay.check_in);
+    const lang = readSiteLang(stay.lang);
+    const m = composeMessage(db, { ...stay, lang, price: o.price, deposit: o.deposit, deposit_due: o.deposit_due, currency: o.currency }, {
+      kind: 'offer', body: typeof b.body === 'string' ? str(b.body, 3000) : undefined,
+      offerUrl: offerUrl({ token: '0'.repeat(48), lang }), validUntil: o.valid_until, offerNote: o.message,
+    });
+    return { subject: m.subject, html: m.html };
+  };
+  api.post('/requests/:id/offers/preview', async (c) => {
+    const r = pendingRequest(c.get('user'), int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    const lang = (SITE_LANGS as readonly string[]).includes(b.lang) ? b.lang : r.lang;
+    return c.json(offerPreview({ ...r, unit_id: b.unit_id && requestGroup(r).includes(int(b.unit_id)) ? int(b.unit_id) : r.unit_id, lang }, b));
+  });
+  api.post('/reservations/:id/offers/preview', async (c) => {
+    const r = visibleReservation(c.get('user'), int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(offerPreview({ ...r, lang: (SITE_LANGS as readonly string[]).includes(b.lang) ? b.lang : r.lang }, b));
+  });
+
   api.post('/offers/:id/withdraw', (c) => {
     const o = get('SELECT * FROM offers WHERE id = ?', int(c.req.param('id'))) as OfferRow | undefined;
     const unit = o && (o.unit_id ?? (o.request_id ? (get('SELECT unit_id FROM booking_requests WHERE id = ?', o.request_id) as { unit_id: number } | undefined)?.unit_id : undefined));
