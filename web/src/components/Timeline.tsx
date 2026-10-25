@@ -8,6 +8,7 @@ import ConflictMark from './ConflictMark';
 import PriceSheet from './PriceSheet';
 import { nightPrice } from '../pricing';
 import { addDays, addMonths, diffDays, formatMonth, formatShort, formatWeekday, fromIso, isWeekend, today } from '../dates';
+import DateInput from './DateInput';
 
 type Props = {
   properties: Property[];
@@ -120,13 +121,7 @@ export default function Timeline({ properties, version, onSelect, onCreate }: Pr
           <button className="btn" onClick={() => setStart(addDays(start, -step))} aria-label="Wcześniej">‹</button>
           <button className="btn" onClick={() => setStart(addDays(now, -2))}>Dziś</button>
           <button className="btn" onClick={() => setStart(addDays(start, step))} aria-label="Później">›</button>
-          <input
-            type="date"
-            className="date-jump"
-            value={start}
-            onChange={(e) => e.target.value && setStart(e.target.value)}
-            aria-label="Przejdź do daty"
-          />
+          <span className="date-jump"><DateInput value={start} onChange={(v) => v && setStart(v)} aria-label="Przejdź do daty" /></span>
         </div>
         <div className="toolbar-stats">
           {priceMode ? (

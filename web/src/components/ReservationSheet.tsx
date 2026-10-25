@@ -5,6 +5,9 @@ import { SOURCES, STATUS_LABELS } from '../types';
 import { addDays, diffDays, formatShort, nightsLabel } from '../dates';
 import { CURRENCIES, GUEST_LANGS, currencySymbol, type GuestLang } from '../money';
 import Stepper from './Stepper';
+import ExtrasPicker, { extrasTotal, parseExtras } from './ExtrasPicker';
+import type { ChosenExtra } from '../types';
+import DateInput from './DateInput';
 
 type Props = { draft: Draft; properties: Property[]; onClose: () => void; onSaved: (saved: Reservation | null) => void };
 type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
@@ -19,6 +22,15 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
   const imported = Boolean(draft.feed_id);
   const nights = diffDays(r.check_in, r.check_out);
   const unit = properties.flatMap((p) => p.units).find((u) => u.id === r.unit_id);
+  // Opcje płatne (sprzątanie, parking…): ich suma jest częścią ceny — zmiana opcji lub liczby nocy poprawia cenę o różnicę
+  const [extras, setExtras] = useState<ChosenExtra[]>(() => parseExtras(draft.extras));
+  const total = Math.round(extrasTotal(extras, Math.max(1, nights)) * 100) / 100;
+  const prevTotal = useRef(total);
+  useEffect(() => {
+    const delta = total - prevTotal.current;
+    prevTotal.current = total;
+    if (delta) setR((prev) => (prev.price == null ? prev : { ...prev, price: Math.round((prev.price + delta) * 100) / 100 }));
+  }, [total]);
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setR((prev) => ({ ...prev, [key]: value }));
@@ -53,7 +65,8 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
     setSaving(true);
     setError('');
     try {
-      onSaved(await api.saveReservation(r, force));
+      // opcje jako lista (serwer liczy sumy i zapisuje kopię)
+      onSaved(await api.saveReservation({ ...r, extras: extras as unknown as string }, force));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) setConflicts(err.data.conflicts as Conflict[]);
       else setError(err instanceof Error ? err.message : String(err));
@@ -111,8 +124,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <label>
               Przyjazd
-              <input type="date" required value={r.check_in} onChange={(e) => {
-                const v = e.target.value;
+              <DateInput required value={r.check_in} onChange={(v) => {
                 if (!v) return;
                 // zachowaj liczbę nocy przy zmianie przyjazdu
                 setR((prev) => ({ ...prev, check_in: v, check_out: addDays(v, Math.max(1, diffDays(prev.check_in, prev.check_out))) }));
@@ -121,7 +133,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <label>
               Wyjazd
-              <input type="date" required value={r.check_out} min={addDays(r.check_in, 1)} onChange={(e) => e.target.value && set('check_out', e.target.value)} />
+              <DateInput required value={r.check_out} min={addDays(r.check_in, 1)} onChange={(v) => v && set('check_out', v)} />
             </label>
             <div className="field nights-field">
               Liczba nocy
@@ -168,6 +180,11 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
           </fieldset>
 
           <fieldset>
+            <legend>Opcje płatne</legend>
+            <ExtrasPicker unitId={r.unit_id} nights={Math.max(1, nights)} currency={r.currency ?? 'PLN'} value={extras} onChange={setExtras} autoRequired={!r.id && !imported} />
+          </fieldset>
+
+          <fieldset>
             <legend>Szczegóły</legend>
             <label>
               Źródło
@@ -182,7 +199,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
               </select>
             </label>
             <label>
-              Cena ({currencySymbol(r.currency)})
+              {extras.length ? 'Cena z opcjami' : 'Cena'} ({currencySymbol(r.currency)})
               <input inputMode="decimal" value={r.price ?? ''} onChange={(e) => numberField('price', e.target.value)} />
             </label>
             <label>
@@ -195,7 +212,7 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <label>
               Zaliczka do
-              <input type="date" value={r.deposit_due ?? ''} disabled={!r.deposit} onChange={(e) => set('deposit_due', e.target.value || null)} />
+              <DateInput value={r.deposit_due ?? ''} disabled={!r.deposit} onChange={(v) => set('deposit_due', v || null)} />
             </label>
             <label>
               Waluta

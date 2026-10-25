@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { api, type MailThread } from '../api';
+import { dmy, toIso } from '../dates';
 
 // Kliknięcie w adres e-mail gościa: wybór — Poczta w kalendarzu (nowa wiadomość albo istniejąca rozmowa)
 // czy zwykła aplikacja pocztowa (mailto:). Bez dostępu do Poczty zostaje zwykły link mailto:.
@@ -62,7 +63,7 @@ function Choice({ email, subject, href, onMail, onClose }: {
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 5h16v11H9l-5 4z" /></svg>
                 <span>
                   <b>Rozmowa: {t.subject || '(bez tematu)'}</b>
-                  <small>{sqlDate(t.last_at).toLocaleDateString('pl-PL', { day: 'numeric', month: 'short', year: 'numeric' })} · {t.message_count} {t.message_count === 1 ? 'wiadomość' : 'wiadomości'}{t.unread ? ' · nowe' : ''}</small>
+                  <small>{dmy(toIso(sqlDate(t.last_at)))} · {t.message_count} {t.message_count === 1 ? 'wiadomość' : 'wiadomości'}{t.unread ? ' · nowe' : ''}</small>
                 </span>
               </button>
             ))}

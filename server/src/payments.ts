@@ -7,6 +7,7 @@ import { epcPayload, iban, plBankPayload, polishNrb, qrPath, revolutUrl } from '
 import {
   TXT, adminEmails, guestReplyTo, emailNotify, mailLang, sitePath, appUrl, extrasLines, firstName, guestUnitName, longDate, nightsBetween, parseChosenExtras, siteUrl, unitInfo, zl, type Lang,
 } from './booking.ts';
+import { dmy } from './dmy.ts';
 
 // Płatności i korespondencja z gościem: dane do przelewu, zaliczki, oferty cenowe z linkiem „Akceptuję”,
 // wiadomości wysyłane z aplikacji (zapisywane w historii rezerwacji).
@@ -207,9 +208,8 @@ const P = {
   },
 };
 
-/** „27 października 2026” (bez dnia tygodnia — do terminów płatności w treści) */
-const short = (iso: string | null | undefined, lang: Lang) =>
-  (iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString(TXT[lang].locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : null);
+/** „27/10/2026” (bez dnia tygodnia — do terminów płatności w treści) */
+const short = (iso: string | null | undefined, _lang: Lang) => (iso ? dmy(iso) : null);
 
 /** Obiekt, typ domku, termin, długość, goście (+ opcje dodatkowe) */
 function stayRows(db: DatabaseSync, st: Stay, lang: Lang, priceLabel?: string, price?: number | null): MailRow[] {

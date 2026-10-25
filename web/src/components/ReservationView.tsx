@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import EmailLink from './EmailLink';
+import { parseExtras } from './ExtrasPicker';
 import { whatsappHref } from '../phone';
 import { api, ApiError } from '../api';
 import type { Activity, MessageKind, Property, Reservation } from '../types';
@@ -7,7 +8,7 @@ import OfferSheet from './OfferSheet';
 import MessageSheet, { MESSAGE_LABELS } from './MessageSheet';
 import InvoiceSheet from './InvoiceSheet';
 import { SOURCES, STATUS_LABELS } from '../types';
-import { diffDays, formatLong, formatShort, nightsLabel } from '../dates';
+import { diffDays, dmyTime, formatLong, formatShort, nightsLabel } from '../dates';
 
 type Props = {
   reservation: Reservation;
@@ -119,7 +120,7 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
   };
   const canMail = r.status !== 'cancelled' && !cancelledImport;
   const OFFER_STATUS: Record<string, string> = { sent: 'czeka na gościa', accepted: 'zaakceptowana ✓', declined: 'odrzucona', withdrawn: 'wycofana' };
-  const when = (sql: string) => new Date(`${sql.replace(' ', 'T')}Z`).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const when = (sql: string) => dmyTime(sql);
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -224,7 +225,17 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               </dd>
             </div>
             {/* Konto tylko do podglądu widzi wyłącznie kwotę do zapłaty */}
-            {!readOnly && r.price != null && <div><dt>Cena</dt><dd>{money(r.price)}</dd></div>}
+            {parseExtras(r.extras).length > 0 && (
+              <div>
+                <dt>Opcje płatne</dt>
+                <dd className="view-extras">
+                  {parseExtras(r.extras).map((e, i) => (
+                    <span key={i}>{e.name}{e.qty > 1 ? ` × ${e.qty}` : ''}{!readOnly && <> — {money(e.total)}</>}</span>
+                  ))}
+                </dd>
+              </div>
+            )}
+            {!readOnly && r.price != null && <div><dt>{parseExtras(r.extras).length ? 'Cena (z opcjami)' : 'Cena'}</dt><dd>{money(r.price)}</dd></div>}
             {!readOnly && r.paid != null && <div><dt>Wpłacono</dt><dd>{money(r.paid)}</dd></div>}
             {due != null && (
               <div><dt>Do zapłaty</dt><dd className={due > 0 ? 'due' : 'paid'}>{due > 0 ? money(due) : 'Opłacone ✓'}</dd></div>

@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 import Stepper from './Stepper';
 import { api, type ExtraInput } from '../api';
 import type { Extra, Property } from '../types';
+import { groupUnits } from '../pricing';
 
 type Props = { properties: Property[]; canEdit: boolean };
 
-const EMPTY: ExtraInput = { name: '', name_en: '', description: '', price: 0, per: 'stay', max_qty: 1, property_ids: null, active: true };
+const EMPTY: ExtraInput = { name: '', name_en: '', description: '', price: 0, per: 'stay', max_qty: 1, property_ids: null, active: true, required: false, price_overrides: null };
 const toInput = (e: Extra): ExtraInput => ({
   name: e.name, name_en: e.name_en, description: e.description, price: e.price, per: e.per, max_qty: e.max_qty,
   property_ids: e.property_ids ? JSON.parse(e.property_ids) : null, active: !!e.active,
+  required: !!e.required, price_overrides: e.price_overrides ? JSON.parse(e.price_overrides) : null,
 });
 
 // Opcje płatne (parking, zwierzę, łóżeczko, późne wymeldowanie…) — gość zaznacza je w zapytaniu na stronie, cena dolicza się do wyceny.
@@ -24,12 +26,27 @@ export default function ExtrasPanel({ properties, canEdit }: Props) {
     const ids: number[] = JSON.parse(e.property_ids);
     return ids.map((id) => properties.find((p) => p.id === id)?.name ?? `#${id}`).join(', ');
   };
+  // „Sopot 250 zł · Duży domek 200 zł”
+  const overridesLabel = (e: Extra) => {
+    if (!e.price_overrides) return '';
+    const o: Record<string, number> = JSON.parse(e.price_overrides);
+    const parts: string[] = [];
+    for (const p of properties) {
+      if (o[`p${p.id}`] != null) parts.push(`${p.name} ${o[`p${p.id}`]} zł`);
+      for (const g of groupUnits(p.units)) {
+        const v = o[`u${g.units[0].id}`];
+        if (v != null) parts.push(`${g.type ?? g.units[0].name} (${p.name}) ${v} zł`);
+      }
+    }
+    return parts.join(' · ');
+  };
 
   return (
     <div className="panel">
       <h2>Opcje płatne</h2>
       <p className="muted notif-desc">
         Np. parking, zwierzę, łóżeczko dla dziecka, późne wymeldowanie. Gość zaznacza je w formularzu na stronie, a cena dolicza się do wyceny zapytania.
+        Opcje <b>obowiązkowe</b> (np. sprzątanie) są doliczane zawsze. Cena może być inna dla obiektu albo typu domku. Opcje dodasz też do rezerwacji w kalendarzu.
       </p>
       {error && <div className="banner error">{error}</div>}
       {extras?.length === 0 && editing !== 'new' && <p className="empty">Brak opcji płatnych.</p>}
@@ -43,8 +60,9 @@ export default function ExtrasPanel({ properties, canEdit }: Props) {
             ) : (
               <button type="button" className="extra-row" disabled={!canEdit} onClick={() => setEditing(e.id)}>
                 <span className="extra-main">
-                  <b>{e.name}</b>
+                  <b>{e.name}{!!e.required && <span className="tag-required">obowiązkowa</span>}</b>
                   <small className="muted">{scopeLabel(e)}{e.max_qty > 1 && ` · do ${e.max_qty} szt.`}{!e.active && ' · wyłączona'}</small>
+                  {overridesLabel(e) && <small className="muted">Inne ceny: {overridesLabel(e)}</small>}
                 </span>
                 <span className="extra-price">{e.price.toLocaleString('pl-PL')} zł <small>/ {e.per === 'night' ? 'noc' : 'pobyt'}</small></span>
               </button>
@@ -68,6 +86,9 @@ function ExtraForm({ properties, initial, onSave, onCancel, onDelete }: {
 }) {
   const [v, setV] = useState<ExtraInput>(initial);
   const [price, setPrice] = useState(String(initial.price));
+  // inne ceny: klucz p<id obiektu> albo u<id pierwszego domku typu> → tekst z pola
+  const [over, setOver] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(initial.price_overrides ?? {}).map(([k, n]) => [k, String(n)])));
+  const scoped = properties.filter((p) => !v.property_ids || v.property_ids.includes(p.id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (patch: Partial<ExtraInput>) => setV({ ...v, ...patch });
@@ -80,9 +101,20 @@ function ExtraForm({ properties, initial, onSave, onCancel, onDelete }: {
     const n = Number(price.replace(',', '.'));
     if (!Number.isFinite(n) || n < 0) return setError('Podaj poprawną cenę');
     if (v.property_ids && !v.property_ids.length) return setError('Wybierz co najmniej jeden obiekt');
+    // cena typu domku zapisuje się dla każdego domku tego typu (serwer szuka ceny po domku)
+    const overrides: Record<string, number> = {};
+    for (const p of scoped) {
+      const pv = over[`p${p.id}`]?.trim();
+      if (pv) overrides[`p${p.id}`] = Number(pv.replace(',', '.'));
+      for (const g of groupUnits(p.units)) {
+        const gv = over[`u${g.units[0].id}`]?.trim();
+        if (gv) for (const u of g.units) overrides[`u${u.id}`] = Number(gv.replace(',', '.'));
+      }
+    }
+    if (Object.values(overrides).some((x) => !Number.isFinite(x) || x < 0)) return setError('Popraw ceny dla obiektów / domków');
     setBusy(true);
     setError('');
-    try { await onSave({ ...v, price: n }); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
+    try { await onSave({ ...v, price: n, price_overrides: Object.keys(overrides).length ? overrides : null }); } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
   };
   return (
     <form className="extra-form" onSubmit={submit}>
@@ -110,6 +142,26 @@ function ExtraForm({ properties, initial, onSave, onCancel, onDelete }: {
           ))}
         </div>
       </div>
+      <label className="check-row"><input type="checkbox" checked={v.required} onChange={(e) => set({ required: e.target.checked })} /> Obowiązkowa — zawsze doliczana (np. sprzątanie), gość nie może jej odznaczyć</label>
+      <details className="extra-overrides" open={Object.values(over).some(Boolean)}>
+        <summary>Inna cena dla obiektu lub typu domku</summary>
+        <p className="muted small-note">Puste pole = cena {price || '0'} zł. Cena typu domku ma pierwszeństwo przed ceną obiektu.</p>
+        {scoped.map((p) => {
+          const groups = groupUnits(p.units);
+          return (
+            <div key={p.id} className="override-property">
+              <label className="override-row"><span>{p.name}</span>
+                <input inputMode="decimal" placeholder={price || '0'} value={over[`p${p.id}`] ?? ''} onChange={(e) => setOver({ ...over, [`p${p.id}`]: e.target.value })} />
+              </label>
+              {groups.length > 1 && groups.map((g) => (
+                <label key={g.key} className="override-row is-type"><span>{g.type ?? g.units[0].name}{g.units.length > 1 ? ` (${g.units.length} domki)` : ''}</span>
+                  <input inputMode="decimal" placeholder={over[`p${p.id}`] || price || '0'} value={over[`u${g.units[0].id}`] ?? ''} onChange={(e) => setOver({ ...over, [`u${g.units[0].id}`]: e.target.value })} />
+                </label>
+              ))}
+            </div>
+          );
+        })}
+      </details>
       <label className="check-row"><input type="checkbox" checked={v.active} onChange={(e) => set({ active: e.target.checked })} /> Widoczna na stronie</label>
       {error && <div className="banner error">{error}</div>}
       <div className="row">

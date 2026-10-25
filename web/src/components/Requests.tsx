@@ -3,10 +3,11 @@ import EmailLink from './EmailLink';
 import { api, ApiError } from '../api';
 import type { BookingRequest, ChosenExtra, Reservation } from '../types';
 import { SOURCES } from '../types';
-import { addDays, diffDays, formatShort, nightsLabel, today } from '../dates';
+import { addDays, diffDays, dmyTime, formatShort, nightsLabel, today } from '../dates';
 import OfferSheet from './OfferSheet';
 import NumInput from './NumInput';
 import { fmt } from '../money';
+import DateInput from './DateInput';
 
 type Props = {
   version: number;
@@ -19,7 +20,7 @@ type Props = {
 const zl = (n: number | null) => (n == null ? 'do ustalenia' : `${n.toLocaleString('pl-PL')} zł`);
 const people = (r: BookingRequest) => `${r.adults} dor.${r.children ? ` + ${r.children} dz.` : ''}`;
 const chosenExtras = (r: BookingRequest): ChosenExtra[] => { try { return r.extras ? JSON.parse(r.extras) : []; } catch { return []; } };
-const when = (sqlUtc: string) => new Date(`${sqlUtc.replace(' ', 'T')}Z`).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const when = (sqlUtc: string) => dmyTime(sqlUtc);
 
 export default function Requests({ version, readOnly, focusId, onChanged, onOpenReservation }: Props) {
   const [pending, setPending] = useState<BookingRequest[] | null>(null);
@@ -283,7 +284,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
           {mode === 'accept' && (
             <div className="row">
               <label>Zaliczka (zł, opcjonalnie)<NumInput value={deposit} onChange={setDeposit} placeholder="bez zaliczki" /></label>
-              {deposit ? <label>Wpłata do<input type="date" value={depositDue} min={today()} onChange={(e) => setDepositDue(e.target.value)} /></label> : null}
+              {deposit ? <label>Wpłata do<DateInput value={depositDue} min={today()} onChange={(v) => setDepositDue(v)} /></label> : null}
             </div>
           )}
           {mode === 'accept' && deposit ? <p className="muted small-note">E-mail z potwierdzeniem zawiera kwotę zaliczki, termin i numer konta z ustawień.</p> : null}

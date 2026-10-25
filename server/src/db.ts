@@ -34,6 +34,22 @@ function migrate(db: DatabaseSync) {
   if (user_version < 17) migrateV17(db);
   if (user_version < 18) migrateV18(db);
   if (user_version < 19) migrateV19(db);
+  if (user_version < 20) migrateV20(db);
+}
+
+// Opcje płatne: obowiązkowe (np. sprzątanie) i inne ceny dla obiektu / typu domku ({"p3": 200, "u7": 150});
+// opcje w rezerwacjach z aplikacji; „ceny na stronie do” osobno dla obiektu albo typu domku.
+function migrateV20(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE extras ADD COLUMN required INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE extras ADD COLUMN price_overrides TEXT;
+    ALTER TABLE reservations ADD COLUMN extras TEXT;
+    ALTER TABLE properties ADD COLUMN horizon_until TEXT;
+    ALTER TABLE units ADD COLUMN horizon_until TEXT;
+    PRAGMA user_version = 20;
+    COMMIT;
+  `);
 }
 
 // Poczta w aplikacji: wiadomości przychodzące (Cloudflare Email Routing → Email Worker → /inbound/mail)

@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
+import { dmy } from './dmy.ts';
 
 // Rachunki: dane wystawcy z ustawień (wszystkie pola opcjonalne), PDF w formacie A4.
 
@@ -134,7 +135,7 @@ const loadFonts = () => (fonts ??= {
 
 const GREEN = '#577267', SAGE = '#8CA196', SAND = '#C1B1A0', INK = '#1f2a25', MUTED = '#6b776f', LINE = '#e3dcd2', PAPER = '#f6f3ee';
 export const plMoney = (n: number) => `${n.toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace(/ | /g, ' ')} zł`;
-const plDate = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : iso);
+const plDate = (iso: string) => dmy(iso);
 const qtyText = (n: number) => n.toLocaleString('pl-PL', { maximumFractionDigits: 2 });
 
 /** Kwota na rachunku: 1 200,00 zł / 1 200,00 EUR */

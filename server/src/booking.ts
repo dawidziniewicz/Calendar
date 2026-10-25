@@ -3,6 +3,7 @@ import { allowedUnitIds, propertyIdsOf } from './auth.ts';
 import { dateRange } from './changes.ts';
 import { renderMail, parseEmails, type Mailer, type MailRow } from './mail.ts';
 import { sendToSubscriptions, type Sender } from './push.ts';
+import { dmy } from './dmy.ts';
 
 // Ceny za noc i zapytania o rezerwację ze strony odmorzadogor.pl.
 // Cena nocy D = nadpisanie z tabeli rates (jeśli jest) albo cena podstawowa domku. Brak obu = „cena do ustalenia”.
@@ -88,8 +89,17 @@ export function horizonUntil(db: DatabaseSync): string | null {
   const v = (db.prepare('SELECT value FROM settings WHERE key = ?').get(HORIZON_UNTIL_KEY) as { value: string } | undefined)?.value;
   return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 }
-/** Pierwsza noc, której strona już nie pokazuje (dzień po dacie „ceny do” albo dziś + horyzont). */
-export const horizonEnd = (db: DatabaseSync) => {
+/**
+ * Pierwsza noc, której strona już nie pokazuje (dzień po dacie „ceny do” albo dziś + horyzont).
+ * Dla domku: data ustawiona dla jego typu (units.horizon_until) → dla obiektu (properties.horizon_until) → ogólna.
+ */
+export const horizonEnd = (db: DatabaseSync, unitId?: number) => {
+  if (unitId) {
+    const own = db.prepare('SELECT u.horizon_until AS unit, p.horizon_until AS property FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?')
+      .get(unitId) as { unit: string | null; property: string | null } | undefined;
+    const until = own?.unit || own?.property;
+    if (until && /^\d{4}-\d{2}-\d{2}$/.test(until)) return addDays(until, 1);
+  }
   const until = horizonUntil(db);
   return until ? addDays(until, 1) : addDays(warsawToday(), bookingHorizon(db));
 };
@@ -174,29 +184,59 @@ export type RequestRow = {
 // ---------------------------------------------------------------------------
 // Opcje płatne (parking, zwierzę…): cena za pobyt albo za noc, ilość od 1 do max_qty, dla wszystkich lub wybranych obiektów
 // ---------------------------------------------------------------------------
-export type Extra = { id: number; name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: string | null; active: number; sort: number };
-/** Zapis w zapytaniu: kopia nazwy i ceny z chwili wysłania (późniejsza zmiana cennika nie zmienia zapytania). */
-export type ChosenExtra = { id: number; name: string; name_en: string; price: number; per: 'stay' | 'night'; qty: number; total: number };
+export type Extra = {
+  id: number; name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number;
+  property_ids: string | null; active: number; sort: number;
+  required: number; // obowiązkowa (np. sprzątanie) — zawsze doliczana, gość nie może jej odznaczyć
+  price_overrides: string | null; // inne ceny: {"p<id obiektu>": cena, "u<id domku>": cena}
+};
+/** Zapis w zapytaniu / rezerwacji: kopia nazwy i ceny z chwili wyboru (późniejsza zmiana cennika nie zmienia rezerwacji). */
+export type ChosenExtra = { id: number; name: string; name_en: string; price: number; per: 'stay' | 'night'; qty: number; total: number; required?: boolean };
 
-export function extrasFor(db: DatabaseSync, propertyId: number, onlyActive = true): Extra[] {
-  const rows = db.prepare(`SELECT * FROM extras ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY sort, id`).all() as Extra[];
-  return rows.filter((e) => {
-    if (!e.property_ids) return true;
-    try { return (JSON.parse(e.property_ids) as number[]).includes(propertyId); } catch { return true; }
-  });
+const overrides = (e: Extra): Record<string, number> => {
+  try { return e.price_overrides ? JSON.parse(e.price_overrides) : {}; } catch { return {}; }
+};
+const inScope = (e: Extra, propertyId: number) => {
+  if (!e.property_ids) return true;
+  try { return (JSON.parse(e.property_ids) as number[]).includes(propertyId); } catch { return true; }
+};
+/** Cena opcji: dla domku (jego typu) → dla obiektu → podstawowa */
+export function extraPrice(e: Extra, propertyId: number, unitId?: number) {
+  const o = overrides(e);
+  const v = (unitId != null ? o[`u${unitId}`] : undefined) ?? o[`p${propertyId}`];
+  return typeof v === 'number' && v >= 0 ? v : e.price;
 }
 
-/** Wybór gościa [{id, qty}] → pozycje z ceną; nieznane / nieaktywne / ilość 0 są pomijane. */
-export function priceExtras(db: DatabaseSync, propertyId: number, chosen: unknown, nightsCount: number): ChosenExtra[] {
-  if (!Array.isArray(chosen)) return [];
-  const available = new Map(extrasFor(db, propertyId).map((e) => [e.id, e]));
+export function extrasFor(db: DatabaseSync, propertyId: number, onlyActive = true, unitId?: number): Extra[] {
+  const rows = db.prepare(`SELECT * FROM extras ${onlyActive ? 'WHERE active = 1' : ''} ORDER BY required DESC, sort, id`).all() as Extra[];
+  return rows.filter((e) => inScope(e, propertyId)).map((e) => ({ ...e, price: extraPrice(e, propertyId, unitId) }));
+}
+/** Opcje dla konkretnego domku (z ceną dla jego typu / obiektu) */
+export function extrasForUnit(db: DatabaseSync, unitId: number, onlyActive = true): Extra[] {
+  const u = db.prepare('SELECT property_id FROM units WHERE id = ?').get(unitId) as { property_id: number } | undefined;
+  return u ? extrasFor(db, u.property_id, onlyActive, unitId) : [];
+}
+
+/**
+ * Wybór [{id, qty}] → pozycje z ceną dla domku; nieznane / nieaktywne / ilość 0 są pomijane.
+ * Opcje obowiązkowe są zawsze doliczane (co najmniej 1 szt.).
+ */
+export function priceExtras(db: DatabaseSync, unitId: number, chosen: unknown, nightsCount: number, o: { withRequired?: boolean; onlyActive?: boolean } = {}): ChosenExtra[] {
+  const list = Array.isArray(chosen) ? chosen.slice(0, 30) : [];
+  const available = extrasForUnit(db, unitId, o.onlyActive ?? true);
+  const byId = new Map(available.map((e) => [e.id, e]));
   const out: ChosenExtra[] = [];
-  for (const c of chosen.slice(0, 30)) {
-    const e = available.get(Number((c as { id?: unknown })?.id));
-    const qty = Math.min(e?.max_qty ?? 0, Math.max(0, Math.trunc(Number((c as { qty?: unknown })?.qty ?? 1)) || 0));
-    if (!e || !qty || out.some((x) => x.id === e.id)) continue;
-    out.push({ id: e.id, name: e.name, name_en: e.name_en, price: e.price, per: e.per, qty, total: e.price * qty * (e.per === 'night' ? nightsCount : 1) });
+  const add = (e: Extra, qtyRaw: unknown) => {
+    let qty = Math.min(e.max_qty, Math.max(0, Math.trunc(Number(qtyRaw ?? 1)) || 0));
+    if (e.required && (o.withRequired ?? true)) qty = Math.max(1, qty);
+    if (!qty || out.some((x) => x.id === e.id)) return;
+    out.push({ id: e.id, name: e.name, name_en: e.name_en, price: e.price, per: e.per, qty, total: e.price * qty * (e.per === 'night' ? nightsCount : 1), ...(e.required ? { required: true } : {}) });
+  };
+  for (const c of list) {
+    const e = byId.get(Number((c as { id?: unknown })?.id));
+    if (e) add(e, (c as { qty?: unknown })?.qty);
   }
+  if (o.withRequired ?? true) for (const e of available) if (e.required) add(e, 1);
   return out;
 }
 
@@ -274,8 +314,9 @@ export const TXT = {
 };
 const txt = (r: RequestRow) => TXT[mailLang(r.lang)];
 
+/** „sob., 31/10/2026” / „Sat, 31/10/2026” — data zawsze DD/MM/RRRR */
 export const longDate = (iso: string, locale: string) =>
-  new Date(`${iso}T12:00:00Z`).toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  `${new Date(`${iso}T12:00:00Z`).toLocaleDateString(locale, { weekday: 'short', timeZone: 'UTC' })}, ${dmy(iso)}`;
 
 function stayRows(db: DatabaseSync, r: RequestRow, price: number | null, t = TXT.pl, priceLabel = t.price): MailRow[] {
   const u = unitInfo(db, r.unit_id);

@@ -2,6 +2,7 @@ import { zipSync, strToU8 } from 'fflate';
 import { photoUrl, type Lang, type ListingData, type ListingObject, type ListingPhoto, type Portal } from './data';
 import { loadPhoto, photoJpeg, posterJpeg, type PosterContent } from './render';
 import { descriptions, titles, type TextOpts } from './texts';
+import { dmy, today } from '../dates';
 
 // Paczka ZIP dla portalu: zdjęcia w formacie portalu (01, 02…), plakat z adresem strony, opisy, tytuły i instrukcja.
 
@@ -56,7 +57,7 @@ export async function addPortal(files: Files, dir: string, p: PackInput, progres
 
   const readme = [
     `${o.name[lang]} — ${portal.label}`,
-    `Przygotowano w kalendarzu ${new Date().toLocaleDateString('pl-PL')}`,
+    `Przygotowano w kalendarzu ${dmy(today())}`,
     '',
     'JAK WSTAWIĆ',
     ...portal.tips.map((t) => `- ${t}`),

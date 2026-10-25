@@ -5,11 +5,13 @@ export type Unit = {
   weekday_prices: string | null; // JSON: 7 cen od niedzieli, null = cena podstawowa
   type_name: string; // typ na stronie (np. „Mały domek”) — takie same domki rezerwowane razem
   type_name_en: string; // ten sam typ po angielsku (np. „Small cottage”)
+  horizon_until: string | null; // „ceny na stronie do” dla typu domku (null = jak obiekt / ogólnie)
 };
 export type Property = {
   id: number; name: string; location: string; address: string; sort: number; units: Unit[];
   // zamknięcie obiektu: bez dat = do odwołania
   closed: number; closed_from: string | null; closed_to: string | null; closed_note: string; closed_note_en: string;
+  horizon_until: string | null; // „ceny na stronie do” dla obiektu (null = ogólne ustawienie)
 };
 export type Status = 'confirmed' | 'tentative' | 'cancelled';
 
@@ -38,6 +40,7 @@ export type Reservation = {
   deposit: number | null; // zaliczka
   deposit_due: string | null; // termin wpłaty zaliczki
   currency: string; // PLN, EUR, GBP…
+  extras?: string | null; // JSON ChosenExtra[] — opcje płatne (sprzątanie, parking…), wliczone w cenę
 };
 
 export type Draft = Omit<Reservation, 'id' | 'feed_id' | 'external_uid' | 'external_summary'> & { id?: number; feed_id?: number | null; external_summary?: string | null };
@@ -80,8 +83,12 @@ export type BookingRequest = {
 export type Extra = {
   id: number; name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number;
   property_ids: string | null; active: number; sort: number;
+  required: number; // obowiązkowa (np. sprzątanie)
+  price_overrides: string | null; // JSON {"p<id obiektu>": cena, "u<id domku>": cena}
 };
-export type ChosenExtra = { id: number; name: string; price: number; per: 'stay' | 'night'; qty: number; total: number };
+export type ChosenExtra = { id: number; name: string; name_en?: string; price: number; per: 'stay' | 'night'; qty: number; total: number; required?: boolean };
+/** Opcja do formularza rezerwacji: cena dla wybranego domku */
+export type UnitExtra = { id: number; name: string; name_en: string; price: number; per: 'stay' | 'night'; max_qty: number; required: boolean; active: boolean };
 
 /** Oferta cenowa: gość akceptuje cenę z obowiązkiem zapłaty linkiem z e-maila. */
 export type Offer = {

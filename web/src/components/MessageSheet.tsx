@@ -4,6 +4,7 @@ import type { MessageKind, Reservation } from '../types';
 import { today } from '../dates';
 import NumInput from './NumInput';
 import { GUEST_LANGS, currencySymbol, guestLang, type GuestLang } from '../money';
+import DateInput from './DateInput';
 
 export const MESSAGE_LABELS: Record<MessageKind, string> = {
   deposit: 'Prośba o zaliczkę',
@@ -165,7 +166,7 @@ export default function MessageSheet({ reservation: r, initialKind, onClose, onS
                 {(payment || kind === 'received') && (
                   <>
                     <label>{kind === 'received' ? 'Otrzymana kwota' : 'Kwota'} ({currencySymbol(r.currency)})<NumInput value={amount} onChange={setAmount} /></label>
-                    {payment && <label>Termin wpłaty<input type="date" value={due} min={today()} onChange={(e) => setDue(e.target.value)} /></label>}
+                    {payment && <label>Termin wpłaty<DateInput value={due} min={today()} onChange={(v) => setDue(v)} /></label>}
                   </>
                 )}
                 {payment && (
