@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { api, type Session } from './api';
 import type { Draft, Property, Reservation } from './types';
 import { addDays, today } from './dates';
@@ -16,6 +16,8 @@ import { MailLinkContext, type MailIntent } from './components/EmailLink';
 import ConflictMark from './components/ConflictMark';
 import Requests from './components/Requests';
 import { conflictIds } from './conflicts';
+
+const ListingsPage = lazy(() => import('./components/ListingsPage')); // zdjęcia, plakat i ZIP — wczytywane tylko na tej stronie
 
 type Tab = 'calendar' | 'agenda' | 'requests' | 'mail' | 'settings';
 
@@ -72,10 +74,10 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const readOnly = user.role === 'viewer';
   const limited = user.properties !== null;
   // Podstrona „Użytkownicy i uprawnienia” (z obsługą przycisku Wstecz / gestu cofania na iPhonie)
-  type Page = 'main' | 'users' | 'pricing' | 'payments';
+  type Page = 'main' | 'users' | 'pricing' | 'payments' | 'listings';
   const [page, setPage] = useState<Page>('main');
   useEffect(() => {
-    const onPop = () => setPage(['users', 'pricing', 'payments'].includes(history.state?.page) ? history.state.page : 'main');
+    const onPop = () => setPage(['users', 'pricing', 'payments', 'listings'].includes(history.state?.page) ? history.state.page : 'main');
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -220,8 +222,9 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
         {page === 'payments' && <PaymentsPage canEdit={user.canManageUsers} onBack={closeUsers} />}
+        {page === 'listings' && <Suspense fallback={<p className="muted">Wczytywanie…</p>}><ListingsPage properties={properties} onBack={closeUsers} /></Suspense>}
         {page === 'pricing' && <PricingPage properties={properties} canEditHorizon={user.canManageUsers} onBack={closeUsers} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
-        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onOpenPayments={() => openPage('payments')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onOpenPayments={() => openPage('payments')} onOpenListings={() => openPage('listings')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">

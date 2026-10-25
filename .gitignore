@@ -9,3 +9,4 @@ data/
 .wrangler/
 .env.local
 *.tsbuildinfo
+.env.*.local
