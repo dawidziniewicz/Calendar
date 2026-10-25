@@ -526,9 +526,9 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .request-facts dt { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 650; }
 .request-facts dd { margin: 2px 0 0; font-weight: 650; font-size: 0.93rem; }
 .request-message { white-space: pre-wrap; margin: 0 0 12px; padding: 10px 12px; background: color-mix(in srgb, var(--sand) 18%, var(--surface)); border-radius: 10px; font-size: 0.93rem; }
-.request-note { margin: 6px 0 0; font-size: 0.88rem; color: var(--muted); font-style: italic; }
-.request-contact { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.request-contact .btn { color: var(--primary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.request-note { margin: 8px 0 12px; font-size: 0.88rem; line-height: 1.45; color: var(--muted); font-style: italic; }
+.request-contact { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.request-contact .btn { color: var(--primary); max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; height: auto; min-height: 38px; padding: 7px 12px; line-height: 1.3; }
 .request-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .request-actions .btn { flex: 1 1 140px; min-height: 44px; }
 .decision { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
@@ -743,3 +743,25 @@ fieldset.plain { padding: 0; background: none; margin-bottom: 12px; }
 .preview-btn { align-self: flex-start; }
 .mail-preview-box { display: flex; flex-direction: column; gap: 6px; }
 .mail-preview-box .mail-preview { height: 60vh; }
+.note-phrases { flex-wrap: wrap; }
+
+/* ---- Odstępy: podpisy, numery telefonów i przyciski nie stykają się ---- */
+input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-bottom: 14px; }
+.unit-row:last-of-type { border-bottom: 1px solid var(--line); }
+.unit-row + .row { margin-top: 14px; }
+.chips { padding-bottom: 6px; }
+.request-message + .request-contact, .request-extras + .request-contact { margin-top: 0; }
+.request-actions { margin-top: 4px; }
+.decided-details .request-facts { margin-top: 0; }
+.decided-details .offer-status { margin-bottom: 12px; }
+.decided-details .small-note { margin-top: 10px; }
+.contact-actions { gap: 10px; }
+.contact span small { display: block; margin-bottom: 2px; }
+.history-row > span, .history-item > span { line-height: 1.35; }
+.history-actions { gap: 12px; }
+.offer-status > span, .offer-status > b { line-height: 1.35; }
+.offer-links { gap: 14px; }
+.sig-row-actions { flex-wrap: wrap; gap: 12px; }
+.invoice-buttons { margin-bottom: 4px; }
+.send-row { flex-wrap: wrap; }
+.check-row { line-height: 1.35; }

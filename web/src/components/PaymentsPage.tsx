@@ -4,6 +4,7 @@ import type { ForeignAccount, InvoiceListItem, InvoiceTemplate, PaymentSettings 
 import { formatShort } from '../dates';
 import InvoiceSheet from './InvoiceSheet';
 import NumInput from './NumInput';
+import NotePhrases from './NotePhrases';
 
 import { CURRENCIES, fmt } from '../money';
 
@@ -141,7 +142,8 @@ export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; 
                 <div className="sig-row-actions"><button type="button" className="link danger-link" onClick={() => t('seller_signature', '')}>Usuń podpis z szablonu</button></div>
               </div>
             )}
-            <label className="full">Dopisek pod pozycjami<textarea rows={2} value={tpl.note} onChange={(e) => t('note', e.target.value)} placeholder="np. Sprzedawca zwolniony z VAT na podstawie art. 113 ust. 1 ustawy o VAT" /></label>
+            <label className="full">Dopisek pod pozycjami<textarea rows={2} value={tpl.note} onChange={(e) => t('note', e.target.value)} placeholder="np. informacja o zwolnieniu z VAT" /></label>
+            <NotePhrases note={tpl.note} onChange={(v) => t('note', v)} />
             <label className="full">Stopka (dół strony)<textarea rows={2} value={tpl.footer ?? tpl.auto_footer} onChange={(e) => t('footer', e.target.value)} placeholder="puste = bez stopki" /></label>
           </fieldset>
           <button className="btn primary" onClick={saveTemplate}>Zapisz szablon</button>
