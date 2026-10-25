@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Stepper from './Stepper';
 import { api, type EmailSettings, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
@@ -201,7 +202,7 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
         <div className="unit-details">
           <div className="row">
             <label>Nazwa<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-            <label className="narrow">Osób<input type="number" min={0} value={form.capacity} onChange={(e) => setForm({ ...form, capacity: Number(e.target.value) })} /></label>
+            <div className="field stepper-field">Osób<Stepper label="Liczba osób" min={0} max={99} value={form.capacity} onChange={(n) => setForm({ ...form, capacity: n })} /></div>
             <label className="narrow">Kolor<input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></label>
           </div>
           {dirty && <button className="btn primary small" onClick={() => run(() => api.updateUnit(u.id, form))}>Zapisz zmiany</button>}

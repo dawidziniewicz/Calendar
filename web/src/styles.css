@@ -765,3 +765,6 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 .invoice-buttons { margin-bottom: 4px; }
 .send-row { flex-wrap: wrap; }
 .check-row { line-height: 1.35; }
+/* pola liczbowe ze strzałkami w wierszach formularzy */
+.row > .field.stepper-field { flex: 0 0 150px; min-width: 150px; }
+.stepper-field .stepper { width: 100%; }
