@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import Stepper from './Stepper';
 import { api, type ExtraInput } from '../api';
 import type { Extra, Property } from '../types';
 
@@ -97,7 +98,7 @@ function ExtraForm({ properties, initial, onSave, onCancel, onDelete }: {
             <option value="night">każdą noc</option>
           </select>
         </label>
-        <label className="narrow">Maks. szt.<input type="number" min={1} max={20} value={v.max_qty} onChange={(e) => set({ max_qty: Math.max(1, Number(e.target.value) || 1) })} /></label>
+        <div className="field stepper-field">Maks. szt.<Stepper label="Maksymalna liczba sztuk" min={1} max={20} value={v.max_qty} onChange={(n) => set({ max_qty: n })} /></div>
       </div>
       <label>Opis dla gościa (opcjonalnie)<input maxLength={300} placeholder="np. miejsce pod zadaszeniem przy domku" value={v.description} onChange={(e) => set({ description: e.target.value })} /></label>
       <div className="field">

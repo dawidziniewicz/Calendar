@@ -4,6 +4,7 @@ import type { Invoice, InvoiceData, InvoiceItem } from '../types';
 import PdfPreview from './PdfPreview';
 import NumInput from './NumInput';
 import SignaturePad from './SignaturePad';
+import NotePhrases from './NotePhrases';
 import { CURRENCIES, currencySymbol, fmt } from '../money';
 import { useWide } from './useWide';
 
@@ -274,7 +275,8 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
 
               <fieldset>
                 <legend>Dopisek i stopka</legend>
-                <label className="full">Dopisek pod pozycjami<textarea rows={2} value={inv.note} onChange={(e) => set('note', e.target.value)} placeholder="np. Sprzedawca zwolniony z VAT na podstawie art. 113 ust. 1 ustawy o VAT" /></label>
+                <label className="full">Dopisek pod pozycjami<textarea rows={2} value={inv.note} onChange={(e) => set('note', e.target.value)} placeholder="np. informacja o zwolnieniu z VAT" /></label>
+                <NotePhrases note={inv.note} onChange={(v) => set('note', v)} />
                 <label className="full">Stopka (dół strony)<textarea rows={2} value={inv.footer} onChange={(e) => set('footer', e.target.value)} placeholder="puste = bez stopki" /></label>
               </fieldset>
 

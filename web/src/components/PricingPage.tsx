@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import Stepper from './Stepper';
 import { api } from '../api';
 import type { Property, Rate, Unit } from '../types';
 import { type BookingSettings } from '../api';
@@ -382,7 +383,7 @@ function UnitPricingCard({ units, typeName, rates: allRates, onSaved, onAddDays,
       )}
       <div className="row">
         <label>Cena podstawowa za noc (zł)<input inputMode="decimal" placeholder="np. 300" value={base} onChange={(e) => setBase(e.target.value)} /></label>
-        <label className="narrow">Min. nocy<input type="number" min={1} max={60} value={minNights} onChange={(e) => setMinNights(Math.max(1, Number(e.target.value) || 1))} /></label>
+        <div className="field stepper-field">Min. nocy<Stepper label="Minimalna liczba nocy" min={1} max={60} value={minNights} onChange={setMinNights} /></div>
       </div>
 
       <div className="weekday-head">
