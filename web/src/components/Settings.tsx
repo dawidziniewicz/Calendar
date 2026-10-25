@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import Stepper from './Stepper';
-import { api, type EmailSettings, type SyncResult } from '../api';
+import { api, type EmailSettings, type MailSummary, type SyncResult } from '../api';
 import type { Property, Unit } from '../types';
 import { SOURCES } from '../types';
 import Notifications from './Notifications';
@@ -120,6 +120,7 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
       <button className="add-property" onClick={addProperty}>＋ Dodaj obiekt</button>
 
       {canManageUsers && <EmailPanel />}
+      {canManageUsers && <MailPanel />}
       {canManageUsers && (
         <button type="button" className="panel nav-panel" onClick={onOpenUsers}>
           <span>
@@ -302,6 +303,47 @@ function EmailPanel() {
         ))}
       </div>
       <p className="muted small-note">Powiadomienia push w aplikacji działają niezależnie od e-maili. Odpowiedzi do gości (akceptacja, oferta, wiadomości) wysyłasz sam — tam zawsze możesz odznaczyć e-mail.</p>
+      {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
+    </div>
+  );
+}
+
+// Poczta w aplikacji: adresy skrzynek, dokąd trafiają odpowiedzi gości, czy odbiór działa
+function MailPanel() {
+  const [s, setS] = useState<MailSummary | null>(null);
+  const [boxes, setBoxes] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => { api.mailSummary().then((x) => { setS(x); setBoxes(x.mailboxes.join(', ')); }).catch(() => {}); }, []);
+  if (!s?.allowed) return null;
+  const save = async (patch: { mailboxes?: string[]; reply_to?: string }) => {
+    setMsg(null);
+    try { const x = await api.saveMailSettings(patch); setS(x); setBoxes(x.mailboxes.join(', ')); setMsg({ ok: true, text: 'Zapisano.' }); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+  };
+  const list = boxes.split(/[\s,;]+/).filter(Boolean);
+  return (
+    <div className="panel">
+      <h2>Poczta</h2>
+      <p className="muted notif-desc">
+        Wiadomości na te adresy trafiają do zakładki <b>Poczta</b>, a z niej możesz odpowiadać i pisać z wybranego adresu.
+        {s.last_inbound
+          ? <> Odbiór działa — ostatnia wiadomość: <b>{new Date(`${s.last_inbound.replace(' ', 'T')}Z`).toLocaleString('pl-PL', { dateStyle: 'medium', timeStyle: 'short' })}</b>.</>
+          : <> <b>Odbiór nie jest jeszcze włączony</b> — w Cloudflare ustaw reguły Email Routing tych adresów na Workera „kalendarz-poczta” (instrukcja w README kalendarza).</>}
+      </p>
+      <label>Adresy skrzynek
+        <input value={boxes} onChange={(e) => setBoxes(e.target.value)} placeholder="rezerwacje@odmorzadogor.pl, kontakt@odmorzadogor.pl" />
+      </label>
+      {boxes !== s.mailboxes.join(', ') && <button className="btn primary small" style={{ marginTop: 8 }} onClick={() => save({ mailboxes: list })}>Zapisz adresy</button>}
+      <h3 className="assign-title">Odpowiedzi gości na e-maile z kalendarza trafiają</h3>
+      <div className="segmented">
+        {([
+          ['auto', 'Automatycznie — do Poczty, gdy odbiór działa'],
+          ['inbox', 'Zawsze do Poczty (rezerwacje@)'],
+          ['admin', 'Na mój adres z „Powiadomień e-mail”'],
+        ] as const).map(([k, label]) => (
+          <button key={k} type="button" className={`chip ${s.reply_to === k ? 'active' : ''}`} onClick={() => save({ reply_to: k })}>{label}</button>
+        ))}
+      </div>
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
     </div>
   );

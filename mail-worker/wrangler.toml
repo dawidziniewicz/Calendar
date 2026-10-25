@@ -1,0 +1,9 @@
+# Email Worker odbierający pocztę dla kalendarza (zobacz README → „Poczta w aplikacji”).
+# Sekrety ustawiasz raz w Cloudflare (Workers & Pages → kalendarz-poczta → Settings → Variables and Secrets):
+# API_ORIGIN, API_KEY, opcjonalnie CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET, FORWARD_TO.
+name = "kalendarz-poczta"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+# nie nadpisuj zmiennych ustawionych w panelu Cloudflare przy wdrażaniu
+keep_vars = true
+workers_dev = false

@@ -6,7 +6,14 @@ import { dirname, join } from 'node:path';
 // Bez konfiguracji e-maile są wyłączone — zapytania i tak trafiają do aplikacji (powiadomienia push).
 
 export type Attachment = { filename: string; content: Buffer; contentType?: string };
-export type Mail = { to: string[]; subject: string; html: string; text: string; replyTo?: string; attachments?: Attachment[] };
+export type Mail = {
+  to: string[]; subject: string; html: string; text: string; replyTo?: string; attachments?: Attachment[];
+  cc?: string[];
+  from?: string; // nadawca inny niż domyślny (np. „Od Morza do Gór <kontakt@odmorzadogor.pl>”) — ta sama domena
+  headers?: Record<string, string>; // np. In-Reply-To / References przy odpowiedzi
+  messageId?: string;
+  sentBy?: string; // kto wysłał z aplikacji (do historii w Poczcie)
+};
 export type Mailer = { send: (m: Mail) => Promise<void>; from: string; kind: 'resend' | 'smtp' | 'log' };
 
 export function createMailer(env: NodeJS.ProcessEnv = process.env): Mailer | undefined {
@@ -21,7 +28,8 @@ export function createMailer(env: NodeJS.ProcessEnv = process.env): Mailer | und
           method: 'POST',
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from, to: m.to, subject: m.subject, html: m.html, text: m.text, reply_to: m.replyTo,
+            from: m.from ?? from, to: m.to, cc: m.cc, subject: m.subject, html: m.html, text: m.text, reply_to: m.replyTo,
+            headers: { ...(m.headers ?? {}), ...(m.messageId ? { 'Message-ID': m.messageId } : {}) },
             attachments: m.attachments?.map((a) => ({ filename: a.filename, content: a.content.toString('base64') })),
           }),
           signal: AbortSignal.timeout(20_000),
@@ -42,7 +50,7 @@ export function createMailer(env: NodeJS.ProcessEnv = process.env): Mailer | und
       from,
       kind: 'smtp',
       send: async (m) => {
-        await transport.sendMail({ from, to: m.to, subject: m.subject, html: m.html, text: m.text, replyTo: m.replyTo, attachments: m.attachments });
+        await transport.sendMail({ from: m.from ?? from, to: m.to, cc: m.cc, subject: m.subject, html: m.html, text: m.text, replyTo: m.replyTo, attachments: m.attachments, headers: m.headers, messageId: m.messageId });
       },
     };
   }

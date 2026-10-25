@@ -11,11 +11,12 @@ import ReservationView from './components/ReservationView';
 import UsersPage from './components/UsersPage';
 import PricingPage from './components/PricingPage';
 import PaymentsPage from './components/PaymentsPage';
+import Mail from './components/Mail';
 import ConflictMark from './components/ConflictMark';
 import Requests from './components/Requests';
 import { conflictIds } from './conflicts';
 
-type Tab = 'calendar' | 'agenda' | 'requests' | 'settings';
+type Tab = 'calendar' | 'agenda' | 'requests' | 'mail' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'calendar', label: 'Kalendarz', icon: 'M4 6h16M4 6v13a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V6M4 6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1M8 3v4m8-4v4M4 10h16' },
@@ -24,6 +25,9 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'settings', label: 'Ustawienia i obiekty', icon: 'M3 11 12 4l9 7M5 10v10h14V10M10 20v-6h4v6' },
 ];
 // Konto „tylko podgląd” zamiast Obiektów widzi tylko ustawienia konta.
+// Poczta tylko dla administratora z dostępem do wszystkich obiektów (przed „Ustawieniami”)
+const MAIL_TAB = { id: 'mail' as Tab, label: 'Poczta', icon: 'M3 6h18v12H3zM3 6l9 7 9-7' };
+const ADMIN_TABS = [...TABS.slice(0, 3), MAIL_TAB, TABS[3]];
 const VIEWER_TABS = TABS.map((t) => (t.id === 'settings' ? { ...t, label: 'Konto', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m-7 8a7 7 0 0 1 14 0' } : t));
 // Konto ograniczone do wybranych obiektów nie zarządza obiektami — zakładka to same ustawienia.
 const LIMITED_TABS = TABS.map((t) => (t.id === 'settings' ? { ...t, label: 'Ustawienia' } : t));
@@ -77,11 +81,11 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const openPage = (p: Page) => { history.pushState({ page: p }, ''); setPage(p); window.scrollTo(0, 0); };
   const openUsers = () => openPage('users');
   const closeUsers = () => { if (history.state?.page && history.state.page !== 'main') history.back(); else setPage('main'); };
-  const tabs = readOnly ? VIEWER_TABS : limited ? LIMITED_TABS : TABS;
+  const tabs = readOnly ? VIEWER_TABS : limited ? LIMITED_TABS : user.canManageUsers ? ADMIN_TABS : TABS;
   const [tab, setTab] = useState<Tab>(() => {
     // Kliknięcie w powiadomienie otwiera /?tab=agenda
     const fromUrl = new URLSearchParams(location.search).get('tab') as Tab | null;
-    if (fromUrl && ['calendar', 'agenda', 'requests', 'settings'].includes(fromUrl)) {
+    if (fromUrl && ['calendar', 'agenda', 'requests', 'mail', 'settings'].includes(fromUrl)) {
       return fromUrl;
     }
     return (sessionStorageGet('tab') as Tab) || 'calendar';
@@ -94,6 +98,17 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const [conflictCount, setConflictCount] = useState(0);
   const [version, setVersion] = useState(0); // podbijane po zapisie — widoki przeładowują rezerwacje
   const [pendingRequests, setPendingRequests] = useState(0);
+  const [mailUnread, setMailUnread] = useState(0);
+  const [mailVersion, setMailVersion] = useState(0);
+  // Powiadomienie o wiadomości otwiera /?tab=mail&thread=12
+  const [focusThread] = useState(() => Number(new URLSearchParams(location.search).get('thread')) || null);
+  useEffect(() => {
+    if (!user.canManageUsers) return;
+    const load = () => api.mailSummary().then((s) => setMailUnread(s.unread)).catch(() => {});
+    load();
+    const t = setInterval(load, 60_000); // nowe wiadomości także bez odświeżania
+    return () => clearInterval(t);
+  }, [version, mailVersion, user.canManageUsers]);
   // Powiadomienie o zapytaniu otwiera /?tab=requests&request=12
   const [focusRequest] = useState(() => Number(new URLSearchParams(location.search).get('request')) || null);
   useEffect(() => {
@@ -163,6 +178,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
               {t.label}
               {t.id === 'agenda' && <TabBadges cancellations={cancellations.length} conflicts={conflictCount} />}
               {t.id === 'requests' && pendingRequests > 0 && <span className="tab-badges"><span className="tab-badge new">{pendingRequests}</span></span>}
+              {t.id === 'mail' && mailUnread > 0 && <span className="tab-badges"><span className="tab-badge new">{mailUnread}</span></span>}
             </button>
           ))}
         </nav>
@@ -186,6 +202,9 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         {page === 'main' && tab === 'requests' && (
           <Requests version={version} readOnly={readOnly} focusId={focusRequest} onChanged={() => setVersion((v) => v + 1)} onOpenReservation={setViewing} />
         )}
+        {page === 'main' && tab === 'mail' && (
+          <Mail version={version} focusThread={focusThread} onOpenReservation={setViewing} onUnreadChange={() => setMailVersion((v) => v + 1)} />
+        )}
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
         {page === 'payments' && <PaymentsPage canEdit={user.canManageUsers} onBack={closeUsers} />}
@@ -199,6 +218,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={t.icon} /></svg>
             {t.id === 'agenda' && <TabBadges cancellations={cancellations.length} conflicts={conflictCount} />}
             {t.id === 'requests' && pendingRequests > 0 && <span className="tab-badges"><span className="tab-badge new">{pendingRequests}</span></span>}
+            {t.id === 'mail' && mailUnread > 0 && <span className="tab-badges"><span className="tab-badge new">{mailUnread}</span></span>}
             <span>{t.label}</span>
           </button>
         ))}

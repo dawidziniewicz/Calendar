@@ -1,0 +1,38 @@
+name: Poczta → Cloudflare Email Worker
+
+# Wdraża mail-worker/ (odbiór poczty dla zakładki „Poczta”). Token CLOUDFLARE_API_TOKEN potrzebuje
+# uprawnienia „Workers Scripts: Edit” (oprócz „Cloudflare Pages: Edit”). Sekrety Workera ustawiasz raz w panelu Cloudflare.
+on:
+  push:
+    branches: [main]
+    paths: ['mail-worker/**', '.github/workflows/mail-worker.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: mail-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: mail-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mail-worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: mail-worker
+          command: deploy
