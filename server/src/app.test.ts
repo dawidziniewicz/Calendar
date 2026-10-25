@@ -682,15 +682,23 @@ test('ceny wg dni tygodnia, pierwszeństwo ceny na dzień i horyzont rezerwacji'
   await call('PUT', '/api/rates/unit/1', { base_price: 300, min_nights: 1, weekday_prices: [] });
   assert.equal((await (await call('GET', `/public/calendar?unit=1&from=${inDays(7)}&to=${inDays(14)}`)).json()).days.every((d: unknown[]) => d[1] === 300 || d[1] === 999), true);
 
-  // horyzont: domyślnie 365 dni, po zmianie na 30 kalendarz kończy się po 30 dniach, a dalsze zapytania są odrzucane
+  // horyzont: domyślnie 365 dni; po zmianie na 30 dalsze dni są widoczne (wolne/zajęte), ale bez ceny — zapytanie z ceną do ustalenia
   assert.equal((await (await call('GET', '/api/settings/booking')).json()).horizon_days, 365);
   assert.equal((await call('PUT', '/api/settings/booking', { horizon_days: 3 })).status, 400);
   assert.equal((await (await call('PUT', '/api/settings/booking', { horizon_days: 30 })).json()).horizon_days, 30);
   const short = await (await call('GET', `/public/calendar?unit=1&from=${inDays(0)}&to=${inDays(200)}`)).json();
-  assert.equal(short.to, inDays(30));
+  assert.equal(short.to, inDays(200));
+  assert.equal(short.prices_until, inDays(29));
+  const day = (d: string) => short.days.find((x: unknown[]) => x[0] === d);
+  assert.equal(day(inDays(29))[1], 300);
+  assert.equal(day(inDays(30))[1], null);
+  assert.equal(day(inDays(30))[3], 0, 'wolny, tylko bez ceny');
   const late = await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(40), check_out: inDays(42), name: 'Jan Nowak', phone: '600 100 200', email: 'jan@example.com', adults: 2, consent: true }, { 'x-client-ip': '3.3.3.3' });
-  assert.equal(late.status, 409);
-  assert.match((await late.json()).error, /30 dni/);
+  assert.equal(late.status, 201);
+  assert.equal((await late.json()).quoted_price, null);
+  // ponad 15 miesięcy — zapytania nie przyjmujemy
+  const tooLate = await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(470), check_out: inDays(472), name: 'Jan Nowak', phone: '600 100 200', email: 'jan@example.com', adults: 2, consent: true }, { 'x-client-ip': '3.3.3.4' });
+  assert.equal(tooLate.status, 409);
 });
 
 test('opcje płatne: admin ustawia, gość wybiera, cena dolicza się do wyceny i e-maili', async () => {
@@ -767,20 +775,21 @@ test('ceny na stronie do: osobno dla obiektu i typu domku', async () => {
   const { call, login } = setupWithMail();
   await login();
   for (const id of [1, 4]) await call('PUT', `/api/rates/unit/${id}`, { base_price: 300, min_nights: 1 });
-  const cal = async (unit: number) => (await (await call('GET', `/public/calendar?unit=${unit}&from=${inDays(0)}&to=${inDays(90)}`)).json()).to;
-  assert.equal(await cal(1), inDays(90));
-  // obiekt 1 (Jantar): ceny do dnia +20 → kalendarz kończy się dzień później
+  // ostatni dzień z ceną (dalsze dni są w kalendarzu, ale bez ceny)
+  const cal = async (unit: number) => (await (await call('GET', `/public/calendar?unit=${unit}&from=${inDays(0)}&to=${inDays(90)}`)).json()).days.filter((d: unknown[]) => d[1] != null).at(-1)[0];
+  assert.equal(await cal(1), inDays(89));
+  // obiekt 1 (Jantar): ceny do dnia +20
   assert.equal((await call('PUT', '/api/settings/horizon', { property_id: 1, until: inDays(20) })).status, 200);
-  assert.equal(await cal(1), inDays(21));
+  assert.equal(await cal(1), inDays(20));
   // typ domku (domek 4): do +40 — ma pierwszeństwo przed obiektem
   await call('PUT', '/api/settings/horizon', { unit_ids: [4], until: inDays(40) });
-  assert.equal(await cal(4), inDays(41));
-  assert.equal(await cal(1), inDays(21));
+  assert.equal(await cal(4), inDays(40));
+  assert.equal(await cal(1), inDays(20));
   const catalog = await (await call('GET', '/public/catalog')).json();
   assert.equal(catalog[0].units.find((u: { id: number }) => u.id === 4).prices_until, inDays(40));
   // null = jak ogólnie
   await call('PUT', '/api/settings/horizon', { property_id: 1, until: null });
-  assert.equal(await cal(1), inDays(90));
+  assert.equal(await cal(1), inDays(89));
   assert.equal((await call('PUT', '/api/settings/horizon', { property_id: 1, until: '2020-01-01' })).status, 400);
 });
 
@@ -1124,7 +1133,9 @@ test('typ domku z listy: dołączenie przejmuje ceny typu, zmiana nazwy dla wszy
   assert.equal(set.horizon_until, inDays(20));
   assert.equal(set.horizon_last, inDays(20));
   const cal = await (await call('GET', `/public/calendar?unit=1&from=${inDays(0)}&to=${inDays(60)}`)).json();
-  assert.equal(cal.days.at(-1)[0], inDays(20));
+  assert.equal(cal.prices_until, inDays(20));
+  assert.equal(cal.days.at(-1)[0], inDays(59));
+  assert.equal(cal.days.find((x: unknown[]) => x[0] === inDays(21))[1], null);
   // powrót do liczby dni
   const back = await (await call('PUT', '/api/settings/booking', { horizon_days: 90 })).json();
   assert.equal(back.horizon_until, null);

@@ -98,7 +98,7 @@ function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; prope
     try {
       const s = await api.saveBookingSettings(patch);
       apply(s);
-      setMsg({ ok: true, text: `Zapisano — strona pokazuje ceny i przyjmuje zapytania do ${withYear(s.horizon_last)} (ostatnia noc).` });
+      setMsg({ ok: true, text: `Zapisano — strona pokazuje ceny do ${withYear(s.horizon_last)} (ostatnia noc). Późniejsze wolne terminy są widoczne bez ceny — goście mogą o nie zapytać.` });
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     }
@@ -117,8 +117,8 @@ function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; prope
     <div className="panel">
       <h2>Do kiedy pokazywać ceny na stronie</h2>
       <p className="muted notif-desc">
-        Goście widzą ceny i mogą wysłać zapytanie do <b>{withYear(settings.horizon_last)}</b> (ostatnia noc)
-        {settings.horizon_until ? '.' : ` — zawsze ${settings.horizon_days} dni do przodu, data przesuwa się każdego dnia.`} Późniejsze dni są na stronie niedostępne.
+        Goście widzą ceny do <b>{withYear(settings.horizon_last)}</b> (ostatnia noc)
+        {settings.horizon_until ? '.' : ` — zawsze ${settings.horizon_days} dni do przodu, data przesuwa się każdego dnia.`} Późniejsze terminy są na stronie widoczne (wolne / zajęte), ale bez ceny — gość wysyła zapytanie, a cenę podajesz w odpowiedzi.
       </p>
       {canEdit ? (
         <>

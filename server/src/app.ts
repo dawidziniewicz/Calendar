@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasForUnit, extrasLines, parseChosenExtras, priceExtras, type ChosenExtra, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
+  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasForUnit, extrasLines, parseChosenExtras, priceExtras, type ChosenExtra, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, MAX_AHEAD_DAYS, pricedNights, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
 } from './booking.ts';
 import {
   composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
@@ -162,23 +162,24 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     let to = str(c.req.query('to'), 10);
     if (!DATE_RE.test(from) || from < today) from = today;
     if (!DATE_RE.test(to) || to <= from) to = addDays(from, 62);
-    if (nightsBetween(from, to) > 460) to = addDays(from, 460);
-    // dalej niż horyzont ustawiony w aplikacji strona nie pokazuje cen ani wolnych dni
-    const end = horizonEnd(db, unit.id);
-    if (to > end) to = end > from ? end : from;
+    if (nightsBetween(from, to) > MAX_AHEAD_DAYS) to = addDays(from, MAX_AHEAD_DAYS);
+    const last = addDays(today, MAX_AHEAD_DAYS);
+    if (to > last) to = last > from ? last : from;
+    // wolne i zajęte dni widać zawsze; po „ceny na stronie do” bez ceny (gość pyta o cenę)
+    const pricesUntil = addDays(horizonEnd(db, unit.id), -1);
     c.header('Cache-Control', 'no-store');
     if (group) {
       // dla każdego dnia: ceny i min. nocy każdego domku + maska zajętości (bit j = domek j zajęty/zamknięty)
-      const lists = group.map((u) => nights(db, u, from, to));
+      const lists = group.map((u) => pricedNights(db, u, from, to));
       return c.json({
-        unit_ids: group.map((u) => u.id), from, to, capacity: Math.min(...group.map((u) => u.capacity)),
+        unit_ids: group.map((u) => u.id), from, to, prices_until: pricesUntil, capacity: Math.min(...group.map((u) => u.capacity)),
         days: lists[0].map((n, i) => [n.date, lists.map((l) => l[i].price), lists.map((l) => l[i].min_nights),
           lists.reduce((mask, l, j) => mask | (l[i].booked || l[i].closed ? 1 << j : 0), 0)]),
       });
     }
-    const list = nights(db, unit, from, to);
+    const list = pricedNights(db, unit, from, to);
     return c.json({
-      unit_id: unit.id, from, to, capacity: unit.capacity,
+      unit_id: unit.id, from, to, prices_until: pricesUntil, capacity: unit.capacity,
       // zwięźle: [data, cena|null, min. nocy, 1 = zajęte/zamknięte]
       days: list.map((n) => [n.date, n.price, n.min_nights, n.booked || n.closed ? 1 : 0]),
     });
