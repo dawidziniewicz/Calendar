@@ -12,6 +12,7 @@ import UsersPage from './components/UsersPage';
 import PricingPage from './components/PricingPage';
 import PaymentsPage from './components/PaymentsPage';
 import Mail from './components/Mail';
+import { MailLinkContext, type MailIntent } from './components/EmailLink';
 import ConflictMark from './components/ConflictMark';
 import Requests from './components/Requests';
 import { conflictIds } from './conflicts';
@@ -100,6 +101,8 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const [pendingRequests, setPendingRequests] = useState(0);
   const [mailUnread, setMailUnread] = useState(0);
   const [mailVersion, setMailVersion] = useState(0);
+  // Kliknięcie w e-mail gościa → „Poczta w kalendarzu”: zakładka Poczta z nową wiadomością albo rozmową
+  const [mailIntent, setMailIntent] = useState<(MailIntent & { n: number }) | null>(null);
   // Powiadomienie o wiadomości otwiera /?tab=mail&thread=12
   const [focusThread] = useState(() => Number(new URLSearchParams(location.search).get('thread')) || null);
   useEffect(() => {
@@ -155,8 +158,16 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const selectTab = (t: Tab) => {
     if (page !== 'main') closeUsers();
     setTab(t);
+    setMailIntent(null);
     try { sessionStorage.setItem('tab', t); } catch { /* prywatny tryb */ }
   };
+
+  const openMail = (i: MailIntent) => {
+    setViewing(null);
+    selectTab('mail');
+    setMailIntent({ ...i, n: Date.now() });
+  };
+  const mailLinks = user.canManageUsers && !readOnly ? openMail : null;
 
   const units = properties.flatMap((p) => p.units);
   const openNew = (unitId?: number, date?: string) => {
@@ -166,6 +177,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const openExisting = (r: Reservation) => setViewing(r);
 
   return (
+    <MailLinkContext.Provider value={mailLinks}>
     <div className="app">
       <header className="topbar">
         <div className="brand">
@@ -203,7 +215,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
           <Requests version={version} readOnly={readOnly} focusId={focusRequest} onChanged={() => setVersion((v) => v + 1)} onOpenReservation={setViewing} />
         )}
         {page === 'main' && tab === 'mail' && (
-          <Mail version={version} focusThread={focusThread} onOpenReservation={setViewing} onUnreadChange={() => setMailVersion((v) => v + 1)} />
+          <Mail version={version} focusThread={focusThread} intent={mailIntent} onOpenReservation={setViewing} onUnreadChange={() => setMailVersion((v) => v + 1)} />
         )}
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
@@ -250,6 +262,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         />
       )}
     </div>
+    </MailLinkContext.Provider>
   );
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, type MailMessage, type MailSummary, type MailThread, type MailThreadDetail } from '../api';
 import type { Reservation } from '../types';
 import { formatShort } from '../dates';
+import type { MailIntent } from './EmailLink';
 
 // Poczta: wiadomości do rezerwacje@ / kontakt@ / contact@ (odbiór przez Cloudflare Email Worker), rozmowy,
 // odpowiedzi i nowe wiadomości z wybranego adresu, e-maile wysłane gościom z kalendarza.
@@ -17,8 +18,9 @@ const whenLong = (s: string) => sqlDate(s).toLocaleString('pl-PL', { dateStyle: 
 const local = (addr: string) => `${addr.split('@')[0]}@`;
 const kb = (n: number) => (n > 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1000))} kB`);
 
-export default function Mail({ version, focusThread, onOpenReservation, onUnreadChange }: {
-  version: number; focusThread: number | null; onOpenReservation: (r: Reservation) => void; onUnreadChange: () => void;
+export default function Mail({ version, focusThread, intent, onOpenReservation, onUnreadChange }: {
+  version: number; focusThread: number | null; intent?: (MailIntent & { n: number }) | null;
+  onOpenReservation: (r: Reservation) => void; onUnreadChange: () => void;
 }) {
   const [summary, setSummary] = useState<MailSummary | null>(null);
   const [box, setBox] = useState('');
@@ -26,7 +28,7 @@ export default function Mail({ version, focusThread, onOpenReservation, onUnread
   const [archived, setArchived] = useState(false);
   const [threads, setThreads] = useState<MailThread[] | null>(null);
   const [open, setOpen] = useState<number | null>(focusThread);
-  const [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useState<false | { to?: string; subject?: string }>(false);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
 
@@ -38,6 +40,12 @@ export default function Mail({ version, focusThread, onOpenReservation, onUnread
     return () => clearTimeout(t);
   }, [box, q, archived, version, reload]);
 
+  // Przyjście z adresu e-mail gościa (rezerwacja, zapytanie): od razu nowa wiadomość albo rozmowa
+  useEffect(() => {
+    if (!intent) return;
+    if (intent.thread) { setComposing(false); setOpen(intent.thread); } else if (intent.compose) { setOpen(null); setComposing(intent.compose); }
+  }, [intent]);
+
   const refresh = () => { setReload((v) => v + 1); onUnreadChange(); };
 
   return (
@@ -47,7 +55,7 @@ export default function Mail({ version, focusThread, onOpenReservation, onUnread
           <h1>Poczta</h1>
           <p className="muted">{summary?.mailboxes.join(' · ')}</p>
         </div>
-        <button className="btn primary" onClick={() => setComposing(true)} disabled={!summary?.sending}>＋ Nowa wiadomość</button>
+        <button className="btn primary" onClick={() => setComposing({})} disabled={!summary?.sending}>＋ Nowa wiadomość</button>
       </div>
       {summary && !summary.last_inbound && (
         <div className="banner info">
@@ -97,7 +105,7 @@ export default function Mail({ version, focusThread, onOpenReservation, onUnread
         <ThreadSheet id={open} summary={summary} onClose={() => { setOpen(null); refresh(); }} onChanged={refresh} onOpenReservation={onOpenReservation} />
       )}
       {composing && summary && (
-        <Compose summary={summary} onClose={() => setComposing(false)} onSent={(threadId) => { setComposing(false); refresh(); if (threadId) setOpen(threadId); }} />
+        <Compose summary={summary} initial={composing} onClose={() => setComposing(false)} onSent={(threadId) => { setComposing(false); refresh(); if (threadId) setOpen(threadId); }} />
       )}
     </section>
   );
@@ -257,11 +265,13 @@ function ThreadSheet({ id, summary, onClose, onChanged, onOpenReservation }: {
   );
 }
 
-function Compose({ summary, onClose, onSent }: { summary: MailSummary; onClose: () => void; onSent: (threadId: number | null) => void }) {
+function Compose({ summary, initial, onClose, onSent }: {
+  summary: MailSummary; initial: { to?: string; subject?: string }; onClose: () => void; onSent: (threadId: number | null) => void;
+}) {
   const [from, setFrom] = useState(summary.mailboxes[0] ?? '');
-  const [to, setTo] = useState('');
+  const [to, setTo] = useState(initial.to ?? '');
   const [cc, setCc] = useState('');
-  const [subject, setSubject] = useState('');
+  const [subject, setSubject] = useState(initial.subject ?? '');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

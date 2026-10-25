@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import EmailLink from './EmailLink';
 import { api, ApiError } from '../api';
 import type { BookingRequest, ChosenExtra, Reservation } from '../types';
 import { SOURCES } from '../types';
@@ -103,7 +104,7 @@ function CancelCard({ r, readOnly, focused, onDone }: { r: BookingRequest; readO
       {r.cancel_reason ? <p className="request-message">„{r.cancel_reason}”</p> : <p className="muted small-note">Gość nie podał powodu.</p>}
       <div className="request-contact">
         {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
-        <a className="btn small" href={`mailto:${r.guest_email}`}>{r.guest_email}</a>
+        <EmailLink className="btn small" email={r.guest_email}>{r.guest_email}</EmailLink>
       </div>
       {!readOnly && mode === 'idle' && (
         <div className="request-actions">
@@ -228,7 +229,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
 
       <div className="request-contact">
         {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
-        <a className="btn small" href={`mailto:${r.guest_email}`}>{r.guest_email}</a>
+        <EmailLink className="btn small" email={r.guest_email}>{r.guest_email}</EmailLink>
       </div>
 
       {offer && (
@@ -363,7 +364,7 @@ function DecidedCard({ r, focused, onOpenReservation }: { r: BookingRequest; foc
           {r.cancel_reason && <p className="request-note"><span className="muted">Powód anulacji od gościa:</span> „{r.cancel_reason}”</p>}
           <div className="request-contact">
             {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
-            <a className="btn small" href={`mailto:${r.guest_email}`}>{r.guest_email}</a>
+            <EmailLink className="btn small" email={r.guest_email}>{r.guest_email}</EmailLink>
           </div>
           {r.reservation_id && (
             <button type="button" className="btn primary open-res" onClick={openReservation}>Otwórz rezerwację w kalendarzu ›</button>
