@@ -149,12 +149,26 @@ export type Quote = { nights: number; total: number | null; min_nights: number; 
 const nightsEn = (n: number) => (n === 1 ? '1 night' : `${n} nights`);
 
 /** Wycena pobytu i sprawdzenie, czy termin można zarezerwować online. */
+/** Co po dacie „ceny do”: 'ask' = wolne bez ceny (zapytaj), 'closed' = niedostępne. Domek (typ) → obiekt → ogólnie. */
+export const HORIZON_AFTER_KEY = 'horizon_after';
+export type HorizonAfter = 'ask' | 'closed';
+export const readAfter = (v: unknown): HorizonAfter | null => (v === 'ask' || v === 'closed' ? v : null);
+export const horizonAfterGlobal = (db: DatabaseSync): HorizonAfter =>
+  readAfter((db.prepare('SELECT value FROM settings WHERE key = ?').get(HORIZON_AFTER_KEY) as { value: string } | undefined)?.value) ?? 'ask';
+export function horizonAfter(db: DatabaseSync, unitId: number): HorizonAfter {
+  const own = db.prepare('SELECT u.horizon_after AS unit, p.horizon_after AS property FROM units u JOIN properties p ON p.id = u.property_id WHERE u.id = ?')
+    .get(unitId) as { unit: string | null; property: string | null } | undefined;
+  return readAfter(own?.unit) ?? readAfter(own?.property) ?? horizonAfterGlobal(db);
+}
+
 /** Jak daleko do przodu strona pokazuje kalendarz i przyjmuje zapytania (ok. 15 miesięcy) */
 export const MAX_AHEAD_DAYS = 460;
 /** Noce z ceną tylko do „ceny na stronie do” (domek / typ / obiekt / ogólnie) — później termin jest wolny, ale bez ceny (na zapytanie) */
 export const pricedNights = (db: DatabaseSync, unit: UnitPricing, from: string, to: string) => {
   const end = horizonEnd(db, unit.id);
-  return nights(db, unit, from, to).map((n) => (n.date >= end ? { ...n, price: null } : n));
+  // po dacie „ceny do”: bez ceny (zapytaj) albo niedostępne — zależnie od ustawienia
+  const closed = horizonAfter(db, unit.id) === 'closed';
+  return nights(db, unit, from, to).map((n) => (n.date >= end ? { ...n, price: null, closed: n.closed || closed } : n));
 };
 
 export function quote(db: DatabaseSync, unit: UnitPricing, checkIn: string, checkOut: string, lang: Lang = 'pl'): Quote {

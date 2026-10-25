@@ -72,7 +72,8 @@ export type MessageInput = { kind: MessageKind; subject?: string; body?: string;
 export type MessageDraft = { lang: string; subject: string; body: string; amount: number | null; due: string | null; title: string; has_account: boolean; default_deposit: { amount: number | null; due: string | null } };
 
 export type PushSettings = { time: string; changes: boolean; requests: boolean; mail: boolean };
-export type BookingSettings = { horizon_days: number; horizon_until: string | null; horizon_last: string; default_days: number; assign_mode: 'auto' | 'manual' };
+export type HorizonAfter = 'ask' | 'closed';
+export type BookingSettings = { horizon_days: number; horizon_until: string | null; horizon_last: string; default_days: number; assign_mode: 'auto' | 'manual'; horizon_after: HorizonAfter };
 export type ExtraInput = {
   name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: number[] | null; active: boolean;
   required: boolean; price_overrides: Record<string, number> | null;
@@ -134,9 +135,9 @@ export const api = {
   saveExtra: (e: ExtraInput, id?: number) => (id ? request<Extra>('PUT', `/extras/${id}`, e) : request<Extra>('POST', '/extras', e)),
   deleteExtra: (id: number) => request('DELETE', `/extras/${id}`),
   unitExtras: (unitId: number) => request<UnitExtra[]>('GET', `/units/${unitId}/extras`),
-  setHorizon: (b: { property_id?: number; unit_ids?: number[]; until: string | null }) => request<{ ok: boolean }>('PUT', '/settings/horizon', b),
+  setHorizon: (b: { property_id?: number; unit_ids?: number[]; until?: string | null; after?: HorizonAfter | null }) => request<{ ok: boolean }>('PUT', '/settings/horizon', b),
   bookingSettings: () => request<BookingSettings>('GET', '/settings/booking'),
-  saveBookingSettings: (patch: Partial<Pick<BookingSettings, 'horizon_days' | 'horizon_until' | 'assign_mode'>>) => request<BookingSettings>('PUT', '/settings/booking', patch),
+  saveBookingSettings: (patch: Partial<Pick<BookingSettings, 'horizon_days' | 'horizon_until' | 'assign_mode' | 'horizon_after'>>) => request<BookingSettings>('PUT', '/settings/booking', patch),
   requests: (status: 'pending' | 'decided') => request<BookingRequest[]>('GET', `/requests?status=${status}`),
   acceptRequest: (id: number, body: { price?: number | null; note?: string; email?: boolean; force?: boolean; unit_id?: number; deposit?: number | null; deposit_due?: string | null }) =>
     request<{ request: BookingRequest; reservation: Reservation; emailed: boolean }>('POST', `/requests/${id}/accept`, body),

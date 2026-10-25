@@ -6,12 +6,14 @@ export type Unit = {
   type_name: string; // typ na stronie (np. „Mały domek”) — takie same domki rezerwowane razem
   type_name_en: string; // ten sam typ po angielsku (np. „Small cottage”)
   horizon_until: string | null; // „ceny na stronie do” dla typu domku (null = jak obiekt / ogólnie)
+  horizon_after: 'ask' | 'closed' | null; // po tej dacie: wolne bez ceny (zapytaj) / niedostępne; null = jak obiekt
 };
 export type Property = {
   id: number; name: string; location: string; address: string; sort: number; units: Unit[];
   // zamknięcie obiektu: bez dat = do odwołania
   closed: number; closed_from: string | null; closed_to: string | null; closed_note: string; closed_note_en: string;
   horizon_until: string | null; // „ceny na stronie do” dla obiektu (null = ogólne ustawienie)
+  horizon_after: 'ask' | 'closed' | null; // po tej dacie: wolne bez ceny (zapytaj) / niedostępne; null = jak ogólnie
 };
 export type Status = 'confirmed' | 'tentative' | 'cancelled';
 

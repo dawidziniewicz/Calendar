@@ -35,6 +35,19 @@ function migrate(db: DatabaseSync) {
   if (user_version < 18) migrateV18(db);
   if (user_version < 19) migrateV19(db);
   if (user_version < 20) migrateV20(db);
+  if (user_version < 21) migrateV21(db);
+}
+
+// Co strona pokazuje po dacie „ceny do”: 'ask' — dni wolne bez ceny (gość pyta), 'closed' — dni niedostępne (jak zajęte).
+// NULL = jak obiekt / ogólnie (ustawienie ogólne w settings: horizon_after).
+function migrateV21(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE properties ADD COLUMN horizon_after TEXT;
+    ALTER TABLE units ADD COLUMN horizon_after TEXT;
+    PRAGMA user_version = 21;
+    COMMIT;
+  `);
 }
 
 // Opcje płatne: obowiązkowe (np. sprzątanie) i inne ceny dla obiektu / typu domku ({"p3": 200, "u7": 150});

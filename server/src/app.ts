@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasForUnit, extrasLines, parseChosenExtras, priceExtras, type ChosenExtra, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, MAX_AHEAD_DAYS, pricedNights, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
+  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasForUnit, extrasLines, parseChosenExtras, priceExtras, type ChosenExtra, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, MAX_AHEAD_DAYS, pricedNights, HORIZON_AFTER_KEY, horizonAfterGlobal, readAfter, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
 } from './booking.ts';
 import {
   composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
@@ -1124,7 +1124,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   const ASSIGN_KEY = 'assign_mode';
   const assignMode = () => ((get('SELECT value FROM settings WHERE key = ?', ASSIGN_KEY) as { value: string } | undefined)?.value === 'manual' ? 'manual' : 'auto');
   const bookingSettings = () => ({
-    horizon_days: bookingHorizon(db), horizon_until: horizonUntil(db), horizon_last: addDays(horizonEnd(db), -1),
+    horizon_days: bookingHorizon(db), horizon_until: horizonUntil(db), horizon_last: addDays(horizonEnd(db), -1), horizon_after: horizonAfterGlobal(db),
     default_days: DEFAULT_HORIZON, assign_mode: assignMode(),
   });
   const setSetting = (key: string, value: string) => run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value);
@@ -1148,25 +1148,31 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       }
     }
     if (b.assign_mode !== undefined) setSetting(ASSIGN_KEY, b.assign_mode === 'manual' ? 'manual' : 'auto');
+    if (b.horizon_after !== undefined) setSetting(HORIZON_AFTER_KEY, readAfter(b.horizon_after) ?? 'ask');
     return c.json(bookingSettings());
   });
   // „Ceny na stronie do” dla obiektu albo typu domku (wszystkie domki typu naraz); null = jak ogólnie
   api.put('/settings/horizon', async (c) => {
     const user = c.get('user');
     const b = await c.req.json();
+    // until: data (null = jak wyżej); after: 'ask' | 'closed' | null (co po dacie) — zmieniane tylko pola podane w żądaniu
     const until = b.until ? str(b.until, 10) : null;
     if (until && (!DATE_RE.test(until) || until < warsawToday())) bad('Wybierz datę w przyszłości');
     if (until && nightsBetween(warsawToday(), until) > 1100) bad('Maksymalnie 3 lata do przodu');
+    const after = readAfter(b.after);
+    const sets = [...('until' in b ? ['horizon_until = ?'] : []), ...('after' in b ? ['horizon_after = ?'] : [])];
+    const vals = [...('until' in b ? [until] : []), ...('after' in b ? [after] : [])];
+    if (!sets.length) bad('Brak zmian');
     if (Array.isArray(b.unit_ids) && b.unit_ids.length) {
       const ids = (b.unit_ids as unknown[]).map(int).filter(Boolean).slice(0, 100);
       for (const id of ids) requireUnit(user, id);
-      for (const id of ids) run('UPDATE units SET horizon_until = ? WHERE id = ?', until, id);
+      for (const id of ids) run(`UPDATE units SET ${sets.join(', ')} WHERE id = ?`, ...vals, id);
     } else {
       const id = int(b.property_id);
       if (!get('SELECT 1 FROM properties WHERE id = ?', id)) bad('Wybierz obiekt');
       if (user.properties && !user.properties.includes(id)) throw new HTTPException(403, { message: 'Brak dostępu do tego obiektu' });
       if (user.role === 'viewer') throw new HTTPException(403, { message: 'Brak uprawnień' });
-      run('UPDATE properties SET horizon_until = ? WHERE id = ?', until, id);
+      run(`UPDATE properties SET ${sets.join(', ')} WHERE id = ?`, ...vals, id);
     }
     return c.json({ ok: true });
   });

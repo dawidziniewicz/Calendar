@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Stepper from './Stepper';
 import { api } from '../api';
 import type { Property, Rate, Unit } from '../types';
-import { type BookingSettings } from '../api';
+import { type BookingSettings, type HorizonAfter } from '../api';
 import { addDays, dmy, formatShort, nightsLabel, today } from '../dates';
 import { WEEKDAYS, groupUnits, weekdayPrices } from '../pricing';
 import PriceSheet from './PriceSheet';
@@ -103,6 +103,9 @@ function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; prope
       setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
     }
   };
+  const setAfter = async (a: HorizonAfter) => {
+    try { setSettings(await api.saveBookingSettings({ horizon_after: a })); } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+  };
   const setAssign = async (m: 'auto' | 'manual') => {
     try { setSettings(await api.saveBookingSettings({ assign_mode: m })); } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
   };
@@ -118,7 +121,7 @@ function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; prope
       <h2>Do kiedy pokazywać ceny na stronie</h2>
       <p className="muted notif-desc">
         Goście widzą ceny do <b>{withYear(settings.horizon_last)}</b> (ostatnia noc)
-        {settings.horizon_until ? '.' : ` — zawsze ${settings.horizon_days} dni do przodu, data przesuwa się każdego dnia.`} Późniejsze terminy są na stronie widoczne (wolne / zajęte), ale bez ceny — gość wysyła zapytanie, a cenę podajesz w odpowiedzi.
+        {settings.horizon_until ? '.' : ` — zawsze ${settings.horizon_days} dni do przodu, data przesuwa się każdego dnia.`} Co pokazać po tej dacie — wybierasz niżej.
       </p>
       {canEdit ? (
         <>
@@ -157,12 +160,18 @@ function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; prope
       ) : <p className="muted small-note">Zmienić to może administrator z dostępem do wszystkich obiektów.</p>}
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
 
+      <h3 className="assign-title">Po tej dacie na stronie</h3>
+      <div className="segmented">
+        <button type="button" disabled={!canEdit} className={`chip ${settings.horizon_after === 'ask' ? 'active' : ''}`} onClick={() => setAfter('ask')}>Wolne bez ceny — gość pyta o cenę (?)</button>
+        <button type="button" disabled={!canEdit} className={`chip ${settings.horizon_after === 'closed' ? 'active' : ''}`} onClick={() => setAfter('closed')}>Niedostępne — na czerwono jak zajęte</button>
+      </div>
+
       <h3 className="assign-title">Inna data dla obiektu lub typu domku</h3>
       <p className="muted notif-desc">
         Np. Sopot do końca roku, a Jantar tylko do końca wakacji. Puste pole = jak wyżej ({withYear(settings.horizon_last)}).
-        Data typu domku ma pierwszeństwo przed datą obiektu.
+        Obok wybierasz, co pokazać po tej dacie. Ustawienie typu domku ma pierwszeństwo przed obiektem.
       </p>
-      <HorizonOverrides properties={properties} fallback={settings.horizon_last} onSaved={reload} />
+      <HorizonOverrides properties={properties} fallback={settings.horizon_last} fallbackAfter={settings.horizon_after} onSaved={reload} />
 
       <h3 className="assign-title">Przydział domku przy akceptacji</h3>
       <p className="muted notif-desc">Dotyczy domków tego samego typu (np. 3 × Mały domek) — gość wybiera typ, a Ty decydujesz, do którego domku trafi.</p>
@@ -175,10 +184,21 @@ function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; prope
 }
 
 // „Ceny na stronie do” osobno dla obiektu i typu domku (cały typ naraz, jak cennik)
-function HorizonOverrides({ properties, fallback, onSaved }: { properties: Property[]; fallback: string; onSaved: () => void }) {
+const AFTER_LABEL: Record<HorizonAfter, string> = { ask: 'potem pytajniki', closed: 'potem niedostępne' };
+function AfterSelect({ value, inherited, inheritLabel, onChange }: { value: HorizonAfter | null; inherited: HorizonAfter; inheritLabel: string; onChange: (v: HorizonAfter | null) => void }) {
+  return (
+    <select className="after-select" aria-label="Co po tej dacie" value={value ?? ''} onChange={(e) => onChange((e.target.value || null) as HorizonAfter | null)}>
+      <option value="">{inheritLabel} ({AFTER_LABEL[inherited]})</option>
+      <option value="ask">Potem pytajniki (zapytaj o cenę)</option>
+      <option value="closed">Potem niedostępne (czerwone)</option>
+    </select>
+  );
+}
+
+function HorizonOverrides({ properties, fallback, fallbackAfter, onSaved }: { properties: Property[]; fallback: string; fallbackAfter: HorizonAfter; onSaved: () => void }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
-  const save = async (key: string, body: { property_id?: number; unit_ids?: number[]; until: string | null }) => {
+  const save = async (key: string, body: Parameters<typeof api.setHorizon>[0]) => {
     setBusy(key);
     setError('');
     try { await api.setHorizon(body); onSaved(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(''); }
@@ -197,6 +217,7 @@ function HorizonOverrides({ properties, fallback, onSaved }: { properties: Prope
                   onChange={(v) => v && save(`p${p.id}`, { property_id: p.id, until: v })} />
                 {p.horizon_until && <button type="button" className="link" disabled={busy === `p${p.id}`} onClick={() => save(`p${p.id}`, { property_id: p.id, until: null })}>Jak ogólnie</button>}
               </div>
+              <AfterSelect value={p.horizon_after} inherited={fallbackAfter} inheritLabel="Jak ogólnie" onChange={(v) => save(`pa${p.id}`, { property_id: p.id, after: v })} />
             </div>
             {groups.length > 1 && groups.map((g) => {
               const own = g.units[0].horizon_until;
@@ -209,6 +230,7 @@ function HorizonOverrides({ properties, fallback, onSaved }: { properties: Prope
                       onChange={(v) => v && save(key, { unit_ids: g.units.map((u) => u.id), until: v })} />
                     {own && <button type="button" className="link" disabled={busy === key} onClick={() => save(key, { unit_ids: g.units.map((u) => u.id), until: null })}>Jak obiekt</button>}
                   </div>
+                  <AfterSelect value={g.units[0].horizon_after} inherited={p.horizon_after ?? fallbackAfter} inheritLabel="Jak obiekt" onChange={(v) => save(`${key}a`, { unit_ids: g.units.map((u) => u.id), after: v })} />
                 </div>
               );
             })}

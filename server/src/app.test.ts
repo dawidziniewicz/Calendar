@@ -791,6 +791,25 @@ test('ceny na stronie do: osobno dla obiektu i typu domku', async () => {
   await call('PUT', '/api/settings/horizon', { property_id: 1, until: null });
   assert.equal(await cal(1), inDays(89));
   assert.equal((await call('PUT', '/api/settings/horizon', { property_id: 1, until: '2020-01-01' })).status, 400);
+
+  // co po dacie: domyślnie wolne bez ceny (zapytaj); „zajęte” — dni niedostępne, zapytań nie przyjmujemy
+  await call('PUT', '/api/settings/horizon', { property_id: 1, until: inDays(20) });
+  const after = async () => (await (await call('GET', `/public/calendar?unit=1&from=${inDays(19)}&to=${inDays(23)}`)).json()).days.map((d: unknown[]) => [d[1], d[3]]);
+  assert.deepEqual(await after(), [[300, 0], [300, 0], [null, 0], [null, 0]]);
+  assert.equal((await (await call('GET', '/api/settings/booking')).json()).horizon_after, 'ask');
+  await call('PUT', '/api/settings/horizon', { property_id: 1, after: 'closed' });
+  assert.deepEqual(await after(), [[300, 0], [300, 0], [null, 1], [null, 1]]);
+  assert.equal((await (await call('GET', '/api/properties')).json())[0].horizon_until, inDays(20), 'zmiana „po dacie” nie rusza daty');
+  const req = await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(25), check_out: inDays(27), name: 'Jan Nowak', phone: '600 100 200', email: 'jan@example.com', adults: 2, consent: true }, { 'x-client-ip': '3.3.3.9' });
+  assert.equal(req.status, 409);
+  // typ domku może mieć inaczej niż obiekt
+  await call('PUT', '/api/settings/horizon', { unit_ids: [1], after: 'ask' });
+  assert.deepEqual(await after(), [[300, 0], [300, 0], [null, 0], [null, 0]]);
+  // ustawienie ogólne
+  await call('PUT', '/api/settings/horizon', { unit_ids: [1], after: null });
+  await call('PUT', '/api/settings/horizon', { property_id: 1, after: null });
+  await call('PUT', '/api/settings/booking', { horizon_after: 'closed' });
+  assert.deepEqual(await after(), [[300, 0], [300, 0], [null, 1], [null, 1]]);
 });
 
 test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przydziela automatycznie lub ręcznie', async () => {
