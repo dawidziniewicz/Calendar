@@ -52,11 +52,26 @@ async function pdf(method: string, path: string, body?: unknown): Promise<Blob> 
   return res.blob();
 }
 
+export type MailThread = {
+  id: number; mailbox: string; subject: string; counterpart: string; counterpart_name: string; last_at: string; snippet: string;
+  unread: number; message_count: number; has_attachments: number; archived: number;
+};
+export type MailMessage = {
+  id: number; thread_id: number; mailbox: string; direction: 'in' | 'out'; from_addr: string; from_name: string; to_addrs: string[]; cc_addrs: string[];
+  subject: string; text: string; html: string; date: string; is_read: number; sent_by: string;
+  attachments: { id: number; filename: string; content_type: string; size: number; content_id: string }[];
+};
+export type MailThreadDetail = {
+  thread: MailThread; messages: MailMessage[];
+  reservations: { id: number; check_in: string; check_out: string; status: string; guest_name: string; unit_name: string; property_name: string }[];
+  requests: { id: number; check_in: string; check_out: string; status: string; created_at: string }[];
+};
+export type MailSummary = { allowed: boolean; mailboxes: string[]; reply_to: 'auto' | 'inbox' | 'admin'; last_inbound: string | null; sending: boolean; unread: number };
 export type OfferInput = { currency?: string; price: number; deposit?: number | null; deposit_due?: string | null; valid_until?: string | null; message?: string; email?: boolean; unit_id?: number; lang?: string };
 export type MessageInput = { kind: MessageKind; subject?: string; body?: string; amount?: number | null; due?: string | null; title?: string; lang?: string };
 export type MessageDraft = { lang: string; subject: string; body: string; amount: number | null; due: string | null; title: string; has_account: boolean; default_deposit: { amount: number | null; due: string | null } };
 
-export type PushSettings = { time: string; changes: boolean; requests: boolean };
+export type PushSettings = { time: string; changes: boolean; requests: boolean; mail: boolean };
 export type BookingSettings = { horizon_days: number; horizon_until: string | null; horizon_last: string; default_days: number; assign_mode: 'auto' | 'manual' };
 export type ExtraInput = { name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: number[] | null; active: boolean };
 export type EmailNotify = { requests: boolean; cancellations: boolean; offers: boolean; guest_receipt: boolean };
@@ -130,6 +145,18 @@ export const api = {
   saveEmailSettings: (emails: string) => request<EmailSettings>('PUT', '/settings/email', { emails }),
   saveEmailNotify: (notify: Partial<EmailNotify>) => request<EmailSettings>('PUT', '/settings/email', { notify }),
   testEmail: () => request<{ sent: number }>('POST', '/settings/email/test'),
+  mailSummary: () => request<MailSummary>('GET', '/mail/summary'),
+  saveMailSettings: (s: { mailboxes?: string[]; reply_to?: string }) => request<MailSummary>('PUT', '/mail/settings', s),
+  mailThreads: (o: { mailbox?: string; q?: string; archived?: boolean } = {}) => {
+    const q = new URLSearchParams({ ...(o.mailbox ? { mailbox: o.mailbox } : {}), ...(o.q ? { q: o.q } : {}), ...(o.archived ? { archived: '1' } : {}) });
+    return request<MailThread[]>('GET', `/mail/threads?${q}`);
+  },
+  mailThread: (id: number) => request<MailThreadDetail>('GET', `/mail/threads/${id}`),
+  mailThreadState: (id: number, s: { archived?: boolean; read?: boolean }) => request<MailThread>('POST', `/mail/threads/${id}/state`, s),
+  deleteMailThread: (id: number) => request('DELETE', `/mail/threads/${id}`),
+  sendMail: (m: { from: string; to: string; cc?: string; subject?: string; text: string; thread_id?: number; quote?: boolean }) =>
+    request<{ ok: boolean; thread_id: number | null }>('POST', '/mail/send', m),
+  mailAttachmentUrl: (id: number, download = false) => `/api/mail/attachments/${id}${download ? '?download=1' : ''}`,
   guests: (q: string) => request<Guest[]>('GET', `/guests?q=${encodeURIComponent(q)}`),
   setUnitType: (id: number, typeName: string) => request<{ type_name: string }>('PUT', `/rates/unit/${id}/type`, { type_name: typeName }),
   renameType: (unitId: number, typeName: string, typeNameEn: string) => request('PUT', '/rates/type', { unit_id: unitId, type_name: typeName, type_name_en: typeNameEn }),

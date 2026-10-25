@@ -305,6 +305,20 @@ export function emailNotify(db: DatabaseSync): EmailNotify {
   try { v = JSON.parse((db.prepare('SELECT value FROM settings WHERE key = ?').get(EMAIL_NOTIFY_KEY) as { value: string } | undefined)?.value ?? '{}'); } catch { v = {}; }
   return { requests: v.requests !== false, cancellations: v.cancellations !== false, offers: v.offers !== false, guest_receipt: v.guest_receipt !== false };
 }
+/**
+ * Dokąd trafiają odpowiedzi gości na e-maile z kalendarza: 'inbox' — do Poczty w aplikacji (adres nadawcy, np. rezerwacje@),
+ * 'admin' — na adres z ustawień powiadomień, 'auto' (domyślnie) — do Poczty, jeśli odbiór działa (była wiadomość w ostatnich 90 dniach).
+ */
+export function guestReplyTo(db: DatabaseSync): string | undefined {
+  const mode = (db.prepare('SELECT value FROM settings WHERE key = ?').get('guest_reply_to') as { value: string } | undefined)?.value ?? 'auto';
+  if (mode === 'inbox') return undefined;
+  if (mode === 'auto') {
+    const recent = db.prepare(`SELECT 1 FROM mail_messages WHERE direction = 'in' AND created_at >= datetime('now', '-90 days') LIMIT 1`).get();
+    if (recent) return undefined;
+  }
+  return adminEmails(db)[0];
+}
+
 export function adminEmails(db: DatabaseSync): string[] {
   const saved = (db.prepare('SELECT value FROM settings WHERE key = ?').get(NOTIFY_EMAILS_KEY) as { value: string } | undefined)?.value;
   return parseEmails(saved ?? process.env.ADMIN_EMAIL ?? '');
@@ -360,7 +374,7 @@ export async function announceRequest(db: DatabaseSync, push: Sender | undefined
       note: r.message ? { label: t.yourMsg, text: r.message } : undefined,
       outro: t.gotOutro,
     }, mailLang(r.lang));
-    jobs.push(mailer.send({ to: [r.guest_email], subject: t.gotSubject(u.property), ...g, replyTo: adminEmails(db)[0] }));
+    jobs.push(mailer.send({ to: [r.guest_email], subject: t.gotSubject(u.property), ...g, replyTo: guestReplyTo(db) }));
     }
   }
 
@@ -373,7 +387,7 @@ export async function mailDecision(db: DatabaseSync, mailer: Mailer | undefined,
   images: { src: string; caption: string; href?: string }[] = []) {
   if (!mailer) return false;
   const m = composeDecision(db, r, accepted, price, extraRows, images);
-  await mailer.send({ to: [r.guest_email], subject: m.subject, html: m.html, text: m.text, replyTo: adminEmails(db)[0] });
+  await mailer.send({ to: [r.guest_email], subject: m.subject, html: m.html, text: m.text, replyTo: guestReplyTo(db) });
   return true;
 }
 
@@ -451,7 +465,7 @@ export async function mailCancelDecision(db: DatabaseSync, mailer: Mailer | unde
     button: confirmed ? { label: t.otherDates, url: siteUrl() + sitePath(r.lang, 'home') } : undefined,
     outro: t.cxOutro,
   }, lang);
-  await mailer.send({ to: [r.guest_email], subject: confirmed ? t.cxSubject(u.property, range) : t.cdSubject(u.property), ...m, replyTo: adminEmails(db)[0] });
+  await mailer.send({ to: [r.guest_email], subject: confirmed ? t.cxSubject(u.property, range) : t.cdSubject(u.property), ...m, replyTo: guestReplyTo(db) });
   return true;
 }
 

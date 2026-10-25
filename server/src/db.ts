@@ -33,6 +33,65 @@ function migrate(db: DatabaseSync) {
   if (user_version < 16) migrateV16(db);
   if (user_version < 17) migrateV17(db);
   if (user_version < 18) migrateV18(db);
+  if (user_version < 19) migrateV19(db);
+}
+
+// Poczta w aplikacji: wiadomości przychodzące (Cloudflare Email Routing → Email Worker → /inbound/mail)
+// i wychodzące (odpowiedzi z aplikacji oraz e-maile do gości), pogrupowane w rozmowy; załączniki w bazie.
+function migrateV19(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    CREATE TABLE mail_threads (
+      id INTEGER PRIMARY KEY,
+      mailbox TEXT NOT NULL,
+      subject TEXT NOT NULL DEFAULT '',
+      counterpart TEXT NOT NULL DEFAULT '',
+      counterpart_name TEXT NOT NULL DEFAULT '',
+      last_at TEXT NOT NULL,
+      snippet TEXT NOT NULL DEFAULT '',
+      unread INTEGER NOT NULL DEFAULT 0,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      has_attachments INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX mail_threads_list ON mail_threads(archived, last_at);
+    CREATE TABLE mail_messages (
+      id INTEGER PRIMARY KEY,
+      thread_id INTEGER NOT NULL REFERENCES mail_threads(id) ON DELETE CASCADE,
+      mailbox TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+      message_id TEXT NOT NULL DEFAULT '',
+      in_reply_to TEXT NOT NULL DEFAULT '',
+      refs TEXT NOT NULL DEFAULT '',
+      from_addr TEXT NOT NULL DEFAULT '',
+      from_name TEXT NOT NULL DEFAULT '',
+      to_addrs TEXT NOT NULL DEFAULT '[]',
+      cc_addrs TEXT NOT NULL DEFAULT '[]',
+      reply_to TEXT NOT NULL DEFAULT '',
+      subject TEXT NOT NULL DEFAULT '',
+      text TEXT NOT NULL DEFAULT '',
+      html TEXT NOT NULL DEFAULT '',
+      date TEXT NOT NULL DEFAULT (datetime('now')),
+      is_read INTEGER NOT NULL DEFAULT 0,
+      sent_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX mail_messages_thread ON mail_messages(thread_id, date);
+    CREATE INDEX mail_messages_msgid ON mail_messages(message_id);
+    CREATE TABLE mail_attachments (
+      id INTEGER PRIMARY KEY,
+      message_id INTEGER NOT NULL REFERENCES mail_messages(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL DEFAULT 'zalacznik',
+      content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      content_id TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      data BLOB NOT NULL
+    );
+    CREATE INDEX mail_attachments_msg ON mail_attachments(message_id);
+    ALTER TABLE users ADD COLUMN notify_mail INTEGER NOT NULL DEFAULT 1;
+    PRAGMA user_version = 19;
+    COMMIT;
+  `);
 }
 
 // Waluty: rezerwacja, oferta i rachunek mogą być w PLN, EUR, GBP… (ceny na stronie zawsze w PLN)

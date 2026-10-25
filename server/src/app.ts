@@ -27,6 +27,7 @@ import {
   INVOICE_SETTINGS_KEY, type InvoiceData, type InvoiceRow,
 } from './invoice.ts';
 import { dateRange } from './changes.ts';
+import { MAILBOXES_KEY, REPLY_TO_KEY, addrOf, fromHeader, lastInbound, mailboxes, replyHtml, storeMessage, withMailLog } from './mailbox.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = ['confirmed', 'tentative', 'cancelled'];
@@ -50,9 +51,14 @@ const PUBLIC_LIMIT_TOTAL = 60;
 const HOUR = 3600_000;
 const warsawToday = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
 
-export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender, mailer?: Mailer) {
+export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender, rawMailer?: Mailer) {
   const app = new Hono();
   setQrKey(apiKey);
+  // e-maile do gości zapisują się w Poczcie (rozmowy); powiadomienia do obsługi nie
+  const mailer = rawMailer && withMailLog(db, rawMailer, (to) => {
+    const staff = new Set(adminEmails(db).map((a) => a.toLowerCase()));
+    return to.length > 0 && to.every((a) => staff.has(addrOf(a)));
+  });
   const all = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).all(...p);
   const get = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).get(...p);
   const run = (sql: string, ...p: SQLInputValue[]) => db.prepare(sql).run(...p);
@@ -400,6 +406,36 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
 
   app.route('/public', pub);
 
+  // ---- Odbiór poczty: Cloudflare Email Routing → Email Worker (mail-worker/) → tutaj (przez tunel, z kluczem API) ----
+  app.post('/inbound/mail', async (c) => {
+    if (!safeEqual(c.req.header('x-api-key') ?? '', apiKey)) return c.json({ error: 'Brak autoryzacji serwera' }, 403);
+    const b = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    if (!b) bad('Nieprawidłowa wiadomość');
+    const addrList = (v: unknown) => (Array.isArray(v) ? v : []).map((x) => (typeof x === 'string' ? x : String((x as { address?: string })?.address ?? ''))).filter(Boolean);
+    const from = (b.from && typeof b.from === 'object' ? b.from : {}) as { address?: string; name?: string };
+    const mailbox = addrOf(str(b.envelope_to, 300) || addrList(b.to)[0] || mailboxes(db)[0]);
+    const attachments = (Array.isArray(b.attachments) ? b.attachments : []).slice(0, 30).map((a) => {
+      const x = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
+      return { filename: str(x.filename, 200), content_type: str(x.mimeType ?? x.content_type, 100), content_id: str(x.contentId, 200), data: Buffer.from(String(x.content ?? ''), 'base64') };
+    }).filter((a) => a.data.length > 0 && a.data.length <= 15_000_000);
+    const stored = storeMessage(db, {
+      mailbox, direction: 'in', message_id: str(b.message_id, 500), in_reply_to: str(b.in_reply_to, 500),
+      refs: String(b.references ?? '').split(/\s+/).filter(Boolean).slice(0, 30),
+      from_addr: str(from.address, 300) || str(b.envelope_from, 300), from_name: str(from.name, 200),
+      to: addrList(b.to), cc: addrList(b.cc), reply_to: addrList(b.reply_to)[0] ?? '',
+      subject: str(b.subject, 500) || '(bez tematu)', text: typeof b.text === 'string' ? b.text.slice(0, 200_000) : '',
+      html: typeof b.html === 'string' ? b.html.slice(0, 1_000_000) : '', date: b.date, attachments,
+    });
+    if (!stored) return c.json({ ok: true, duplicate: true });
+    if (pushSender) {
+      const users = all(`SELECT DISTINCT u.id FROM users u JOIN push_subscriptions p ON p.user_id = u.id
+        WHERE u.notify_mail = 1 AND u.role = 'admin' AND u.property_ids IS NULL`) as { id: number }[];
+      const msg = { title: `✉ ${str(from.name, 80) || str(from.address, 120)} · ${mailbox.split('@')[0]}@`, body: str(b.subject, 140) || '(bez tematu)', url: `/?tab=mail&thread=${stored.thread_id}`, tag: `mail-${stored.thread_id}` };
+      Promise.allSettled(users.map((u) => sendToSubscriptions(db, pushSender, u.id, msg))).catch(() => {});
+    }
+    return c.json({ ok: true, id: stored.id, thread_id: stored.thread_id });
+  });
+
   const api = new Hono<{ Variables: { user: User } }>();
 
   // ---- Dostęp do obiektów (konto może być ograniczone np. tylko do Osady Jantar) ----
@@ -496,9 +532,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   api.get('/push/public-key', (c) => c.json({ publicKey: vapidKeys(db).publicKey }));
 
   const pushSettings = (userId: number) => {
-    const row = get('SELECT notify_time, notify_changes, notify_requests FROM users WHERE id = ?', userId) as
-      { notify_time: string; notify_changes: number; notify_requests: number };
-    return { time: row.notify_time, changes: row.notify_changes === 1, requests: row.notify_requests === 1 };
+    const row = get('SELECT notify_time, notify_changes, notify_requests, notify_mail FROM users WHERE id = ?', userId) as
+      { notify_time: string; notify_changes: number; notify_requests: number; notify_mail: number };
+    return { time: row.notify_time, changes: row.notify_changes === 1, requests: row.notify_requests === 1, mail: row.notify_mail === 1 };
   };
 
   api.get('/push/settings', (c) => c.json(pushSettings(c.get('user').id)));
@@ -514,6 +550,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     }
     if (b.changes !== undefined) run('UPDATE users SET notify_changes = ? WHERE id = ?', b.changes ? 1 : 0, user.id);
     if (b.requests !== undefined) run('UPDATE users SET notify_requests = ? WHERE id = ?', b.requests ? 1 : 0, user.id);
+    if (b.mail !== undefined) run('UPDATE users SET notify_mail = ? WHERE id = ?', b.mail ? 1 : 0, user.id);
     return c.json(pushSettings(user.id));
   });
 
@@ -1613,6 +1650,137 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       return c.json({ error: `Nie udało się wysłać: ${err instanceof Error ? err.message : err}` }, 502);
     }
     return c.json({ ok: true, to });
+  });
+
+  // ---- Poczta (tylko administrator z dostępem do wszystkich obiektów) ----
+  const mailSettings = () => {
+    const mode = (get('SELECT value FROM settings WHERE key = ?', REPLY_TO_KEY) as { value: string } | undefined)?.value ?? 'auto';
+    return {
+      mailboxes: mailboxes(db), reply_to: mode, last_inbound: lastInbound(db), sending: !!mailer,
+      unread: (get('SELECT COALESCE(SUM(unread), 0) AS n FROM mail_threads WHERE archived = 0') as { n: number }).n,
+    };
+  };
+  api.get('/mail/summary', (c) => {
+    if (!isFullAdmin(c.get('user'))) return c.json({ ...mailSettings(), mailboxes: [], unread: 0, allowed: false });
+    return c.json({ ...mailSettings(), allowed: true });
+  });
+  api.put('/mail/settings', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const b = await c.req.json();
+    if (Array.isArray(b.mailboxes)) {
+      const list = [...new Set((b.mailboxes as unknown[]).map((x) => addrOf(String(x))).filter((x) => isEmail(x)))].slice(0, 10);
+      if (!list.length) bad('Podaj co najmniej jeden adres skrzynki');
+      setSetting(MAILBOXES_KEY, JSON.stringify(list));
+    }
+    if (b.reply_to !== undefined) setSetting(REPLY_TO_KEY, ['inbox', 'admin', 'auto'].includes(b.reply_to) ? b.reply_to : 'auto');
+    return c.json({ ...mailSettings(), allowed: true });
+  });
+
+  api.get('/mail/threads', (c) => {
+    requireFullAdmin(c.get('user'));
+    const box = addrOf(str(c.req.query('mailbox'), 200));
+    const q = str(c.req.query('q'), 100);
+    const archived = c.req.query('archived') === '1' ? 1 : 0;
+    const where = ['t.archived = ?'], params: SQLInputValue[] = [archived];
+    if (box) { where.push('t.mailbox = ?'); params.push(box); }
+    if (q) {
+      where.push(`(t.subject LIKE ? OR t.counterpart LIKE ? OR t.counterpart_name LIKE ? OR EXISTS (SELECT 1 FROM mail_messages m WHERE m.thread_id = t.id AND m.text LIKE ?))`);
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    return c.json(all(`SELECT t.* FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY t.last_at DESC LIMIT 200`, ...params));
+  });
+
+  const mailThread = (id: number) => {
+    const t = get('SELECT * FROM mail_threads WHERE id = ?', id) as Record<string, unknown> | undefined;
+    if (!t) throw new HTTPException(404, { message: 'Nie znaleziono wiadomości' });
+    return t;
+  };
+  api.get('/mail/threads/:id{[0-9]+}', (c) => {
+    requireFullAdmin(c.get('user'));
+    const t = mailThread(int(c.req.param('id')));
+    const messages = (all('SELECT * FROM mail_messages WHERE thread_id = ? ORDER BY created_at, id', t.id as number) as Record<string, unknown>[]).map((m) => ({
+      ...m, to_addrs: JSON.parse(String(m.to_addrs || '[]')), cc_addrs: JSON.parse(String(m.cc_addrs || '[]')),
+      attachments: all('SELECT id, filename, content_type, size, content_id FROM mail_attachments WHERE message_id = ?', m.id as number),
+    }));
+    if (c.req.query('keep') !== '1') {
+      run('UPDATE mail_messages SET is_read = 1 WHERE thread_id = ?', t.id as number);
+      run('UPDATE mail_threads SET unread = 0 WHERE id = ?', t.id as number);
+    }
+    // rezerwacje i zapytania tej osoby (po adresie e-mail)
+    const who = String(t.counterpart);
+    const reservations = who ? all(`SELECT r.id, r.check_in, r.check_out, r.status, r.guest_name, u.name AS unit_name, p.name AS property_name FROM reservations r
+      JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id WHERE lower(r.guest_email) = ? ORDER BY r.check_in DESC LIMIT 10`, who) : [];
+    const requests = who ? all(`SELECT id, check_in, check_out, status, created_at FROM booking_requests WHERE lower(guest_email) = ? ORDER BY created_at DESC LIMIT 10`, who) : [];
+    return c.json({ thread: { ...t, unread: c.req.query('keep') === '1' ? t.unread : 0 }, messages, reservations, requests });
+  });
+  api.post('/mail/threads/:id{[0-9]+}/state', async (c) => {
+    requireFullAdmin(c.get('user'));
+    const t = mailThread(int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({}));
+    if (b.archived !== undefined) run('UPDATE mail_threads SET archived = ? WHERE id = ?', b.archived ? 1 : 0, t.id as number);
+    if (b.read !== undefined) {
+      run('UPDATE mail_messages SET is_read = ? WHERE thread_id = ? AND direction = ?', b.read ? 1 : 0, t.id as number, 'in');
+      run(`UPDATE mail_threads SET unread = ? WHERE id = ?`, b.read ? 0 : Math.max(1, (get(`SELECT COUNT(*) AS n FROM mail_messages WHERE thread_id = ? AND direction = 'in'`, t.id as number) as { n: number }).n ? 1 : 0), t.id as number);
+    }
+    return c.json(mailThread(t.id as number));
+  });
+  api.delete('/mail/threads/:id{[0-9]+}', (c) => {
+    requireFullAdmin(c.get('user'));
+    run('DELETE FROM mail_threads WHERE id = ?', mailThread(int(c.req.param('id'))).id as number);
+    return c.json({ ok: true });
+  });
+  api.get('/mail/attachments/:id{[0-9]+}', (c) => {
+    requireFullAdmin(c.get('user'));
+    const a = get('SELECT filename, content_type, data FROM mail_attachments WHERE id = ?', int(c.req.param('id'))) as { filename: string; content_type: string; data: Uint8Array } | undefined;
+    if (!a) return c.json({ error: 'Nie znaleziono załącznika' }, 404);
+    const safeType = /^(image\/(png|jpe?g|gif|webp)|application\/pdf|text\/plain)$/i.test(a.content_type) ? a.content_type : 'application/octet-stream';
+    return c.body(new Uint8Array(a.data), 200, {
+      'Content-Type': safeType, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': `${c.req.query('download') === '1' || safeType === 'application/octet-stream' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(a.filename)}`,
+    });
+  });
+
+  // Wysyłka z Poczty: nowa wiadomość albo odpowiedź w rozmowie (z cytatem i nagłówkami wątku)
+  api.post('/mail/send', async (c) => {
+    const user = c.get('user');
+    requireFullAdmin(user);
+    if (!mailer) bad('Wysyłka e-maili nie jest skonfigurowana na serwerze (RESEND_API_KEY albo SMTP_HOST w .env)');
+    const b = await c.req.json().catch(() => ({}));
+    const from = addrOf(str(b.from, 200));
+    if (!mailboxes(db).includes(from)) bad('Wybierz adres nadawcy z listy skrzynek');
+    const to = parseEmails(str(b.to, 1000));
+    const cc = parseEmails(str(b.cc, 1000));
+    if (!to.length) bad('Podaj adres odbiorcy');
+    const text = str(b.text, 50_000);
+    if (!text) bad('Wpisz treść wiadomości');
+    let subject = str(b.subject, 300);
+    const headers: Record<string, string> = {};
+    let quote: { header: string; text: string } | undefined;
+    if (b.thread_id) {
+      const t = mailThread(int(b.thread_id));
+      const last = get(`SELECT * FROM mail_messages WHERE thread_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`, t.id as number) as Record<string, string> | undefined;
+      if (last) {
+        if (last.message_id) {
+          headers['In-Reply-To'] = last.message_id;
+          headers.References = [last.refs, last.message_id].filter(Boolean).join(' ').trim();
+        }
+        if (!subject) subject = /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`;
+        if (b.quote !== false && last.text) {
+          const when = new Date(`${String(last.date).replace(' ', 'T')}Z`).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', dateStyle: 'medium', timeStyle: 'short' });
+          quote = { header: `${when}, ${last.from_name || last.from_addr} napisał(a):`, text: String(last.text).slice(0, 5000) };
+        }
+      }
+    }
+    if (!subject) bad('Wpisz temat');
+    const fullText = quote ? `${text}\n\n${quote.header}\n${quote.text.split('\n').map((l) => `> ${l}`).join('\n')}` : text;
+    try {
+      await mailer!.send({ from: fromHeader(from), to, cc, subject, text: fullText, html: replyHtml(text, quote), headers, sentBy: user.username });
+    } catch (err) {
+      console.error('Wiadomość nie wysłana', err);
+      return c.json({ error: `Nie udało się wysłać: ${err instanceof Error ? err.message : err}` }, 502);
+    }
+    const sent = get(`SELECT thread_id FROM mail_messages WHERE direction = 'out' ORDER BY id DESC LIMIT 1`) as { thread_id: number } | undefined;
+    return c.json({ ok: true, thread_id: sent?.thread_id ?? null });
   });
 
   // ---- Powiadomienia e-mail (adresy właściciela) ----

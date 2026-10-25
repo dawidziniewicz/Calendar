@@ -258,6 +258,39 @@ Strona [odmorzadogor.pl](https://github.com/dawidziniewicz/osadajantar) pobiera 
 - **Zaliczka** w rezerwacji: kwota i termin, status „wpłacona ✓ / minął termin”, przycisk *Klient wpłacił zaliczkę*.
 - **Rachunki** (PDF A4, czcionki strony, kwota słownie): z rezerwacji przycisk *Wystaw rachunek* — nabywca, pozycje, płatność wpisują się same. Edycja z podglądem PDF na żywo (na komputerze obok formularza, na telefonie w zakładce). Wystawca, miejsce, sposób płatności, dopisek (np. zwolnienie z VAT) i stopka zapamiętują się jako szablon. Numeracja roczna (1/2026) albo miesięczna (1/10/2026). Gotowy rachunek: pobierz, udostępnij / wydrukuj, wyślij gościowi e-mailem z PDF w załączniku. **Podpisy** są opcjonalne (pola na podpisy można wyłączyć); podpis wystawcy i gościa składa się palcem na telefonie (albo myszką) — Twój zapamiętuje się w szablonie, gość może podpisać np. przy wymeldowaniu (*✍ Podpis gościa* w podglądzie rachunku).
 
+## Poczta w aplikacji (rezerwacje@, kontakt@, contact@)
+
+Zakładka **Poczta** (tylko administrator z dostępem do wszystkich obiektów): wiadomości przychodzące na adresy domeny, rozmowy,
+odpowiedzi i nowe wiadomości z wybranego adresu (Od: rezerwacje@ / kontakt@ / contact@), załączniki, powiadomienie push.
+E-maile wysłane gościom z kalendarza (potwierdzenia, oferty, zaliczki, rachunki) też trafiają do rozmów.
+
+```
+ gość ──▶ rezerwacje@odmorzadogor.pl ──▶ Cloudflare Email Routing ──▶ Worker „kalendarz-poczta” (mail-worker/)
+                                                                           ├─▶ kalendarz: /inbound/mail (przez tunel, z API_KEY) → zakładka Poczta
+                                                                           └─▶ (opcjonalnie) kopia na Twój Gmail (FORWARD_TO)
+ Poczta w aplikacji ──▶ Resend (z rezerwacje@ / kontakt@ / contact@) ──▶ gość
+```
+
+Wysyłka dalej idzie przez **Resend** (domena jest tam zweryfikowana, więc można wysyłać z dowolnego adresu @odmorzadogor.pl).
+Odbiór — przez **Cloudflare Email Routing** (rekordy MX domeny już na nim są).
+
+**Konfiguracja (jednorazowo):**
+
+1. **Token Cloudflare dla GitHuba** — Cloudflare → My Profile → API Tokens → token używany jako `CLOUDFLARE_API_TOKEN` → *Edit* →
+   dodaj uprawnienie **Account → Workers Scripts → Edit**. Potem GitHub → Actions → „Poczta → Cloudflare Email Worker” → *Run workflow*
+   (albo ręcznie: `cd mail-worker && npm ci && npx wrangler deploy`).
+2. **Sekrety Workera** — Cloudflare → Workers & Pages → `kalendarz-poczta` → Settings → Variables and Secrets → dodaj jako *Secret*:
+   `API_ORIGIN` i `API_KEY` (te same wartości co w ustawieniach projektu Pages kalendarza), `CF_ACCESS_CLIENT_ID` i `CF_ACCESS_CLIENT_SECRET`
+   (jeśli API jest za Cloudflare Access — też jak w Pages). Opcjonalnie `FORWARD_TO` = Twój Gmail (kopia każdej wiadomości;
+   adres musi być w Email Routing → *Destination addresses*).
+3. **Reguły** — Cloudflare → odmorzadogor.pl → Email → Email Routing → *Routing rules*: dla `rezerwacje@`, `kontakt@`, `contact@`
+   akcja **Send to a Worker → kalendarz-poczta** (zastępuje dotychczasowe przekierowanie na Gmail — kopię daje `FORWARD_TO`).
+4. Wyślij testowy e-mail na `rezerwacje@odmorzadogor.pl` — po chwili pojawi się w zakładce Poczta (i w Ustawienia → Poczta: „Odbiór działa”).
+
+Gdy odbiór działa, odpowiedzi gości na e-maile z kalendarza trafiają do Poczty (Ustawienia → Poczta → „Odpowiedzi gości”).
+Jeśli serwer w domu jest niedostępny, Worker i tak przekaże kopię na `FORWARD_TO`; bez niej — odrzuci wiadomość z prośbą o ponowienie
+(nadawca dostanie informację, nic nie przepada po cichu).
+
 ### E-maile (do ustawienia w `.env` na serwerze w domu)
 
 Bez tej konfiguracji wszystko działa, tylko bez e-maili (zostają powiadomienia push).

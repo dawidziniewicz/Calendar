@@ -23,9 +23,10 @@ export default function Notifications() {
   const [savedTime, setSavedTime] = useState('09:00');
   const [changes, setChanges] = useState(true);
   const [requests, setRequests] = useState(true);
+  const [mail, setMail] = useState(true);
 
   useEffect(() => {
-    api.pushSettings().then((s) => { setTime(s.time); setSavedTime(s.time); setChanges(s.changes); setRequests(s.requests); }).catch(() => {});
+    api.pushSettings().then((s) => { setTime(s.time); setSavedTime(s.time); setChanges(s.changes); setRequests(s.requests); setMail(s.mail ?? true); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -94,6 +95,12 @@ export default function Notifications() {
     setRequests(res.requests);
   });
 
+  const toggleMail = (value: boolean) => run(async () => {
+    setMail(value);
+    const res = await api.savePushSettings({ mail: value });
+    setMail(res.mail);
+  });
+
   const test = () => run(async () => {
     const { sent } = await api.pushTest();
     setMsg(sent ? { ok: true, text: 'Wysłano powiadomienie testowe.' } : { ok: false, text: 'Brak aktywnych urządzeń — wyłącz i włącz powiadomienia ponownie.' });
@@ -132,6 +139,15 @@ export default function Notifications() {
           <span>
             <b>Zapytania ze strony www</b>
             <small>Gdy ktoś kliknie „Zarezerwuj” na odmorzadogor.pl — od razu z danymi i wyceną</small>
+          </span>
+        </label>
+      )}
+      {state !== 'unsupported' && (
+        <label className="switch-row">
+          <input type="checkbox" checked={mail} disabled={busy} onChange={(e) => toggleMail(e.target.checked)} />
+          <span>
+            <b>Nowe wiadomości w Poczcie</b>
+            <small>E-maile na rezerwacje@, kontakt@ i contact@ (tylko administrator z dostępem do wszystkich obiektów)</small>
           </span>
         </label>
       )}

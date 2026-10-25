@@ -5,7 +5,7 @@ import { renderMail, type Attachment, type MailContent, type Mailer, type MailRo
 import { sendToSubscriptions, type Sender } from './push.ts';
 import { epcPayload, iban, plBankPayload, polishNrb, qrPath, revolutUrl } from './qr.ts';
 import {
-  TXT, adminEmails, emailNotify, mailLang, sitePath, appUrl, extrasLines, firstName, guestUnitName, longDate, nightsBetween, parseChosenExtras, siteUrl, unitInfo, zl, type Lang,
+  TXT, adminEmails, guestReplyTo, emailNotify, mailLang, sitePath, appUrl, extrasLines, firstName, guestUnitName, longDate, nightsBetween, parseChosenExtras, siteUrl, unitInfo, zl, type Lang,
 } from './booking.ts';
 
 // Płatności i korespondencja z gościem: dane do przelewu, zaliczki, oferty cenowe z linkiem „Akceptuję”,
@@ -382,7 +382,7 @@ export async function sendGuestMessage(
   log: { reservation_id?: number | null; request_id?: number | null; sent_by: string }, attachments?: Attachment[],
 ) {
   const msg = composeMessage(db, st, m);
-  await mailer.send({ to: [st.guest_email], subject: msg.subject, html: msg.html, text: msg.text, replyTo: adminEmails(db)[0], attachments });
+  await mailer.send({ to: [st.guest_email], subject: msg.subject, html: msg.html, text: msg.text, replyTo: guestReplyTo(db), attachments, sentBy: log.sent_by });
   db.prepare(`INSERT INTO guest_messages (reservation_id, request_id, kind, to_email, subject, body, sent_by) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(log.reservation_id ?? null, log.request_id ?? null, m.kind, st.guest_email, msg.subject, msg.body, log.sent_by);
   return msg;

@@ -769,3 +769,42 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 /* pola liczbowe ze strzałkami w wierszach formularzy */
 .row > .field.stepper-field { flex: 0 0 150px; min-width: 150px; }
 .stepper-field .stepper { width: 100%; }
+
+/* ---- Poczta ---- */
+.mail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.mail-head h1 { margin-bottom: 4px; }
+.mail-head p { margin: 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+.mail-filters { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.mail-filters .chips { flex-wrap: wrap; }
+.mail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mail-item { width: 100%; display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+@media (hover: hover) { .mail-item:hover { border-color: var(--primary); } }
+.mail-dot { flex: none; width: 9px; height: 9px; margin-top: 7px; border-radius: 50%; background: transparent; }
+.mail-item.is-unread .mail-dot { background: var(--primary); }
+.mail-item.is-unread .mail-who, .mail-item.is-unread .mail-subject { font-weight: 800; }
+.mail-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mail-row1 { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.mail-who { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-when { flex: none; font-size: 0.8rem; color: var(--muted); }
+.mail-subject { font-size: 0.93rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-snippet { font-size: 0.85rem; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
+.mail-box { align-self: flex-start; margin-top: 2px; font-size: 0.72rem; font-weight: 700; letter-spacing: .02em; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sage) 20%, transparent); color: var(--ink); }
+.mail-sheet-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; }
+.mail-thread-meta { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; overflow-wrap: anywhere; }
+.mail-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.mail-links .chip { white-space: normal; text-align: left; }
+.mail-messages { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.mail-msg { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 12px; }
+.mail-msg.out { border-color: color-mix(in srgb, var(--sage) 50%, var(--line)); background: color-mix(in srgb, var(--sage) 8%, var(--surface)); }
+.mail-msg-head { display: flex; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap; font-size: 0.86rem; margin-bottom: 8px; overflow-wrap: anywhere; }
+.mail-msg-subject { font-weight: 700; margin-bottom: 8px; }
+.mail-body { display: flex; flex-direction: column; gap: 6px; }
+.mail-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.95rem; line-height: 1.5; }
+.mail-frame { width: 100%; height: 160px; border: 0; border-radius: 10px; background: #fff; display: block; }
+.mail-toggle { align-self: flex-start; padding-left: 0; font-size: 0.85rem; }
+.mail-atts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.mail-att { display: inline-flex; gap: 6px; align-items: center; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); text-decoration: none; font-size: 0.86rem; max-width: 100%; overflow-wrap: anywhere; }
+.mail-reply { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.mail-reply h3 { margin: 0; font-size: 0.95rem; }
+.mail-reply .row { margin: 0; }
+.mail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }

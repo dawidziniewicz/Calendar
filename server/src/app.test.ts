@@ -291,7 +291,7 @@ test('powiadomienia o przyjazdach: osobne na każdy przyjazd, o godzinie każdeg
   saveSubscription(db, 2, { endpoint: 'https://push.example/jozek', keys });
 
   // ustawienia godziny
-  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00', changes: true, requests: true });
+  assert.deepEqual(await (await call('GET', '/api/push/settings')).json(), { time: '09:00', changes: true, requests: true, mail: true });
   assert.equal((await call('PUT', '/api/push/settings', { time: '25:00' })).status, 400);
   assert.equal((await call('PUT', '/api/push/settings', { time: '10:15' })).status, 200);
 
@@ -1184,4 +1184,69 @@ test('podgląd e-maila decyzji, anulacja za brak zaliczki, wyłączane powiadomi
   assert.equal((await call('POST', `/api/reservations/${acc.reservation.id}/cancel-unpaid`, { email: false })).status, 400, 'już anulowana');
   const decided2 = await (await call('GET', '/api/requests?status=decided')).json();
   assert.equal(decided2[0].reservation_status, 'cancelled');
+});
+
+test('Poczta: odbiór z Email Workera, rozmowy, odpowiedź z wybranego adresu, e-maile do gości w rozmowie, załączniki', async () => {
+  const { db, app, call, login, sent } = setupWithMail();
+  await login();
+  const inbound = (body: object, key = KEY) => app.request('/inbound/mail', { method: 'POST', headers: { 'x-api-key': key, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const msg = {
+    envelope_to: 'rezerwacje@odmorzadogor.pl', envelope_from: 'anna@example.com', message_id: '<m1@example.com>',
+    from: { address: 'anna@example.com', name: 'Anna Nowak' }, to: [{ address: 'rezerwacje@odmorzadogor.pl' }],
+    subject: 'Pytanie o parking', text: 'Dzień dobry, czy jest parking?', html: '<p>Dzień dobry, czy jest parking?</p>', date: '2026-10-25T10:00:00Z',
+    attachments: [{ filename: 'plan.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4 test').toString('base64') }],
+  };
+  // odpowiedzi gości: bez działającej skrzynki — na adres właściciela
+  assert.equal((await (await call('GET', '/api/mail/summary')).json()).reply_to, 'auto');
+  assert.equal((await inbound(msg, 'zly-klucz')).status, 403);
+  const r1 = await (await inbound(msg)).json();
+  assert.ok(r1.thread_id);
+  assert.equal((await (await inbound(msg)).json()).duplicate, true, 'ponowne dostarczenie nie dubluje');
+  const sum = await (await call('GET', '/api/mail/summary')).json();
+  assert.equal(sum.unread, 1);
+  assert.deepEqual(sum.mailboxes, ['rezerwacje@odmorzadogor.pl', 'kontakt@odmorzadogor.pl', 'contact@odmorzadogor.pl']);
+  const list = await (await call('GET', '/api/mail/threads?mailbox=rezerwacje@odmorzadogor.pl')).json();
+  assert.equal(list[0].counterpart, 'anna@example.com');
+  assert.equal(list[0].has_attachments, 1);
+  // otwarcie rozmowy oznacza jako przeczytane; załącznik do pobrania
+  const th = await (await call('GET', `/api/mail/threads/${r1.thread_id}`)).json();
+  assert.equal(th.messages.length, 1);
+  const att = await call('GET', `/api/mail/attachments/${th.messages[0].attachments[0].id}`);
+  assert.equal(att.headers.get('content-type'), 'application/pdf');
+  assert.equal((await (await call('GET', '/api/mail/summary')).json()).unread, 0);
+  // odpowiedź z kontakt@ nie jest dozwolona spoza listy; z rezerwacje@ — z nagłówkami wątku i cytatem
+  assert.equal((await call('POST', '/api/mail/send', { from: 'ktos@inna.pl', to: 'anna@example.com', text: 'x', thread_id: r1.thread_id })).status, 400);
+  const rep = await (await call('POST', '/api/mail/send', { from: 'rezerwacje@odmorzadogor.pl', to: 'anna@example.com', text: 'Tak, parking jest bezpłatny.', thread_id: r1.thread_id })).json();
+  assert.equal(rep.thread_id, r1.thread_id);
+  const out = sent.at(-1)! as unknown as { from: string; subject: string; text: string; headers: Record<string, string> };
+  assert.equal(out.from, 'Od Morza do Gór <rezerwacje@odmorzadogor.pl>');
+  assert.equal(out.subject, 'Re: Pytanie o parking');
+  assert.equal(out.headers['In-Reply-To'], '<m1@example.com>');
+  assert.match(out.text, /> Dzień dobry, czy jest parking\?/);
+  // odpowiedź gościa na naszą wiadomość trafia do tej samej rozmowy (po Message-ID)
+  const ourId = (db.prepare(`SELECT message_id FROM mail_messages WHERE direction = 'out' ORDER BY id DESC LIMIT 1`).get() as { message_id: string }).message_id;
+  const r2 = await (await inbound({ ...msg, message_id: '<m2@example.com>', in_reply_to: ourId, subject: 'Re: Pytanie o parking', text: 'Dziękuję!', attachments: [] })).json();
+  assert.equal(r2.thread_id, r1.thread_id);
+  // nowa wiadomość od kogoś innego na kontakt@ — osobna rozmowa
+  const r3 = await (await inbound({ ...msg, envelope_to: 'kontakt@odmorzadogor.pl', message_id: '<m3@example.com>', from: { address: 'jan@example.com' }, subject: 'Oferta współpracy', attachments: [] })).json();
+  assert.notEqual(r3.thread_id, r1.thread_id);
+  // skrzynka działa → e-maile do gości bez reply-to na prywatny adres, i zapisują się w rozmowie z gościem
+  await call('POST', '/api/reservations', { unit_id: 1, check_in: inDays(30), check_out: inDays(32), guest_name: 'Anna Nowak', guest_email: 'anna@example.com', price: 900 });
+  const res = (db.prepare('SELECT id FROM reservations ORDER BY id DESC LIMIT 1').get() as { id: number }).id;
+  await call('POST', `/api/reservations/${res}/messages`, { kind: 'custom', subject: 'Kod do domku', body: 'Kod: 1234' });
+  assert.equal((sent.at(-1) as unknown as { replyTo?: string }).replyTo, undefined, 'odpowiedzi gości do Poczty');
+  const th2 = await (await call('GET', `/api/mail/threads/${r1.thread_id}`)).json();
+  assert.equal(th2.reservations[0].id, res, 'rezerwacje tej osoby w rozmowie');
+  const all = await (await call('GET', '/api/mail/threads')).json();
+  assert.ok(all.some((t: { subject: string; counterpart: string }) => t.subject === 'Kod do domku' && t.counterpart === 'anna@example.com'));
+  // archiwum
+  await call('POST', `/api/mail/threads/${r3.thread_id}/state`, { archived: true });
+  assert.ok(!(await (await call('GET', '/api/mail/threads')).json()).some((t: { id: number }) => t.id === r3.thread_id));
+  assert.ok((await (await call('GET', '/api/mail/threads?archived=1')).json()).some((t: { id: number }) => t.id === r3.thread_id));
+  // konto ograniczone do obiektów nie widzi poczty
+  db.prepare('INSERT INTO users (username, password_hash, property_ids) VALUES (?, ?, ?)').run('jantar', hashPassword('haslo-jantar-1'), '[1]');
+  await call('POST', '/api/auth/logout');
+  await call('POST', '/api/auth/login', { username: 'jantar', password: 'haslo-jantar-1' });
+  assert.equal((await call('GET', '/api/mail/threads')).status, 403);
+  assert.equal((await (await call('GET', '/api/mail/summary')).json()).allowed, false);
 });
