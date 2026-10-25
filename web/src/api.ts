@@ -52,14 +52,15 @@ async function pdf(method: string, path: string, body?: unknown): Promise<Blob> 
   return res.blob();
 }
 
-export type OfferInput = { currency?: string; price: number; deposit?: number | null; deposit_due?: string | null; valid_until?: string | null; message?: string; email?: boolean; unit_id?: number; lang?: 'pl' | 'en' };
-export type MessageInput = { kind: MessageKind; subject?: string; body?: string; amount?: number | null; due?: string | null; title?: string; lang?: 'pl' | 'en' };
-export type MessageDraft = { lang: 'pl' | 'en'; subject: string; body: string; amount: number | null; due: string | null; title: string; has_account: boolean; default_deposit: { amount: number | null; due: string | null } };
+export type OfferInput = { currency?: string; price: number; deposit?: number | null; deposit_due?: string | null; valid_until?: string | null; message?: string; email?: boolean; unit_id?: number; lang?: string };
+export type MessageInput = { kind: MessageKind; subject?: string; body?: string; amount?: number | null; due?: string | null; title?: string; lang?: string };
+export type MessageDraft = { lang: string; subject: string; body: string; amount: number | null; due: string | null; title: string; has_account: boolean; default_deposit: { amount: number | null; due: string | null } };
 
 export type PushSettings = { time: string; changes: boolean; requests: boolean };
 export type BookingSettings = { horizon_days: number; horizon_until: string | null; horizon_last: string; default_days: number; assign_mode: 'auto' | 'manual' };
 export type ExtraInput = { name: string; name_en: string; description: string; price: number; per: 'stay' | 'night'; max_qty: number; property_ids: number[] | null; active: boolean };
-export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | 'log' | null; from: string | null; emails: string };
+export type EmailNotify = { requests: boolean; cancellations: boolean; offers: boolean; guest_receipt: boolean };
+export type EmailSettings = { configured: boolean; kind: 'resend' | 'smtp' | 'log' | null; from: string | null; emails: string; notify: EmailNotify };
 /** price/min_nights: liczba = ustaw, null = przywróć ustawienie domku, brak = bez zmian */
 export type RatePatch = { unit_ids: number[]; from: string; to: string; weekdays?: number[]; price?: number | null; min_nights?: number | null; closed?: boolean };
 /** properties: nazwy obiektów, do których konto ma dostęp (null = wszystkie). */
@@ -122,9 +123,12 @@ export const api = {
   cancellations: () => request<BookingRequest[]>('GET', '/cancellations'),
   cancelConfirm: (id: number, body: { note?: string; email?: boolean }) => request<{ ok: boolean; emailed: boolean }>('POST', `/requests/${id}/cancel-confirm`, body),
   cancelDecline: (id: number, body: { note?: string; email?: boolean }) => request<{ ok: boolean; emailed: boolean }>('POST', `/requests/${id}/cancel-decline`, body),
+  requestPreview: (id: number, body: { action: 'accept' | 'reject'; price?: number | null; note?: string; unit_id?: number; deposit?: number | null; deposit_due?: string | null }) =>
+    request<{ subject: string; html: string }>('POST', `/requests/${id}/preview`, body),
   rejectRequest: (id: number, body: { note?: string; email?: boolean }) => request<{ request: BookingRequest; emailed: boolean }>('POST', `/requests/${id}/reject`, body),
   emailSettings: () => request<EmailSettings>('GET', '/settings/email'),
   saveEmailSettings: (emails: string) => request<EmailSettings>('PUT', '/settings/email', { emails }),
+  saveEmailNotify: (notify: Partial<EmailNotify>) => request<EmailSettings>('PUT', '/settings/email', { notify }),
   testEmail: () => request<{ sent: number }>('POST', '/settings/email/test'),
   guests: (q: string) => request<Guest[]>('GET', `/guests?q=${encodeURIComponent(q)}`),
   setUnitType: (id: number, typeName: string) => request<{ type_name: string }>('PUT', `/rates/unit/${id}/type`, { type_name: typeName }),
@@ -143,6 +147,8 @@ export const api = {
     return request<MessageDraft>('GET', `/reservations/${id}/messages/draft?${q}`);
   },
   messagePreview: (id: number, m: MessageInput) => request<{ subject: string; html: string }>('POST', `/reservations/${id}/messages/preview`, m),
+  cancelUnpaid: (id: number, body: { email: boolean; subject?: string; body?: string }) =>
+    request<{ ok: boolean; emailed: boolean; reservation: Reservation }>('POST', `/reservations/${id}/cancel-unpaid`, body),
   sendMessage: (id: number, m: MessageInput) => request<{ ok: boolean; reservation: Reservation }>('POST', `/reservations/${id}/messages`, m),
   // płatności i rachunki
   paymentSettings: () => request<PaymentSettings>('GET', '/settings/payments'),

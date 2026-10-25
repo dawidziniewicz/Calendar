@@ -285,6 +285,22 @@ function EmailPanel() {
           <button className="btn small" disabled={busy} onClick={() => act(async () => { const { sent } = await api.testEmail(); return `Wysłano test na ${sent} ${sent === 1 ? 'adres' : 'adresy'}.`; })}>Wyślij test</button>
         )}
       </div>
+      <h3 className="assign-title">Które e-maile wysyłać</h3>
+      <div className="notify-toggles">
+        {([
+          ['requests', 'Do mnie: nowe zapytania ze strony'],
+          ['cancellations', 'Do mnie: prośby gości o anulację'],
+          ['offers', 'Do mnie: gość zaakceptował / odrzucił ofertę'],
+          ['guest_receipt', 'Do gościa: „Otrzymaliśmy Twoje zapytanie” (automatycznie)'],
+        ] as const).map(([key, label]) => (
+          <label key={key} className="check-row">
+            <input type="checkbox" checked={settings.notify[key]} disabled={busy}
+              onChange={(e) => act(async () => { setSettings(await api.saveEmailNotify({ [key]: e.target.checked })); return e.target.checked ? 'Włączono.' : 'Wyłączono.'; })} />
+            {label}
+          </label>
+        ))}
+      </div>
+      <p className="muted small-note">Powiadomienia push w aplikacji działają niezależnie od e-maili. Odpowiedzi do gości (akceptacja, oferta, wiadomości) wysyłasz sam — tam zawsze możesz odznaczyć e-mail.</p>
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
     </div>
   );

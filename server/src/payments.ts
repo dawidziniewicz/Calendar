@@ -5,7 +5,7 @@ import { renderMail, type Attachment, type MailContent, type Mailer, type MailRo
 import { sendToSubscriptions, type Sender } from './push.ts';
 import { epcPayload, iban, plBankPayload, polishNrb, qrPath, revolutUrl } from './qr.ts';
 import {
-  TXT, adminEmails, appUrl, extrasLines, firstName, guestUnitName, longDate, nightsBetween, parseChosenExtras, siteUrl, unitInfo, zl, type Lang,
+  TXT, adminEmails, emailNotify, mailLang, sitePath, appUrl, extrasLines, firstName, guestUnitName, longDate, nightsBetween, parseChosenExtras, siteUrl, unitInfo, zl, type Lang,
 } from './booking.ts';
 
 // Płatności i korespondencja z gościem: dane do przelewu, zaliczki, oferty cenowe z linkiem „Akceptuję”,
@@ -121,10 +121,10 @@ export type Stay = {
   price?: number | null; paid?: number | null; deposit?: number | null; deposit_due?: string | null;
   currency?: string | null;
 };
-export const stayLang = (st: Stay): Lang => (st.lang === 'en' ? 'en' : 'pl');
+export const stayLang = (st: Stay): Lang => mailLang(st.lang);
 
-export type MessageKind = 'confirmation' | 'deposit' | 'balance' | 'received' | 'custom' | 'offer' | 'invoice' | 'offer_accepted';
-export const MESSAGE_KINDS: MessageKind[] = ['confirmation', 'deposit', 'balance', 'received', 'custom', 'invoice'];
+export type MessageKind = 'confirmation' | 'deposit' | 'balance' | 'received' | 'custom' | 'offer' | 'invoice' | 'offer_accepted' | 'unpaid_cancel';
+export const MESSAGE_KINDS: MessageKind[] = ['confirmation', 'deposit', 'balance', 'received', 'custom', 'invoice', 'unpaid_cancel'];
 
 const P = {
   pl: {
@@ -141,10 +141,11 @@ const P = {
       invoice: (p: string, r: string) => `Rachunek za pobyt — ${p}, ${r}`,
       offer: (p: string, r: string) => `Oferta pobytu — ${p}, ${r}`,
       offer_accepted: (p: string, r: string) => `Rezerwacja potwierdzona — ${p}, ${r}`,
+      unpaid_cancel: (p: string, r: string) => `Rezerwacja anulowana — brak wpłaty zaliczki — ${p}, ${r}`,
     },
     titles: {
       confirmation: 'Potwierdzenie rezerwacji', deposit: 'Prośba o wpłatę zaliczki', balance: 'Prośba o dopłatę', received: 'Dziękujemy za wpłatę',
-      custom: 'Wiadomość od nas', invoice: 'Rachunek za pobyt', offer: 'Oferta pobytu', offer_accepted: 'Dziękujemy — rezerwacja potwierdzona',
+      custom: 'Wiadomość od nas', invoice: 'Rachunek za pobyt', offer: 'Oferta pobytu', offer_accepted: 'Dziękujemy — rezerwacja potwierdzona', unpaid_cancel: 'Rezerwacja anulowana',
     },
     bodies: {
       confirmation: () => 'potwierdzamy Twoją rezerwację. Poniżej znajdziesz szczegóły pobytu. Czekamy na Ciebie!',
@@ -154,6 +155,7 @@ const P = {
       custom: () => '',
       invoice: () => 'w załączniku przesyłamy rachunek za pobyt. Dziękujemy, że byliście z nami!',
       offer: () => 'dziękujemy za zainteresowanie. Przygotowaliśmy dla Ciebie ofertę pobytu — sprawdź szczegóły i zaakceptuj ją jednym kliknięciem.',
+      unpaid_cancel: (a: string, d: string | null) => `niestety nie otrzymaliśmy wpłaty zaliczki w wysokości ${a}${d ? ` w wyznaczonym terminie (do ${d})` : ' w wyznaczonym terminie'}, dlatego anulowaliśmy rezerwację i termin jest znów dostępny. Jeśli przelew został już wysłany, odpowiedz na tę wiadomość — sprawdzimy to i w miarę możliwości przywrócimy rezerwację.`,
     },
     offerButton: 'Zobacz ofertę i zaakceptuj',
     offerOutro: (dep: boolean) => [
@@ -178,10 +180,11 @@ const P = {
       invoice: (p: string, r: string) => `Bill for your stay — ${p}, ${r}`,
       offer: (p: string, r: string) => `Your stay offer — ${p}, ${r}`,
       offer_accepted: (p: string, r: string) => `Booking confirmed — ${p}, ${r}`,
+      unpaid_cancel: (p: string, r: string) => `Booking cancelled — deposit not received — ${p}, ${r}`,
     },
     titles: {
       confirmation: 'Booking confirmation', deposit: 'Deposit payment request', balance: 'Balance payment request', received: 'Thank you for your payment',
-      custom: 'Message from us', invoice: 'Bill for your stay', offer: 'Your stay offer', offer_accepted: 'Thank you — your booking is confirmed',
+      custom: 'Message from us', invoice: 'Bill for your stay', offer: 'Your stay offer', offer_accepted: 'Thank you — your booking is confirmed', unpaid_cancel: 'Booking cancelled',
     },
     bodies: {
       confirmation: () => 'we are pleased to confirm your booking. You will find the details of your stay below. We look forward to welcoming you!',
@@ -191,6 +194,7 @@ const P = {
       custom: () => '',
       invoice: () => 'please find attached the bill for your stay. Thank you for staying with us!',
       offer: () => 'thank you for your interest. We have prepared an offer for your stay — check the details and accept it with one click.',
+      unpaid_cancel: (a: string, d: string | null) => `unfortunately we have not received the deposit of ${a}${d ? ` by the due date (${d})` : ' by the due date'}, so we have cancelled the booking and the dates are available again. If you have already sent the payment, please reply to this e-mail — we will check it and restore the booking if possible.`,
     },
     offerButton: 'View and accept the offer',
     offerOutro: (dep: boolean) => [
@@ -267,7 +271,8 @@ export function draftMessage(db: DatabaseSync, st: Stay, kind: MessageKind, amou
   const def = kind === 'deposit'
     ? { amount: st.deposit ?? defaultDeposit(ps, st.price ?? null, st.check_in).amount, due: st.deposit_due ?? defaultDeposit(ps, st.price ?? null, st.check_in).due }
     : kind === 'balance' ? { amount: left, due: st.check_in }
-      : kind === 'received' ? { amount: st.paid ?? null, due: null } : { amount: null, due: null };
+      : kind === 'received' ? { amount: st.paid ?? null, due: null }
+        : kind === 'unpaid_cancel' ? { amount: st.deposit ?? null, due: st.deposit_due ?? null } : { amount: null, due: null };
   const a = amount === undefined ? def.amount : amount;
   const d = due === undefined ? def.due : due;
   const amountText = a != null ? money(a, cur(st), lang) : '…';
@@ -355,6 +360,14 @@ export function composeMessage(db: DatabaseSync, st: Stay, m: MessageInput) {
       };
       break;
     }
+    case 'unpaid_cancel':
+      content = {
+        preheader: subject, title: p.titles.unpaid_cancel, intro,
+        rows: [...stayRows(db, st, lang).slice(0, 3), ...(st.deposit ? [[p.deposit, p.depositPayable(money(st.deposit, cur(st), lang), short(st.deposit_due, lang))] as MailRow] : [])],
+        button: { label: t.otherDates, url: siteUrl() + sitePath(st.lang, 'home') },
+        outro: [p.contact, p.signOff],
+      };
+      break;
     case 'invoice':
       content = { preheader: subject, title: p.titles.invoice, intro, rows: stayRows(db, st, lang).slice(0, 3), outro: [p.signOff] };
       break;
@@ -383,7 +396,7 @@ export type OfferRow = {
   price: number; deposit: number | null; deposit_due: string | null; valid_until: string | null; message: string; lang: string; currency: string;
   status: 'sent' | 'accepted' | 'declined' | 'withdrawn'; created_by: string; created_at: string; decided_at: string | null; decided_ip: string; decline_reason: string;
 };
-export const offerUrl = (o: { token: string; lang: string }) => `${siteUrl()}${o.lang === 'en' ? '/en/offer/' : '/oferta/'}?t=${o.token}`;
+export const offerUrl = (o: { token: string; lang: string }) => `${siteUrl()}${sitePath(o.lang, 'offer')}?t=${o.token}`;
 export const offerExpired = (o: OfferRow) => o.status === 'sent' && !!o.valid_until && o.valid_until < warsawToday();
 
 /** Push i e-mail do obsługi z dostępem do domku (np. gość zaakceptował / odrzucił ofertę). */
@@ -399,7 +412,8 @@ export async function notifyStaff(
       if (!allowed || allowed.has(unitId)) jobs.push(sendToSubscriptions(db, push, user.id, msg));
     }
   }
-  const admins = adminEmails(db);
+  // e-maile do obsługi o ofertach można wyłączyć w ustawieniach (push zostaje)
+  const admins = emailNotify(db).offers ? adminEmails(db) : [];
   if (mailer && mail && admins.length) {
     jobs.push(mailer.send({ to: admins, subject: mail.subject, ...renderMail({ ...mail.content, button: mail.content.button ?? { label: 'Otwórz w kalendarzu', url: `${appUrl()}${msg.url}` } }), replyTo: mail.replyTo }));
   }

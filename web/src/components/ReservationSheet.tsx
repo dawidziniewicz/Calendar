@@ -3,7 +3,7 @@ import { api, ApiError, type Guest } from '../api';
 import type { Draft, Property, Reservation, Status } from '../types';
 import { SOURCES, STATUS_LABELS } from '../types';
 import { addDays, diffDays, formatShort, nightsLabel } from '../dates';
-import { CURRENCIES, currencySymbol } from '../money';
+import { CURRENCIES, GUEST_LANGS, currencySymbol, type GuestLang } from '../money';
 
 type Props = { draft: Draft; properties: Property[]; onClose: () => void; onSaved: (saved: Reservation | null) => void };
 type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
@@ -46,21 +46,9 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
     if (g) setR((prev) => ({ ...prev, guest_phone: prev.guest_phone || g.guest_phone, guest_email: prev.guest_email || g.guest_email }));
   };
 
-  // Rezerwacje prywatne / ze strony: obowiązkowe imię i nazwisko, telefon i e-mail (Booking/Airbnb nie podają kontaktu)
-  const contactRequired = !imported && !['booking', 'airbnb'].includes(r.source) && r.status !== 'cancelled';
-  const contactError = () => {
-    if (!contactRequired) return '';
-    if (r.guest_name.trim().split(/\s+/).filter((w) => w.length >= 2).length < 2) return 'Podaj imię i nazwisko gościa';
-    if (!/^[+\d][\d\s()-]{6,}$/.test(r.guest_phone.trim())) return 'Podaj numer telefonu gościa';
-    if (!/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(r.guest_email.trim())) return 'Podaj adres e-mail gościa';
-    return '';
-  };
-
   const save = async (e?: FormEvent, force = false) => {
     e?.preventDefault();
     if (r.check_out <= r.check_in) { setError('Data wyjazdu musi być późniejsza niż przyjazdu'); return; }
-    const missing = contactError();
-    if (missing) { setError(missing); return; }
     setSaving(true);
     setError('');
     try {
@@ -150,20 +138,20 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
           <fieldset>
             <legend>Gość</legend>
             <label className="full">
-              Imię i nazwisko{contactRequired && <span className="req"> *</span>}
-              <input list="guest-suggestions" required={contactRequired} autoComplete="off" value={r.guest_name}
+              Imię i nazwisko
+              <input list="guest-suggestions" autoComplete="off" value={r.guest_name}
                 onChange={(e) => { set('guest_name', e.target.value); pickGuest(e.target.value); }} />
               <datalist id="guest-suggestions">
                 {guests.map((g) => <option key={`${g.guest_name}${g.guest_phone}`} value={g.guest_name}>{g.guest_phone} · {g.stays}× pobyt</option>)}
               </datalist>
             </label>
             <label>
-              Telefon{contactRequired && <span className="req"> *</span>}
-              <input type="tel" inputMode="tel" required={contactRequired} value={r.guest_phone} onChange={(e) => set('guest_phone', e.target.value)} />
+              Telefon
+              <input type="tel" inputMode="tel" value={r.guest_phone} onChange={(e) => set('guest_phone', e.target.value)} />
             </label>
             <label>
-              E-mail{contactRequired && <span className="req"> *</span>}
-              <input type="email" inputMode="email" required={contactRequired} value={r.guest_email} onChange={(e) => set('guest_email', e.target.value)} />
+              E-mail
+              <input type="email" inputMode="email" value={r.guest_email} onChange={(e) => set('guest_email', e.target.value)} />
             </label>
             <div className="field">
               Dorośli
@@ -216,9 +204,8 @@ export default function ReservationSheet({ draft, properties, onClose, onSaved }
             </label>
             <label>
               Język e-maili do gościa
-              <select value={r.lang ?? 'pl'} onChange={(e) => set('lang', e.target.value as 'pl' | 'en')}>
-                <option value="pl">polski</option>
-                <option value="en">angielski</option>
+              <select value={r.lang ?? 'pl'} onChange={(e) => set('lang', e.target.value as GuestLang)}>
+                {GUEST_LANGS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}
               </select>
             </label>
             {r.price != null && r.price > 0 && (r.paid ?? 0) < r.price && (

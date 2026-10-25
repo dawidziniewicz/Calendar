@@ -34,7 +34,7 @@ export type Reservation = {
   cancelled_at?: string | null;
   cancel_reviewed?: number;
   dates_locked?: number;
-  lang: 'pl' | 'en'; // język e-maili do gościa
+  lang: 'pl' | 'en' | 'cs' | 'de' | 'uk'; // język gościa (e-maile po polsku albo po angielsku)
   deposit: number | null; // zaliczka
   deposit_due: string | null; // termin wpłaty zaliczki
   currency: string; // PLN, EUR, GBP…
@@ -72,6 +72,7 @@ export type BookingRequest = {
   group_units: { id: number; name: string; type_name: string; free: boolean }[]; // domki typu do przydziału (pierwszy = proponowany)
   assign_mode?: 'auto' | 'manual';
   offer?: Offer | null; // ostatnia oferta cenowa wysłana gościowi
+  reservation_status?: string | null; // archiwum: stan rezerwacji utworzonej z zapytania
   conflicts: { id: number; check_in: string; check_out: string; guest_name: string; source: string }[];
 };
 
@@ -88,7 +89,7 @@ export type Offer = {
   valid_until: string | null; message: string; lang: string; created_by: string; created_at: string; decided_at: string | null; decline_reason: string;
   request_id: number | null; reservation_id: number | null; url: string; expired: boolean; currency: string;
 };
-export type MessageKind = 'confirmation' | 'deposit' | 'balance' | 'received' | 'custom' | 'invoice' | 'offer' | 'offer_accepted';
+export type MessageKind = 'confirmation' | 'deposit' | 'balance' | 'received' | 'custom' | 'invoice' | 'offer' | 'offer_accepted' | 'unpaid_cancel';
 export type GuestMessage = { id: number; kind: MessageKind; to_email: string; subject: string; body: string; sent_by: string; sent_at: string };
 export type Activity = { offers: Offer[]; messages: GuestMessage[]; invoices: { id: number; number: string; issue_date: string; total: number; currency: string }[]; email_configured: boolean };
 
