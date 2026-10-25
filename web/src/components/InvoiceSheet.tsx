@@ -7,6 +7,7 @@ import SignaturePad from './SignaturePad';
 import NotePhrases from './NotePhrases';
 import { CURRENCIES, currencySymbol, fmt } from '../money';
 import { useWide } from './useWide';
+import { whatsappHref } from '../phone';
 
 type Props = {
   reservationId?: number; // nowy rachunek do rezerwacji
@@ -105,7 +106,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
       setSaved(res);
       setInv(res);
       setMode('view');
-      setInfo(saved ? 'Zapisano zmiany.' : `Wystawiono rachunek nr ${res.number}.`);
+      setInfo(saved ? 'Zapisano zmiany.' : `Wystawiono rachunek nr ${res.number}. Możesz go od razu wysłać gościowi e-mailem lub WhatsAppem.`);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -143,6 +144,12 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
       else window.open(URL.createObjectURL(blob), '_blank');
     } catch { /* anulowane udostępnianie */ }
   };
+  // WhatsApp: czat z gościem (albo wybór kontaktu) z gotową wiadomością i linkiem do PDF
+  const waText = saved ? ((saved.guest?.lang ?? 'pl') === 'pl'
+    ? `Dzień dobry, przesyłamy rachunek nr ${saved.number} za pobyt. PDF: ${saved.share_url}\n\nPozdrawiamy,\nOd Morza do Gór`
+    : `Hello, here is your bill no. ${saved.number} for your stay. PDF: ${saved.share_url}\n\nBest regards,\nOd Morza do Gór`) : '';
+  const waPhone = saved?.guest?.phone ? whatsappHref(saved.guest.phone) : null;
+  const waHref = (saved?.guest?.phone && whatsappHref(saved.guest.phone, waText)) || `https://wa.me/?text=${encodeURIComponent(waText)}`;
   const send = async () => {
     if (!saved) return;
     setBusy(true);
@@ -295,21 +302,40 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                 <div className="invoice-actions">
                   {info && <div className="banner info">{info}</div>}
                   {error && <div className="banner error">{error}</div>}
+                  {saved && (
+                    <div className="invoice-send">
+                      <span className="invoice-send-label">Wyślij gościowi</span>
+                      <div className="invoice-buttons">
+                        {saved.reservation_id && (
+                          <button type="button" className={`btn ${sendTo != null ? 'primary' : ''}`} onClick={() => setSendTo(sendTo == null ? saved.guest?.email || guestEmail || '' : null)}>
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M3 6h18v12H3zM3 6l9 7 9-7" /></svg>
+                            E-mail z PDF
+                          </button>
+                        )}
+                        <a className="btn whatsapp-btn" href={waHref} target="_blank" rel="noopener noreferrer">
+                          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M12 2.2A9.8 9.8 0 0 0 3.6 17l-1.4 4.8 4.9-1.3A9.8 9.8 0 1 0 12 2.2Zm0 17.8a8 8 0 0 1-4.1-1.1l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 1 1 12 20Zm4.4-6c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.8 1c-.1.2-.3.2-.5.1a6.6 6.6 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.1 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.5-.4h-.5c-.2 0-.4.1-.6.3-.2.2-.8.8-.8 1.9s.8 2.2.9 2.4c.1.1 1.6 2.5 4 3.5 1.5.6 2 .7 2.8.6.4-.1 1.4-.6 1.6-1.1.2-.6.2-1 .1-1.1l-.1-.1Z" /></svg>
+                          WhatsApp
+                        </a>
+                      </div>
+                      {sendTo != null && (
+                        <div className="send-row">
+                          <label>Adres e-mail<input type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="e-mail gościa" /></label>
+                          <button type="button" className="btn primary" disabled={busy || !sendTo} onClick={send}>{busy ? 'Wysyłanie…' : 'Wyślij z PDF'}</button>
+                        </div>
+                      )}
+                      <small className="muted invoice-send-hint">
+                        {waPhone ? `WhatsApp otworzy czat z ${saved.guest?.phone} z gotową wiadomością i linkiem do PDF.` : 'Brak numeru gościa — w WhatsAppie wybierzesz, do kogo wysłać wiadomość z linkiem do PDF.'}
+                      </small>
+                    </div>
+                  )}
                   <div className="invoice-buttons">
                     {saved && <a className="btn" href={api.invoicePdfUrl(saved.id, true)} download={fileName}>Pobierz PDF</a>}
-                    <button type="button" className="btn" disabled={!blob} onClick={share}>Udostępnij / drukuj</button>
-                    {saved?.reservation_id && <button type="button" className="btn primary" onClick={() => setSendTo(sendTo == null ? guestEmail ?? '' : null)}>Wyślij gościowi</button>}
+                    <button type="button" className="btn" disabled={!blob} onClick={share}>Udostępnij plik / drukuj</button>
                   </div>
                   {saved && (
                     <div className="invoice-buttons sign-buttons">
                       <button type="button" className="btn small" disabled={busy} onClick={() => setSigning('buyer')}>✍ {saved.buyer_signature ? 'Podpisz ponownie (gość)' : 'Podpis gościa'}</button>
                       <button type="button" className="btn small" disabled={busy} onClick={() => setSigning('seller')}>✍ {saved.seller_signature ? 'Podpisz ponownie (Ty)' : 'Mój podpis'}</button>
-                    </div>
-                  )}
-                  {sendTo != null && (
-                    <div className="send-row">
-                      <label>Adres e-mail<input type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="e-mail gościa" /></label>
-                      <button type="button" className="btn primary" disabled={busy || !sendTo} onClick={send}>{busy ? 'Wysyłanie…' : 'Wyślij z PDF'}</button>
                     </div>
                   )}
                 </div>

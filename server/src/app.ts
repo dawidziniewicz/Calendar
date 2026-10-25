@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { newToken } from './db.ts';
 import {
   SESSION_COOKIE, SESSION_DAYS, allowedUnitIds, checkLogin, clearFails, createSession, deleteSession, lockedFor, registerFail, sessionUser, setPassword,
@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
+  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
 } from './booking.ts';
 import {
   composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
@@ -90,6 +90,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // ---- Strona www (odmorzadogor.pl): cennik, dostępność i zapytania o rezerwację ----
   // Bez logowania, ale tylko przez proxy z kluczem API (Cloudflare Pages → tunel). Nie zwraca danych gości.
   const pub = new Hono();
+  // Podpis linku do rachunku (bez logowania, nie do odgadnięcia; zawsze aktualna wersja rachunku)
+  const invoiceSig = (id: number) => createHmac('sha256', apiKey).update(`invoice:${id}`).digest('base64url').slice(0, 24);
+  const invoiceShareUrl = (id: number, number: string) => `${appUrl()}/public/rachunek/${id}/${invoiceSig(id)}/${invoiceFileName(number)}`;
   const hits = new Map<string, number[]>();
   const allowHit = (key: string, limit: number) => {
     const now = Date.now();
@@ -276,6 +279,17 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const payload = qrFromPath(apiKey, data, str(c.req.query('s'), 40));
     if (!payload) return c.text('Not found', 404);
     return c.body(new Uint8Array(await qrPng(payload)), 200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+  });
+
+  // ---- Rachunek dla gościa pod podpisanym linkiem (WhatsApp): /public/rachunek/<id>/<podpis>/<plik>.pdf ----
+  pub.get('/rachunek/:id{[0-9]+}/:sig/:file', async (c) => {
+    const id = Number(c.req.param('id'));
+    const sig = c.req.param('sig');
+    const want = invoiceSig(id);
+    if (sig.length !== want.length || !timingSafeEqual(Buffer.from(sig), Buffer.from(want))) return c.text('Not found', 404);
+    const row = get('SELECT * FROM invoices WHERE id = ?', id) as InvoiceRow | undefined;
+    if (!row) return c.text('Not found', 404);
+    return pdfResponse(c, await invoicePdf(invoiceData(row)), row.number, false);
   });
 
   // ---- Oferta cenowa: gość akceptuje cenę z obowiązkiem zapłaty (link z e-maila: /oferta/?t=KOD) ----
@@ -1518,7 +1532,15 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       currency: readCurrency(b.currency),
     };
   };
-  const invoiceOut = (row: InvoiceRow) => ({ id: row.id, reservation_id: row.reservation_id, created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at, total: row.total, ...invoiceData(row) });
+  const invoiceOut = (row: InvoiceRow) => {
+    const guest = row.reservation_id
+      ? get('SELECT guest_name AS name, guest_email AS email, guest_phone AS phone, lang FROM reservations WHERE id = ?', row.reservation_id) as { name: string; email: string; phone: string; lang: string } | undefined
+      : undefined;
+    return {
+      id: row.id, reservation_id: row.reservation_id, created_by: row.created_by, created_at: row.created_at, updated_at: row.updated_at, total: row.total, ...invoiceData(row),
+      share_url: invoiceShareUrl(row.id, row.number), guest: guest ?? null,
+    };
+  };
   const pdfResponse = (c: { body: (b: Uint8Array, s: 200, h: Record<string, string>) => Response }, pdf: Buffer, number: string, download: boolean) =>
     c.body(new Uint8Array(pdf), 200, {
       'Content-Type': 'application/pdf', 'Cache-Control': 'no-store',

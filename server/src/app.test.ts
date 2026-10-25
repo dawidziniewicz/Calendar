@@ -1023,6 +1023,14 @@ test('rachunki: szablon z ostatnich danych, numeracja, PDF A4, wysyłka e-mailem
   assert.equal((await call('POST', '/api/invoices', { ...next, number: inv.number, reservation_id: r.id })).status, 400, 'numer zajęty');
   const file = await call('GET', `/api/invoices/${inv.id}/pdf`);
   assert.match(file.headers.get('content-disposition') ?? '', /Rachunek-1-\d{4}\.pdf/);
+  // link do rachunku dla gościa (WhatsApp): bez logowania, tylko z poprawnym podpisem
+  assert.equal(inv.guest.email, 'anna@example.com');
+  const sharePath = new URL(inv.share_url).pathname;
+  assert.match(sharePath, /^\/public\/rachunek\/\d+\/[\w-]{24}\/Rachunek-1-\d{4}\.pdf$/);
+  const shared = await call('GET', sharePath);
+  assert.equal(shared.status, 200);
+  assert.equal(shared.headers.get('content-type'), 'application/pdf');
+  assert.equal((await call('GET', sharePath.replace(/\/rachunek\/(\d+)\/[^/]+\//, '/rachunek/$1/AAAAAAAAAAAAAAAAAAAAAAAA/'))).status, 404);
   const send = await (await call('POST', `/api/invoices/${inv.id}/send`, {})).json();
   assert.equal(send.to, 'anna@example.com');
   const m = sent.at(-1)! as { attachments?: { filename: string; content: Buffer }[] };
@@ -1031,6 +1039,7 @@ test('rachunki: szablon z ostatnich danych, numeracja, PDF A4, wysyłka e-mailem
   await call('PUT', `/api/invoices/${inv.id}`, { ...inv, items: [{ name: 'Nocleg', qty: 4, unit: 'noc', price: 450 }] });
   assert.equal((await (await call('GET', `/api/invoices/${inv.id}`)).json()).total, 1800);
   assert.equal((await call('DELETE', `/api/invoices/${inv.id}`)).status, 200);
+  assert.equal((await call('GET', sharePath)).status, 404, 'usunięty rachunek');
 });
 
 test('typ domku z listy: dołączenie przejmuje ceny typu, zmiana nazwy dla wszystkich; ceny widoczne do konkretnej daty', async () => {

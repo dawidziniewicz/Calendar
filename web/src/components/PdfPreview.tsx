@@ -7,7 +7,7 @@ let pdfjs: Promise<PdfJs> | null = null;
 const loadPdfJs = () => (pdfjs ??= Promise.all([import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url')]).then(([lib, worker]) => {
   lib.GlobalWorkerOptions.workerSrc = worker.default;
   return lib;
-}));
+}).catch((err) => { pdfjs = null; throw err; })); // nieudane wczytanie — następna próba od nowa
 
 export default function PdfPreview({ blob, loading, error: outerError }: { blob: Blob | null; loading?: boolean; error?: string }) {
   const box = useRef<HTMLDivElement>(null);
@@ -60,7 +60,12 @@ export default function PdfPreview({ blob, loading, error: outerError }: { blob:
   return (
     <div className="pdf-preview">
       {(loading || rendering) && <div className="pdf-status">Przygotowywanie podglądu…</div>}
-      {err && <div className="banner error">{err}</div>}
+      {err && (
+        // stara wersja aplikacji po wdrożeniu nowej (brak plików podglądu) → wystarczy odświeżyć
+        /MIME type|dynamically imported module|fake worker|Importing a module script failed/i.test(err)
+          ? <div className="banner info">Jest nowa wersja aplikacji. <button type="button" className="link" onClick={() => location.reload()}>Odśwież</button>, żeby zobaczyć podgląd.</div>
+          : <div className="banner error">{err}</div>
+      )}
       <div ref={box} className={`pdf-pages ${loading ? 'is-loading' : ''}`} />
     </div>
   );
