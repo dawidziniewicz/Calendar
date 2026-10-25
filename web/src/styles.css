@@ -921,3 +921,14 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 .horizon-field .date-input { flex: 1; }
 .after-select { flex: 0 1 260px; min-width: 200px; height: 40px !important; min-height: 40px !important; font-size: 14px !important; }
 @media (min-width: 900px) { .horizon-row { flex-wrap: nowrap; } }
+
+/* ---- Ogłoszenia: pobieranie pojedynczych plików ---- */
+.poster-save { width: 100%; margin-top: 10px; gap: 8px; }
+.photo-cell { position: relative; }
+.photo-cell .photo-thumb { width: 100%; }
+.photo-dl { position: absolute; right: 6px; bottom: 6px; width: 32px; height: 32px; border-radius: 50%; border: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 28, 25, 0.72); color: #fff; cursor: pointer; padding: 0; }
+@media (hover: hover) { .photo-dl:hover { background: var(--primary); color: var(--primary-ink); } }
+.photo-dl:disabled { opacity: .5; cursor: default; }
+.listing-actions-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 520px) { .listing-actions-row { grid-template-columns: 1fr; } }

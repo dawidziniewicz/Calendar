@@ -145,9 +145,30 @@ export async function drawPoster(canvas: HTMLCanvasElement, W: number, H: number
   const textW = inner - cardPad * 2 - (qrSize ? qrSize + cardPad : 0);
   const headSize = fitFont(ctx, p.headline, SANS, '600', Math.round(27 * u), textW, Math.round(16 * u));
   const domainSize = fitFont(ctx, p.domain, SERIF, '400', Math.round(76 * u), textW, Math.round(36 * u));
-  const sub = [p.note, p.phone].filter(Boolean).join('  ·  ');
-  const subSize = sub ? fitFont(ctx, sub, SANS, '500', Math.round(23 * u), textW, Math.round(14 * u)) : 0;
-  const textH = headSize * 1.25 + domainSize * 1.05 + (sub ? subSize * 1.6 : 0);
+  // Wiersze karty mierzone z prawdziwych wymiarów liter (np. „g” w adresie schodzi nisko) — nic na siebie nie wchodzi
+  type Line = { text: string; font: string; color: string; asc: number; desc: number; gap: number };
+  const line = (text: string, font: string, color: string, gap: number): Line => {
+    ctx.font = font;
+    const m = ctx.measureText(text);
+    return { text, font, color, asc: m.actualBoundingBoxAscent, desc: m.actualBoundingBoxDescent, gap };
+  };
+  const lines: Line[] = [
+    line(p.headline, `600 ${headSize}px ${SANS}`, C.pineDeep, Math.round(12 * u)),
+    line(p.domain, `400 ${domainSize}px ${SERIF}`, C.ink, Math.round(18 * u)),
+  ];
+  // „Bez prowizji · telefon” w jednym wierszu, a jeśli się nie mieści — w dwóch
+  const subParts = [p.note, p.phone].filter(Boolean);
+  const subMin = Math.round(18 * u);
+  const together = subParts.join('  ·  ');
+  if (together) {
+    const size = fitFont(ctx, together, SANS, '500', Math.round(23 * u), textW, Math.round(14 * u));
+    if (size >= subMin || subParts.length < 2) lines.push(line(together, `500 ${size}px ${SANS}`, C.muted, Math.round(8 * u)));
+    else for (const part of subParts) {
+      const ps = fitFont(ctx, part, SANS, '500', Math.round(23 * u), textW, Math.round(14 * u));
+      lines.push(line(part, `500 ${ps}px ${SANS}`, C.muted, Math.round(8 * u)));
+    }
+  }
+  const textH = lines.reduce((h, l, i) => h + l.asc + l.desc + (i < lines.length - 1 ? l.gap : 0), 0);
   const cardH = Math.round(Math.max(textH, qrSize) + cardPad * 2);
   const cardY = H - pad - cardH;
 
@@ -176,19 +197,12 @@ export async function drawPoster(canvas: HTMLCanvasElement, W: number, H: number
 
   let ty = cardY + cardPad + (Math.max(textH, qrSize) - textH) / 2;
   const tx = pad + cardPad + 6 * u;
-  ctx.fillStyle = C.pineDeep;
-  ctx.font = `600 ${headSize}px ${SANS}`;
-  ty += headSize;
-  ctx.fillText(p.headline, tx, ty);
-  ctx.fillStyle = C.ink;
-  ctx.font = `400 ${domainSize}px ${SERIF}`;
-  ty += domainSize * 1.05;
-  ctx.fillText(p.domain, tx, ty);
-  if (sub) {
-    ctx.fillStyle = C.muted;
-    ctx.font = `500 ${subSize}px ${SANS}`;
-    ty += subSize * 1.6;
-    ctx.fillText(sub, tx, ty);
+  for (const l of lines) {
+    ty += l.asc;
+    ctx.font = l.font;
+    ctx.fillStyle = l.color;
+    ctx.fillText(l.text, tx, ty);
+    ty += l.desc + l.gap;
   }
   if (p.qr) {
     const q = document.createElement('canvas');
@@ -230,12 +244,16 @@ export async function drawPoster(canvas: HTMLCanvasElement, W: number, H: number
     }
     y -= Math.round(16 * u);
   }
+  // y = dolna granica dla kolejnego bloku (od dołu do góry); odstępy liczone z prawdziwych wymiarów liter
+  const box = (text: string) => { const m = ctx.measureText(text); return { asc: m.actualBoundingBoxAscent, desc: m.actualBoundingBoxDescent }; };
   if (p.facts.length) {
     const text = p.facts.join('   ·   ');
-    const size = fitFont(ctx, text, SANS, '600', Math.round(29 * u), inner, Math.round(16 * u));
+    fitFont(ctx, text, SANS, '600', Math.round(29 * u), inner, Math.round(16 * u));
+    const b = box(text);
+    const base = y - b.desc;
     ctx.fillStyle = C.sandSoft;
-    ctx.fillText(text, pad, y);
-    y -= size * 1.55;
+    ctx.fillText(text, pad, base);
+    y = base - b.asc - Math.round(20 * u);
   }
   if (p.name) {
     let size = Math.round(104 * u);
@@ -250,22 +268,25 @@ export async function drawPoster(canvas: HTMLCanvasElement, W: number, H: number
     ctx.save();
     ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
     ctx.shadowBlur = 18 * u;
-    for (const l of [...lines].reverse()) {
-      ctx.fillText(l, pad - 2 * u, y);
-      y -= size * 1.02;
+    let base = y - box(lines.at(-1)!).desc;
+    for (const [i, l] of [...lines].reverse().entries()) {
+      if (i) base -= size * 1.04;
+      ctx.fillText(l, pad - 2 * u, base);
     }
     ctx.restore();
-    y -= Math.round(14 * u);
+    y = base - box(lines[0]).asc - Math.round(18 * u);
   }
   if (p.region) {
     const size = Math.round(21 * u);
     ctx.font = `700 ${size}px ${SANS}`;
     spaced(ctx, 3.2 * u);
+    const text = p.region.toUpperCase();
+    const base = y - box(text).desc;
     ctx.save();
     ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
     ctx.shadowBlur = 10 * u;
     ctx.fillStyle = '#ddd2c4';
-    ctx.fillText(p.region.toUpperCase(), pad, y);
+    ctx.fillText(text, pad, base);
     ctx.restore();
     spaced(ctx, 0);
   }
