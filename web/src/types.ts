@@ -112,7 +112,11 @@ export type InvoiceData = {
   currency: string;
   reservation_id?: number | null;
 };
-export type Invoice = InvoiceData & { id: number; reservation_id: number | null; total: number; created_by: string; created_at: string; updated_at: string };
+export type Invoice = InvoiceData & {
+  id: number; reservation_id: number | null; total: number; created_by: string; created_at: string; updated_at: string;
+  share_url: string; // link do PDF dla gościa (bez logowania), np. do wysłania WhatsAppem
+  guest: { name: string; email: string; phone: string; lang: string } | null;
+};
 export type InvoiceListItem = { id: number; number: string; issue_date: string; total: number; currency: string; buyer_name: string; reservation_id: number | null; check_in: string | null; check_out: string | null };
 export type InvoiceTemplate = Party & {
   account: string; bank: string; place: string; note: string; footer: string | null; payment_method: string; payment_days: number | null;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import EmailLink from './EmailLink';
+import { whatsappHref } from '../phone';
 import { api, ApiError } from '../api';
 import type { Activity, MessageKind, Property, Reservation } from '../types';
 import OfferSheet from './OfferSheet';
@@ -22,14 +23,6 @@ import { fmt } from '../money';
 const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
 /** Link do czatu WhatsApp. Numer bez kierunkowego (9 cyfr) traktujemy jako polski (+48). */
-function whatsappHref(phone: string): string | null {
-  let digits = phone.trim().replace(/[^\d+]/g, '');
-  if (digits.startsWith('+')) digits = digits.slice(1);
-  else if (digits.startsWith('00')) digits = digits.slice(2);
-  else if (digits.length === 9) digits = `48${digits}`;
-  digits = digits.replace(/\D/g, '');
-  return digits.length >= 10 ? `https://wa.me/${digits}` : null;
-}
 
 export default function ReservationView({ reservation: r, properties, readOnly, onClose, onEdit, onChanged }: Props) {
   const [busy, setBusy] = useState(false);

@@ -824,3 +824,13 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 @media (max-width: 760px) {
   .choice-sheet { height: auto; max-height: calc(var(--vv-height, 100dvh) - 40px); }
 }
+
+/* ---- Rachunek: wysyłka gościowi (e-mail z PDF, WhatsApp z linkiem) ---- */
+.invoice-send { display: flex; flex-direction: column; gap: 8px; padding: 12px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.invoice-send-label { font-weight: 600; font-size: 0.92rem; }
+.invoice-send .invoice-buttons { margin-bottom: 0; }
+.invoice-send .send-row { margin-top: 2px; }
+.invoice-send-hint { font-size: 0.8rem; line-height: 1.4; }
+.invoice-buttons .btn { gap: 8px; }
+.invoice-buttons a.btn.whatsapp-btn { color: #1fa855; border-color: color-mix(in srgb, #1fa855 45%, var(--line)); }
+@media (hover: hover) { .invoice-buttons a.btn.whatsapp-btn:hover { background: color-mix(in srgb, #1fa855 10%, transparent); } }
