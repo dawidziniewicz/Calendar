@@ -808,3 +808,19 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 .mail-reply h3 { margin: 0; font-size: 0.95rem; }
 .mail-reply .row { margin: 0; }
 .mail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+
+/* ---- Wybór: e-mail gościa w Poczcie kalendarza czy w innej aplikacji ---- */
+.choice-backdrop { z-index: 70; }
+.choice-sheet { max-width: 440px; }
+.choice-addr { margin: 0 0 12px; font-weight: 600; overflow-wrap: anywhere; text-align: center; }
+.choice-list { display: flex; flex-direction: column; gap: 8px; }
+.choice { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 14px; text-align: left; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); text-decoration: none; font: inherit; cursor: pointer; }
+.choice svg { flex: none; color: var(--primary); }
+.choice span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.choice b { font-weight: 600; overflow-wrap: anywhere; }
+.choice small { color: var(--muted); font-size: 0.82rem; line-height: 1.35; }
+.choice.primary { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); }
+@media (hover: hover) { .choice:hover { border-color: var(--primary); } }
+@media (max-width: 760px) {
+  .choice-sheet { height: auto; max-height: calc(var(--vv-height, 100dvh) - 40px); }
+}
