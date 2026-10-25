@@ -8,6 +8,7 @@ import NotePhrases from './NotePhrases';
 import { CURRENCIES, currencySymbol, fmt } from '../money';
 import { useWide } from './useWide';
 import { whatsappHref } from '../phone';
+import DateInput from './DateInput';
 
 type Props = {
   reservationId?: number; // nowy rachunek do rezerwacji
@@ -203,8 +204,8 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                 <legend>Numer i daty</legend>
                 <label>Numer<input value={inv.number} onChange={(e) => set('number', e.target.value)} placeholder="np. 1/2026" /></label>
                 <label>Miejsce wystawienia<input value={inv.place} onChange={(e) => set('place', e.target.value)} placeholder="np. Gdańsk" /></label>
-                <label>Data wystawienia<input type="date" value={inv.issue_date} onChange={(e) => e.target.value && set('issue_date', e.target.value)} /></label>
-                <label>Data wykonania usługi<input type="date" value={inv.sale_date} onChange={(e) => set('sale_date', e.target.value)} /></label>
+                <label>Data wystawienia<DateInput value={inv.issue_date} onChange={(v) => v && set('issue_date', v)} /></label>
+                <label>Data wykonania usługi<DateInput value={inv.sale_date} onChange={(v) => set('sale_date', v)} /></label>
               </fieldset>
 
               <fieldset>
@@ -239,7 +240,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                   <input list="pay-methods" value={inv.payment_method} onChange={(e) => set('payment_method', e.target.value)} />
                   <datalist id="pay-methods">{PAYMENT_METHODS.map((m) => <option key={m} value={m} />)}</datalist>
                 </label>
-                <label>Termin płatności<input type="date" value={inv.payment_due} onChange={(e) => set('payment_due', e.target.value)} /></label>
+                <label>Termin płatności<DateInput value={inv.payment_due} onChange={(v) => set('payment_due', v)} /></label>
                 <label>Waluta
                   <select value={inv.currency} onChange={(e) => changeCurrency(e.target.value)}>
                     {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}

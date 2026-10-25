@@ -14,7 +14,7 @@ import { syncAll } from './sync.ts';
 import { announce, syncEvents, type ChangeEvent } from './changes.ts';
 import { isEmail, parseEmails, type Mailer } from './mail.ts';
 import {
-  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasLines, parseChosenExtras, priceExtras, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
+  DEFAULT_HORIZON, appUrl, SITE_LANGS, readSiteLang, mailLang, sitePath, EMAIL_NOTIFY_KEY, emailNotify, HORIZON_KEY, HORIZON_UNTIL_KEY, horizonUntil, announceCancelRequest, chooseUnit, mailCancelDecision, propertyClosure, unitGroup, extrasFor, extrasForUnit, extrasLines, parseChosenExtras, priceExtras, type ChosenExtra, NOTIFY_EMAILS_KEY, addDays, adminEmails, bookingHorizon, horizonEnd, parseWeekdayPrices, announceRequest, mailDecision, composeDecision, mailTest, nights, nightsBetween, quote, unitPricing, zl, type RequestRow,
 } from './booking.ts';
 import {
   composeMessage, defaultDeposit, depositRows, draftMessage, notifyStaff, offerExpired, offerUrl, paymentSettings, readPaymentSettings, sendGuestMessage, staffRows,
@@ -28,6 +28,7 @@ import {
 } from './invoice.ts';
 import { dateRange } from './changes.ts';
 import { MAILBOXES_KEY, REPLY_TO_KEY, addrOf, fromHeader, lastInbound, mailboxes, replyHtml, storeMessage, withMailLog } from './mailbox.ts';
+import { dmyTime, todayDmy } from './dmy.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = ['confirmed', 'tentative', 'cancelled'];
@@ -112,7 +113,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const units = all('SELECT id, property_id FROM units WHERE bookable = 1 ORDER BY sort, id') as { id: number; property_id: number }[];
     // „Cena od” = najniższa cena za noc w okresie, który strona pokazuje (podstawowa, dni tygodnia i ceny na konkretne dni)
     const today = warsawToday();
-    const end = horizonEnd(db);
+    const extraOut = (e: ReturnType<typeof extrasFor>[number]) => ({ id: e.id, name: e.name, name_en: e.name_en || e.name, description: e.description, price: e.price, per: e.per, max_qty: e.max_qty, required: !!e.required });
     return c.json(properties.map((p) => ({
       ...p,
       // zamknięcie obiektu: from/to = null przy zamknięciu do odwołania
@@ -121,19 +122,20 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
         return cl && (!cl.closed_to || cl.closed_to >= today)
           ? { from: cl.closed_from, to: cl.closed_to, note: cl.closed_note, note_en: cl.closed_note_en || cl.closed_note } : null;
       })(),
-      extras: extrasFor(db, p.id).map((e) => ({ id: e.id, name: e.name, name_en: e.name_en || e.name, description: e.description, price: e.price, per: e.per, max_qty: e.max_qty })),
+      extras: extrasFor(db, p.id).map(extraOut),
       ...(() => {
         const list = units.filter((u) => u.property_id === p.id).map(({ id }) => {
           const u = unitPricing(db, id)!;
+          const end = horizonEnd(db, id); // „ceny do” dla typu domku / obiektu / ogólnie
           const prices = nights(db, u, today, end).map((n) => n.price).filter((v): v is number => v != null);
-          return { id, name: u.name, type_name: u.type_name, type_name_en: u.type_name_en, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null };
+          return { id, name: u.name, type_name: u.type_name, type_name_en: u.type_name_en, capacity: u.capacity, base_price: u.base_price, min_nights: u.min_nights, price_from: prices.length ? Math.min(...prices) : null, prices_until: addDays(end, -1) };
         });
         // Typy: domki z tym samym typem pokazujemy jako jedną opcję („Mały domek · 3 domki”), pozostałe osobno
-        const types: { key: string; name: string; name_en: string; unit_ids: number[]; count: number; capacity: number; min_nights: number; price_from: number | null }[] = [];
+        const types: { key: string; name: string; name_en: string; unit_ids: number[]; count: number; capacity: number; min_nights: number; price_from: number | null; prices_until: string; extras?: ReturnType<typeof extraOut>[] }[] = [];
         for (const u of list) {
           const key = u.type_name ? `t:${u.type_name.toLowerCase()}` : `u:${u.id}`;
           const t = types.find((x) => x.key === key);
-          if (!t) types.push({ key, name: u.type_name || u.name, name_en: (u.type_name && u.type_name_en) || u.type_name || u.name, unit_ids: [u.id], count: 1, capacity: u.capacity, min_nights: u.min_nights, price_from: u.price_from });
+          if (!t) types.push({ key, name: u.type_name || u.name, name_en: (u.type_name && u.type_name_en) || u.type_name || u.name, unit_ids: [u.id], count: 1, capacity: u.capacity, min_nights: u.min_nights, price_from: u.price_from, prices_until: u.prices_until });
           else {
             t.unit_ids.push(u.id);
             t.count++;
@@ -143,6 +145,8 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
             if (t.price_from === Infinity) t.price_from = null;
           }
         }
+        // opcje z ceną dla typu domku (np. sprzątanie dużego domku droższe)
+        for (const t of types) t.extras = extrasForUnit(db, t.unit_ids[0]).map(extraOut);
         return { units: list.map(({ type_name: _, type_name_en: __, ...u }) => u), types };
       })(),
     })).filter((p) => p.units.length));
@@ -160,7 +164,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!DATE_RE.test(to) || to <= from) to = addDays(from, 62);
     if (nightsBetween(from, to) > 460) to = addDays(from, 460);
     // dalej niż horyzont ustawiony w aplikacji strona nie pokazuje cen ani wolnych dni
-    const end = horizonEnd(db);
+    const end = horizonEnd(db, unit.id);
     if (to > end) to = end > from ? end : from;
     c.header('Cache-Control', 'no-store');
     if (group) {
@@ -221,8 +225,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const pick = chooseUnit(db, fits, r.check_in, r.check_out, en ? 'en' : 'pl');
     if (!pick.unit || !pick.q) return c.json({ error: pick.reason, code: 'unavailable' }, 409);
     const unit = pick.unit, q = pick.q;
-    const propertyId = unit.property_id;
-    const extras = priceExtras(db, propertyId, b.extras, q.nights);
+    const extras = priceExtras(db, unit.id, b.extras, q.nights);
     const extrasTotal = extras.reduce((s, e) => s + e.total, 0);
     const total = q.total == null ? null : q.total + extrasTotal;
     const res = run(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_phone, guest_email, adults, children, message, quoted_price, ip, lang, extras, group_unit_ids)
@@ -372,7 +375,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     }
 
     if (b.consent !== true) bad(t('Zaznacz akceptację ceny i obowiązku zapłaty', 'Please confirm the price and your obligation to pay'));
-    const stamp = `${new Date().toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw' })}, IP ${ip}`;
+    const stamp = `${dmyTime()}, IP ${ip}`;
     let reservationId: number;
     let cancelUrl: string | null = null;
     if (st.request) {
@@ -788,6 +791,20 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       GROUP BY lower(guest_name), guest_phone ORDER BY last_stay DESC LIMIT 10`, q, q, q));
   });
 
+  /** Opcje płatne w rezerwacji z aplikacji: kopia nazwy i ceny (można ją zmienić ręcznie), suma liczona tutaj */
+  function readReservationExtras(v: unknown, nightsCount: number): string | null {
+    if (!Array.isArray(v)) return null;
+    const out: ChosenExtra[] = [];
+    for (const x of v.slice(0, 30) as Record<string, unknown>[]) {
+      const name = str(x?.name, 80), price = money(x?.price);
+      const qty = Math.min(99, Math.max(0, int(x?.qty)));
+      if (!name || price == null || price < 0 || !qty) continue;
+      const per = x.per === 'night' ? 'night' : 'stay';
+      out.push({ id: int(x.id), name, name_en: str(x.name_en, 80), price, per, qty, total: Math.round(price * qty * (per === 'night' ? nightsCount : 1) * 100) / 100, ...(x.required ? { required: true } : {}) });
+    }
+    return out.length ? JSON.stringify(out) : null;
+  }
+
   function readReservation(b: Record<string, unknown>) {
     const r = {
       unit_id: int(b.unit_id),
@@ -807,8 +824,10 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       deposit: money(b.deposit),
       deposit_due: DATE_RE.test(str(b.deposit_due, 10)) ? str(b.deposit_due, 10) : null,
       currency: readCurrency(b.currency),
+      extras: null as string | null,
     };
     if (!DATE_RE.test(r.check_in) || !DATE_RE.test(r.check_out)) bad('Nieprawidłowe daty');
+    r.extras = readReservationExtras(b.extras, nightsBetween(r.check_in, r.check_out));
     if (r.check_out <= r.check_in) bad('Wyjazd musi być po przyjeździe');
     if (!get('SELECT 1 FROM units WHERE id = ?', r.unit_id)) bad('Wybierz domek/apartament');
     return r;
@@ -826,9 +845,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const found = conflicts(r, 0);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email,
-      adults, children, price, paid, notes, lang, deposit, deposit_due, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      adults, children, price, paid, notes, lang, deposit, deposit_due, currency, extras) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes, r.lang, r.deposit, r.deposit_due, r.currency);
+      r.adults, r.children, r.price, r.paid, r.notes, r.lang, r.deposit, r.deposit_due, r.currency, r.extras);
     const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
     notify([{ kind: 'created', row: created, by: c.get('user').username }], c.get('user').id);
     return c.json(created, 201);
@@ -848,9 +867,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
     run(`UPDATE reservations SET unit_id = ?, check_in = ?, check_out = ?, status = ?, source = ?, guest_name = ?, guest_phone = ?,
       guest_email = ?, adults = ?, children = ?, price = ?, paid = ?, notes = ?, dates_locked = ?, lang = ?, deposit = ?, deposit_due = ?, currency = ?,
-      updated_at = datetime('now') WHERE id = ?`,
+      extras = ?, updated_at = datetime('now') WHERE id = ?`,
       r.unit_id, r.check_in, r.check_out, r.status, r.source, r.guest_name, r.guest_phone, r.guest_email,
-      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, r.lang, r.deposit, r.deposit_due, r.currency, id);
+      r.adults, r.children, r.price, r.paid, r.notes, datesLocked, r.lang, r.deposit, r.deposit_due, r.currency, b.extras === undefined ? (existing.extras as string | null) ?? null : r.extras, id);
     const updated = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown>;
     notify([{ kind: 'updated', before: existing, after: updated, by: c.get('user').username }], c.get('user').id);
     return c.json(updated);
@@ -874,7 +893,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const b = await c.req.json().catch(() => ({}));
     const found = conflicts({ unit_id: row.unit_id as number, check_in: row.check_in as string, check_out: row.check_out as string, status: 'confirmed' }, id);
     if (found.length && !b.force) return c.json({ error: 'Termin nakłada się z inną rezerwacją', conflicts: found }, 409);
-    const note = `Przeniesiona z ${row.source === 'booking' ? 'Booking.com' : row.source} po odwołaniu (${new Date().toLocaleDateString('pl-PL', { timeZone: 'Europe/Warsaw' })}).`;
+    const note = `Przeniesiona z ${row.source === 'booking' ? 'Booking.com' : row.source} po odwołaniu (${todayDmy()}).`;
     // Odłączenie od kalendarza Bookingu: synchronizacja już jej nie dotknie.
     run(`UPDATE reservations SET feed_id = NULL, external_uid = NULL, source = 'direct', status = 'confirmed',
       cancelled_at = NULL, cancel_reviewed = 0, notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END,
@@ -1047,7 +1066,17 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     return c.json(get('SELECT id, closed, closed_from, closed_to, closed_note, closed_note_en FROM properties WHERE id = ?', id));
   });
 
-  // ---- Opcje płatne (parking, zwierzę, łóżeczko…) ----
+  // ---- Opcje płatne (parking, zwierzę, łóżeczko, sprzątanie…) ----
+  /** Inne ceny dla obiektów / domków: {"p3": 200, "u7": 150} (puste = cena podstawowa) */
+  const readOverrides = (v: unknown) => {
+    if (!v || typeof v !== 'object') return null;
+    const out: Record<string, number> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>).slice(0, 300)) {
+      const n = money(x);
+      if (/^[pu]\d{1,9}$/.test(k) && n != null && n >= 0 && n <= 100_000) out[k] = n;
+    }
+    return Object.keys(out).length ? JSON.stringify(out) : null;
+  };
   const readExtra = (b: Record<string, unknown>) => {
     const name = str(b.name, 80);
     if (!name) bad('Podaj nazwę opcji');
@@ -1058,22 +1087,29 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       name, name_en: str(b.name_en, 80), description: str(b.description, 300), price,
       per: b.per === 'night' ? 'night' : 'stay', max_qty: Math.min(20, Math.max(1, int(b.max_qty) || 1)),
       property_ids: scope ? JSON.stringify(scope) : null, active: b.active === false ? 0 : 1,
+      required: b.required ? 1 : 0, price_overrides: readOverrides(b.price_overrides),
     };
   };
-  api.get('/extras', (c) => c.json(all('SELECT * FROM extras ORDER BY sort, id')));
+  api.get('/extras', (c) => c.json(all('SELECT * FROM extras ORDER BY required DESC, sort, id')));
+  // Opcje do formularza rezerwacji: z ceną dla danego domku (także wyłączone na stronie — w aplikacji można je dodać)
+  api.get('/units/:id{[0-9]+}/extras', (c) => {
+    const unitId = int(c.req.param('id'));
+    requireUnit(c.get('user'), unitId);
+    return c.json(extrasForUnit(db, unitId, false).map((e) => ({ id: e.id, name: e.name, name_en: e.name_en, price: e.price, per: e.per, max_qty: e.max_qty, required: !!e.required, active: !!e.active })));
+  });
   api.post('/extras', async (c) => {
     requireFullAdmin(c.get('user'));
     const e = readExtra(await c.req.json());
     const { m } = get('SELECT COALESCE(MAX(sort), 0) + 1 AS m FROM extras') as { m: number };
-    const r = run('INSERT INTO extras (name, name_en, description, price, per, max_qty, property_ids, active, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      e.name, e.name_en, e.description, e.price, e.per, e.max_qty, e.property_ids, e.active, m);
+    const r = run('INSERT INTO extras (name, name_en, description, price, per, max_qty, property_ids, active, sort, required, price_overrides) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      e.name, e.name_en, e.description, e.price, e.per, e.max_qty, e.property_ids, e.active, m, e.required, e.price_overrides);
     return c.json(get('SELECT * FROM extras WHERE id = ?', r.lastInsertRowid), 201);
   });
   api.put('/extras/:id', async (c) => {
     requireFullAdmin(c.get('user'));
     const e = readExtra(await c.req.json());
-    const r = run('UPDATE extras SET name = ?, name_en = ?, description = ?, price = ?, per = ?, max_qty = ?, property_ids = ?, active = ? WHERE id = ?',
-      e.name, e.name_en, e.description, e.price, e.per, e.max_qty, e.property_ids, e.active, int(c.req.param('id')));
+    const r = run('UPDATE extras SET name = ?, name_en = ?, description = ?, price = ?, per = ?, max_qty = ?, property_ids = ?, active = ?, required = ?, price_overrides = ? WHERE id = ?',
+      e.name, e.name_en, e.description, e.price, e.per, e.max_qty, e.property_ids, e.active, e.required, e.price_overrides, int(c.req.param('id')));
     if (!r.changes) return c.json({ error: 'Nie znaleziono' }, 404);
     return c.json(get('SELECT * FROM extras WHERE id = ?', int(c.req.param('id'))));
   });
@@ -1112,6 +1148,26 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     }
     if (b.assign_mode !== undefined) setSetting(ASSIGN_KEY, b.assign_mode === 'manual' ? 'manual' : 'auto');
     return c.json(bookingSettings());
+  });
+  // „Ceny na stronie do” dla obiektu albo typu domku (wszystkie domki typu naraz); null = jak ogólnie
+  api.put('/settings/horizon', async (c) => {
+    const user = c.get('user');
+    const b = await c.req.json();
+    const until = b.until ? str(b.until, 10) : null;
+    if (until && (!DATE_RE.test(until) || until < warsawToday())) bad('Wybierz datę w przyszłości');
+    if (until && nightsBetween(warsawToday(), until) > 1100) bad('Maksymalnie 3 lata do przodu');
+    if (Array.isArray(b.unit_ids) && b.unit_ids.length) {
+      const ids = (b.unit_ids as unknown[]).map(int).filter(Boolean).slice(0, 100);
+      for (const id of ids) requireUnit(user, id);
+      for (const id of ids) run('UPDATE units SET horizon_until = ? WHERE id = ?', until, id);
+    } else {
+      const id = int(b.property_id);
+      if (!get('SELECT 1 FROM properties WHERE id = ?', id)) bad('Wybierz obiekt');
+      if (user.properties && !user.properties.includes(id)) throw new HTTPException(403, { message: 'Brak dostępu do tego obiektu' });
+      if (user.role === 'viewer') throw new HTTPException(403, { message: 'Brak uprawnień' });
+      run('UPDATE properties SET horizon_until = ? WHERE id = ?', until, id);
+    }
+    return c.json({ ok: true });
   });
 
   // ---- Zapytania o rezerwację ze strony www ----
@@ -1168,16 +1224,16 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   /** Zapytanie → rezerwacja w kalendarzu (akceptacja przez admina albo przez gościa z linku w ofercie). */
   const reservationFromRequest = (r: RequestRow, unitId: number, price: number | null,
     o: { by: string; note: string; deposit?: number | null; deposit_due?: string | null; extraNote?: string; currency?: string }) => {
-    const chosen = parseChosenExtras(r.extras);
-    const notes = [r.message && `Wiadomość od gościa: ${r.message}`, chosen.length && `Opcje dodatkowe: ${extrasLines(chosen).join('; ')}`,
+    // opcje płatne z zapytania trafiają do rezerwacji (osobne pole, widoczne w podglądzie rezerwacji)
+    const notes = [r.message && `Wiadomość od gościa: ${r.message}`,
       `Rezerwacja ze strony www (zapytanie #${r.id}).`, o.extraNote].filter(Boolean).join('\n');
     // kod do linku „Poproś o anulację” w e-mailu z potwierdzeniem
     const cancelToken = newToken();
     db.exec('BEGIN');
     try {
-      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes, lang, deposit, deposit_due, currency)
-        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
-        r.adults, r.children, price, notes, readSiteLang(r.lang), o.deposit ?? null, o.deposit_due ?? null, readCurrency(o.currency));
+      const res = run(`INSERT INTO reservations (unit_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, adults, children, price, notes, lang, deposit, deposit_due, currency, extras)
+        VALUES (?, ?, ?, 'confirmed', 'website', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, unitId, r.check_in, r.check_out, r.guest_name, r.guest_phone, r.guest_email,
+        r.adults, r.children, price, notes, readSiteLang(r.lang), o.deposit ?? null, o.deposit_due ?? null, readCurrency(o.currency), r.extras ?? null);
       run(`UPDATE booking_requests SET status = 'accepted', decided_by = ?, decided_at = datetime('now'), decision_note = ?, reservation_id = ?, unit_id = ?,
         cancel_token = ? WHERE id = ?`, o.by, o.note, res.lastInsertRowid, unitId, cancelToken, r.id);
       const created = get('SELECT * FROM reservations WHERE id = ?', res.lastInsertRowid) as Record<string, unknown>;
@@ -1259,7 +1315,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const note = str(b.note, 3000);
     const before = r.reservation_id ? get('SELECT * FROM reservations WHERE id = ?', r.reservation_id) as Record<string, unknown> | undefined : undefined;
     if (before) {
-      const line = `Anulowana na prośbę gościa (${new Date().toLocaleDateString('pl-PL', { timeZone: 'Europe/Warsaw' })})${r.cancel_reason ? `: ${r.cancel_reason}` : ''}.`;
+      const line = `Anulowana na prośbę gościa (${todayDmy()})${r.cancel_reason ? `: ${r.cancel_reason}` : ''}.`;
       run(`UPDATE reservations SET status = 'cancelled', notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END, updated_at = datetime('now') WHERE id = ?`, line, line, before.id as number);
       notify([{ kind: 'updated', before, after: get('SELECT * FROM reservations WHERE id = ?', before.id as number) as Record<string, unknown>, by: user.username }], user.id);
     }
@@ -1472,7 +1528,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const sendEmail = b.email !== false;
     if (sendEmail && !mailer) bad('Wysyłka e-maili nie jest skonfigurowana — odznacz e-mail');
     if (sendEmail && !isEmail(r.guest_email)) bad('Brak adresu e-mail gościa — odznacz e-mail');
-    const line = `Anulowana — brak wpłaty zaliczki (${new Date().toLocaleDateString('pl-PL', { timeZone: 'Europe/Warsaw' })}, ${user.username}).`;
+    const line = `Anulowana — brak wpłaty zaliczki (${todayDmy()}, ${user.username}).`;
     run(`UPDATE reservations SET status = 'cancelled', notes = CASE WHEN notes = '' THEN ? ELSE notes || char(10) || ? END, updated_at = datetime('now') WHERE id = ?`, line, line, r.id);
     withdrawOffers('reservation_id', r.id);
     const after = get('SELECT * FROM reservations WHERE id = ?', r.id) as Record<string, unknown>;
@@ -1601,10 +1657,16 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       number: nextInvoiceNumber(db, today, t.numbering), issue_date: today, sale_date: r ? r.check_out : today, place: t.place,
       seller: { name: t.name, address: t.address, city: t.city, nip: t.nip, phone: t.phone, email: t.email, account: t.show_account ? account.account : '', bank: t.show_account ? account.bank : '' },
       buyer: { name: r?.guest_name ?? '', address: '', city: '', nip: '', phone: '', email: '' },
-      items: r ? [{
-        name: `Usługa noclegowa — ${u?.type_name || u?.name} (${u?.property}), ${dateRange(r.check_in, r.check_out)}, ${nightsCount} ${nightsCount === 1 ? 'noc' : nightsCount % 10 >= 2 && nightsCount % 10 <= 4 && (nightsCount % 100 < 12 || nightsCount % 100 > 14) ? 'noce' : 'nocy'}`,
-        qty: 1, unit: 'usł.', price: (r.price as number | null) ?? 0,
-      }] : [{ name: '', qty: 1, unit: 'usł.', price: 0 }],
+      // opcje płatne (sprzątanie, parking…) jako osobne pozycje; nocleg = cena rezerwacji bez opcji
+      items: r ? (() => {
+        const extras = parseChosenExtras(r.extras as string | null);
+        const extrasTotal = extras.reduce((sum, e) => sum + e.total, 0);
+        const price = (r.price as number | null) ?? 0;
+        return [{
+          name: `Usługa noclegowa — ${u?.type_name || u?.name} (${u?.property}), ${dateRange(r.check_in, r.check_out)}, ${nightsCount} ${nightsCount === 1 ? 'noc' : nightsCount % 10 >= 2 && nightsCount % 10 <= 4 && (nightsCount % 100 < 12 || nightsCount % 100 > 14) ? 'noce' : 'nocy'}`,
+          qty: 1, unit: 'usł.', price: Math.max(0, Math.round((price - (price > extrasTotal ? extrasTotal : 0)) * 100) / 100),
+        }, ...(price > extrasTotal ? extras.map((e) => ({ name: e.name, qty: e.qty * (e.per === 'night' ? nightsCount : 1), unit: e.per === 'night' ? 'noc' : 'usł.', price: e.price })) : [])];
+      })() : [{ name: '', qty: 1, unit: 'usł.', price: 0 }],
       payment_method: t.payment_method, payment_due: t.payment_days != null ? plusDays(today, t.payment_days) : '', paid: r ? (r.paid as number | null) : null,
       note: t.note, footer: t.footer ?? t.auto_footer,
       signatures: t.signatures, seller_signature: t.seller_signature, buyer_signature: '', currency,
@@ -1788,7 +1850,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
         }
         if (!subject) subject = /^re:/i.test(last.subject) ? last.subject : `Re: ${last.subject}`;
         if (b.quote !== false && last.text) {
-          const when = new Date(`${String(last.date).replace(' ', 'T')}Z`).toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', dateStyle: 'medium', timeStyle: 'short' });
+          const when = dmyTime(new Date(`${String(last.date).replace(' ', 'T')}Z`));
           quote = { header: `${when}, ${last.from_name || last.from_addr} napisał(a):`, text: String(last.text).slice(0, 5000) };
         }
       }

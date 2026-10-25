@@ -3,10 +3,11 @@ import Stepper from './Stepper';
 import { api } from '../api';
 import type { Property, Rate, Unit } from '../types';
 import { type BookingSettings } from '../api';
-import { addDays, formatShort, nightsLabel, today } from '../dates';
+import { addDays, dmy, formatShort, nightsLabel, today } from '../dates';
 import { WEEKDAYS, groupUnits, weekdayPrices } from '../pricing';
 import PriceSheet from './PriceSheet';
 import ExtrasPanel from './ExtrasPanel';
+import DateInput from './DateInput';
 
 type Props = { properties: Property[]; canEditHorizon: boolean; onBack: () => void; reload: () => void };
 
@@ -37,7 +38,7 @@ export default function PricingPage({ properties, canEditHorizon, onBack, reload
       </p>
       {error && <div className="banner error">{error}</div>}
 
-      <HorizonPanel canEdit={canEditHorizon} />
+      <HorizonPanel canEdit={canEditHorizon} properties={properties} reload={reload} />
       <ExtrasPanel properties={properties} canEdit={canEditHorizon} />
 
       {properties.map((p) => (
@@ -75,9 +76,9 @@ export default function PricingPage({ properties, canEditHorizon, onBack, reload
   );
 }
 
-const withYear = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+const withYear = (iso: string) => dmy(iso);
 
-function HorizonPanel({ canEdit }: { canEdit: boolean }) {
+function HorizonPanel({ canEdit, properties, reload }: { canEdit: boolean; properties: Property[]; reload: () => void }) {
   const [settings, setSettings] = useState<BookingSettings | null>(null);
   const [mode, setMode] = useState<'date' | 'days'>('date');
   const [until, setUntil] = useState('');
@@ -128,7 +129,7 @@ function HorizonPanel({ canEdit }: { canEdit: boolean }) {
           {mode === 'date' ? (
             <>
               <div className="row">
-                <label>Ostatnia noc z ceną na stronie<input type="date" min={today()} value={until} onChange={(e) => setUntil(e.target.value)} /></label>
+                <label>Ostatnia noc z ceną na stronie<DateInput min={today()} value={until} onChange={(v) => setUntil(v)} /></label>
                 {until && (until !== settings.horizon_until) && <button className="btn primary small" disabled={until < today()} onClick={() => save({ horizon_until: until })}>Zapisz</button>}
               </div>
               <div className="chips horizon-chips">
@@ -156,12 +157,65 @@ function HorizonPanel({ canEdit }: { canEdit: boolean }) {
       ) : <p className="muted small-note">Zmienić to może administrator z dostępem do wszystkich obiektów.</p>}
       {msg && <div className={`banner ${msg.ok ? 'info' : 'error'}`} style={{ marginTop: 10 }}>{msg.text}</div>}
 
+      <h3 className="assign-title">Inna data dla obiektu lub typu domku</h3>
+      <p className="muted notif-desc">
+        Np. Sopot do końca roku, a Jantar tylko do końca wakacji. Puste pole = jak wyżej ({withYear(settings.horizon_last)}).
+        Data typu domku ma pierwszeństwo przed datą obiektu.
+      </p>
+      <HorizonOverrides properties={properties} fallback={settings.horizon_last} onSaved={reload} />
+
       <h3 className="assign-title">Przydział domku przy akceptacji</h3>
       <p className="muted notif-desc">Dotyczy domków tego samego typu (np. 3 × Mały domek) — gość wybiera typ, a Ty decydujesz, do którego domku trafi.</p>
       <div className="segmented">
         <button type="button" disabled={!canEdit} className={`chip ${settings.assign_mode === 'auto' ? 'active' : ''}`} onClick={() => setAssign('auto')}>Automatycznie — pierwszy wolny (można zmienić)</button>
         <button type="button" disabled={!canEdit} className={`chip ${settings.assign_mode === 'manual' ? 'active' : ''}`} onClick={() => setAssign('manual')}>Zawsze wybieram ręcznie</button>
       </div>
+    </div>
+  );
+}
+
+// „Ceny na stronie do” osobno dla obiektu i typu domku (cały typ naraz, jak cennik)
+function HorizonOverrides({ properties, fallback, onSaved }: { properties: Property[]; fallback: string; onSaved: () => void }) {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const save = async (key: string, body: { property_id?: number; unit_ids?: number[]; until: string | null }) => {
+    setBusy(key);
+    setError('');
+    try { await api.setHorizon(body); onSaved(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(''); }
+  };
+  return (
+    <div className="horizon-overrides">
+      {properties.map((p) => {
+        const groups = groupUnits(p.units);
+        const propLast = p.horizon_until ?? fallback;
+        return (
+          <div key={p.id} className="horizon-property">
+            <div className="horizon-row">
+              <span><b>{p.name}</b>{!p.horizon_until && <small className="muted"> · jak ogólnie</small>}</span>
+              <div className="horizon-field">
+                <DateInput value={p.horizon_until ?? ''} min={today()} placeholder={dmy(fallback)} aria-label={`${p.name}: ceny do`}
+                  onChange={(v) => v && save(`p${p.id}`, { property_id: p.id, until: v })} />
+                {p.horizon_until && <button type="button" className="link" disabled={busy === `p${p.id}`} onClick={() => save(`p${p.id}`, { property_id: p.id, until: null })}>Jak ogólnie</button>}
+              </div>
+            </div>
+            {groups.length > 1 && groups.map((g) => {
+              const own = g.units[0].horizon_until;
+              const key = `t${g.units[0].id}`;
+              return (
+                <div key={g.key} className="horizon-row is-type">
+                  <span>{g.type ?? g.units[0].name}{g.units.length > 1 && <small className="muted"> ({g.units.length} domki)</small>}{!own && <small className="muted"> · jak obiekt</small>}</span>
+                  <div className="horizon-field">
+                    <DateInput value={own ?? ''} min={today()} placeholder={dmy(propLast)} aria-label={`${g.type ?? g.units[0].name}: ceny do`}
+                      onChange={(v) => v && save(key, { unit_ids: g.units.map((u) => u.id), until: v })} />
+                    {own && <button type="button" className="link" disabled={busy === key} onClick={() => save(key, { unit_ids: g.units.map((u) => u.id), until: null })}>Jak obiekt</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {error && <div className="banner error">{error}</div>}
     </div>
   );
 }
@@ -199,8 +253,8 @@ function ClosurePanel({ property: p, onSaved }: { property: Property; onSaved: (
           </div>
           {mode === 'range' && (
             <div className="row">
-              <label>Od nocy<input type="date" value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} /></label>
-              <label>Do nocy (włącznie)<input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} /></label>
+              <label>Od nocy<DateInput value={from} onChange={(v) => v && setFrom(v)} /></label>
+              <label>Do nocy (włącznie)<DateInput value={to} min={from} onChange={(v) => v && setTo(v)} /></label>
             </div>
           )}
           <label>Komunikat dla gości (opcjonalnie)<input maxLength={300} placeholder="np. Zapraszamy ponownie od 1 maja" value={note} onChange={(e) => setNote(e.target.value)} /></label>

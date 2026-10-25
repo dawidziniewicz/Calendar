@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { sendToSubscriptions, type PushMessage, type Sender } from './push.ts';
 import { allowedUnitIds, propertyIdsOf } from './auth.ts';
+import { dmy } from './dmy.ts';
 
 // Powiadomienia o zmianach: dodanie / edycja / usunięcie rezerwacji przez użytkownika oraz zmiany z Bookingu.
 
@@ -17,11 +18,9 @@ const STATUS_LABELS: Record<string, string> = { confirmed: 'potwierdzona', tenta
 const MAX_SEPARATE = 5; // więcej zmian naraz → jedno zbiorcze powiadomienie
 
 const d = (iso: string) => new Date(`${iso}T12:00:00Z`);
-const day = (iso: string) => d(iso).getUTCDate();
-const month = (iso: string) => d(iso).toLocaleDateString('pl-PL', { month: 'short', timeZone: 'UTC' });
 
 export function dateRange(from: string, to: string) {
-  return from.slice(0, 7) === to.slice(0, 7) ? `${day(from)}–${day(to)} ${month(to)}` : `${day(from)} ${month(from)} – ${day(to)} ${month(to)}`;
+  return `${dmy(from)} – ${dmy(to)}`;
 }
 
 function nights(from: string, to: string) {

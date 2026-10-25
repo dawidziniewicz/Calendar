@@ -310,10 +310,10 @@ test('powiadomienia o przyjazdach: osobne na każdy przyjazd, o godzinie każdeg
 
   const [first, second] = sent.slice(2).map((s) => JSON.parse(s.payload));
   assert.equal(first.title, 'Przyjazd dziś: Mały domek 1 · Osada Jantar');
-  assert.equal(first.body, 'Ola · 3 os. · 3 noce, wyjazd 5 lip');
+  assert.equal(first.body, 'Ola · 3 os. · 3 noce, wyjazd 05/07/2030');
   assert.match(first.url, /^\/\?reservation=\d+$/);
   assert.equal(second.title, 'Przyjazd dziś: Karpatka 1 · Apartamenty Karpatka');
-  assert.equal(second.body, 'Gość z Booking.com · 2 noce, wyjazd 4 lip');
+  assert.equal(second.body, 'Gość z Booking.com · 2 noce, wyjazd 04/07/2030');
   assert.notEqual(first.tag, second.tag);
   assert.equal((await call('GET', first.url.replace('/?reservation=', '/api/reservations/'))).status, 200);
   // martwa subskrypcja usunięta
@@ -368,7 +368,7 @@ test('powiadomienia o zmianach: inni użytkownicy dostają info o dodaniu, zmian
   await flush();
   assert.deepEqual(to(), ['jozek']); // nie autor, nie Jan
   assert.equal(sent[0].msg.title, 'Nowa rezerwacja · Mały domek 1 · Osada Jantar');
-  assert.equal(sent[0].msg.body, 'Ewa · 10–13 sie (3 noce) · dodane przez dawid');
+  assert.equal(sent[0].msg.body, 'Ewa · 10/08/2030 – 13/08/2030 (3 noce) · dodane przez dawid');
   assert.equal(sent[0].msg.url, `/?reservation=${r.id}`);
 
   const jozek = await loginAs('jozek');
@@ -377,7 +377,7 @@ test('powiadomienia o zmianach: inni użytkownicy dostają info o dodaniu, zmian
   await flush();
   assert.deepEqual(to(), ['dawid']);
   assert.equal(sent[0].msg.title, 'Zmiana rezerwacji · Mały domek 1 · Osada Jantar');
-  assert.equal(sent[0].msg.body, 'Ewa · 30 sie – 2 wrz\nZmieniono: daty (było: 10–13 sie), wpłata · jozek');
+  assert.equal(sent[0].msg.body, 'Ewa · 30/08/2030 – 02/09/2030\nZmieniono: daty (było: 10/08/2030 – 13/08/2030), wpłata · jozek');
 
   // zapis bez zmian → bez powiadomienia
   sent.length = 0;
@@ -410,7 +410,7 @@ test('powiadomienia o zmianach z Bookingu: nie przy pierwszym pobraniu; nowe, zm
     await runSync();
     const titles = sent.filter((s) => s.endpoint.endsWith('dawid')).map((s) => s.msg.title);
     assert.deepEqual(titles.sort(), ['Booking.com: zmiana terminu · Sopot Holiday Sauna · Apartament Sopot', 'Nowa rezerwacja z Booking.com · Sopot Holiday Sauna · Apartament Sopot']);
-    assert.equal(sent.find((s) => s.msg.title.startsWith('Booking.com: zmiana'))!.msg.body, 'Gość z Booking.com · teraz 2–5 wrz (było: 1–4 wrz)');
+    assert.equal(sent.find((s) => s.msg.title.startsWith('Booking.com: zmiana'))!.msg.body, 'Gość z Booking.com · teraz 02/09/2030 – 05/09/2030 (było: 01/09/2030 – 04/09/2030)');
     assert.equal(new Set(sent.map((s) => s.endpoint)).size, 3); // zmiany z Bookingu → wszyscy
 
     sent.length = 0;
@@ -720,12 +720,68 @@ test('opcje płatne: admin ustawia, gość wybiera, cena dolicza się do wyceny 
 
   const out = await (await call('POST', `/api/requests/${body.id}/accept`, {})).json();
   assert.equal(out.reservation.price, 1240);
-  assert.match(out.reservation.notes, /Opcje dodatkowe: Parking × 2/);
+  // opcje trafiają do rezerwacji jako osobne pole (nie do notatek)
+  assert.deepEqual(JSON.parse(out.reservation.extras).map((e: { name: string; qty: number }) => [e.name, e.qty]), [['Parking', 2], ['Zwierzę', 1]]);
+  assert.doesNotMatch(out.reservation.notes, /Opcje dodatkowe/);
 
   // edycja i usuwanie
   assert.equal((await (await call('PUT', `/api/extras/${pet.id}`, { name: 'Pies', price: 120, per: 'stay' })).json()).price, 120);
   assert.equal((await call('DELETE', `/api/extras/${pet.id}`)).status, 200);
   assert.equal((await (await call('GET', '/api/extras')).json()).length, 3);
+});
+
+test('opcje obowiązkowe i inne ceny dla obiektu / domku; opcje w rezerwacji z aplikacji', async () => {
+  const { call, login } = setupWithMail();
+  await login();
+  await call('PUT', '/api/rates/unit/1', { base_price: 300, min_nights: 1 });
+  await call('PUT', '/api/rates/unit/4', { base_price: 500, min_nights: 1 });
+  // sprzątanie: obowiązkowe, 150 zł, w Sopocie (obiekt 2) 250 zł, a w domku 4 — 200 zł
+  const cleaning = await (await call('POST', '/api/extras', { name: 'Sprzątanie', name_en: 'Cleaning', price: 150, per: 'stay', required: true, price_overrides: { p2: 250, u4: 200, x9: 1, u5: -3 } })).json();
+  assert.equal(cleaning.required, 1);
+  assert.deepEqual(JSON.parse(cleaning.price_overrides), { p2: 250, u4: 200 });
+  const catalog = await (await call('GET', '/public/catalog')).json();
+  const jantar = catalog[0];
+  assert.deepEqual(jantar.extras.map((e: { name: string; required: boolean; price: number }) => [e.name, e.required, e.price]), [['Sprzątanie', true, 150]]);
+  assert.equal(catalog.find((p: { name: string }) => p.name === 'Apartament Sopot').extras[0].price, 250);
+  // gość nie zaznaczył sprzątania — i tak jest doliczone (domek 4: 200 zł)
+  const body = await (await call('POST', '/public/requests', {
+    unit_id: 4, check_in: inDays(10), check_out: inDays(12), name: 'Ola Kowal', phone: '600 100 200', email: 'ola@example.com', adults: 2, consent: true, extras: [],
+  }, { 'x-client-ip': '4.4.4.5' })).json();
+  assert.equal(body.extras_total, 200);
+  assert.equal(body.quoted_price, 1000 + 200);
+  // formularz rezerwacji: opcje z ceną dla domku
+  const forUnit = await (await call('GET', '/api/units/4/extras')).json();
+  assert.deepEqual(forUnit.map((e: { price: number; required: boolean }) => [e.price, e.required]), [[200, true]]);
+  // rezerwacja z aplikacji z opcjami (cena za noc × noce liczona na serwerze)
+  const r = await (await call('POST', '/api/reservations', {
+    unit_id: 1, check_in: inDays(30), check_out: inDays(33), guest_name: 'Jan', price: 1100,
+    extras: [{ id: cleaning.id, name: 'Sprzątanie', price: 150, per: 'stay', qty: 1, required: true }, { id: 0, name: 'Drewno do kominka', price: 20, per: 'night', qty: 2 }, { name: '', price: 5, qty: 1 }],
+  })).json();
+  assert.deepEqual(JSON.parse(r.extras).map((e: { name: string; total: number }) => [e.name, e.total]), [['Sprzątanie', 150], ['Drewno do kominka', 120]]);
+  // edycja bez pola extras zostawia opcje
+  const kept = await (await call('PUT', `/api/reservations/${r.id}`, { ...r, extras: undefined, notes: 'x' })).json();
+  assert.equal(JSON.parse(kept.extras).length, 2);
+});
+
+test('ceny na stronie do: osobno dla obiektu i typu domku', async () => {
+  const { call, login } = setupWithMail();
+  await login();
+  for (const id of [1, 4]) await call('PUT', `/api/rates/unit/${id}`, { base_price: 300, min_nights: 1 });
+  const cal = async (unit: number) => (await (await call('GET', `/public/calendar?unit=${unit}&from=${inDays(0)}&to=${inDays(90)}`)).json()).to;
+  assert.equal(await cal(1), inDays(90));
+  // obiekt 1 (Jantar): ceny do dnia +20 → kalendarz kończy się dzień później
+  assert.equal((await call('PUT', '/api/settings/horizon', { property_id: 1, until: inDays(20) })).status, 200);
+  assert.equal(await cal(1), inDays(21));
+  // typ domku (domek 4): do +40 — ma pierwszeństwo przed obiektem
+  await call('PUT', '/api/settings/horizon', { unit_ids: [4], until: inDays(40) });
+  assert.equal(await cal(4), inDays(41));
+  assert.equal(await cal(1), inDays(21));
+  const catalog = await (await call('GET', '/public/catalog')).json();
+  assert.equal(catalog[0].units.find((u: { id: number }) => u.id === 4).prices_until, inDays(40));
+  // null = jak ogólnie
+  await call('PUT', '/api/settings/horizon', { property_id: 1, until: null });
+  assert.equal(await cal(1), inDays(90));
+  assert.equal((await call('PUT', '/api/settings/horizon', { property_id: 1, until: '2020-01-01' })).status, 400);
 });
 
 test('typy domków: strona widzi typ, zapytanie dostaje wolny domek, admin przydziela automatycznie lub ręcznie', async () => {

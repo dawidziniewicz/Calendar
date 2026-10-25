@@ -6,6 +6,7 @@ import { SOURCES } from '../types';
 import Notifications from './Notifications';
 import CalendarPrefs from './CalendarPrefs';
 import InstallApp from './InstallApp';
+import { dmyTime } from '../dates';
 
 type Props = {
   user: string; readOnly: boolean; scope: string[] | null; canManageUsers: boolean;
@@ -229,7 +230,7 @@ function UnitRow({ unit: u, run }: { unit: Unit; run: (fn: () => Promise<unknown
               <div>
                 <b>{SOURCES[f.source] ?? f.source}</b> <span className="muted url">{f.url}</span>
                 <div className={f.last_error ? 'warn' : 'muted'}>
-                  {f.last_error ? `Błąd: ${f.last_error}` : f.last_sync_at ? `Ostatnia synchronizacja: ${new Date(f.last_sync_at.replace(' ', 'T') + 'Z').toLocaleString('pl-PL')}` : 'Jeszcze nie synchronizowano'}
+                  {f.last_error ? `Błąd: ${f.last_error}` : f.last_sync_at ? `Ostatnia synchronizacja: ${dmyTime(f.last_sync_at)}` : 'Jeszcze nie synchronizowano'}
                 </div>
               </div>
               <div className="feed-actions">
@@ -341,7 +342,7 @@ function MailPanel() {
       <p className="muted notif-desc">
         Wiadomości na te adresy trafiają do zakładki <b>Poczta</b>, a z niej możesz odpowiadać i pisać z wybranego adresu.
         {s.last_inbound
-          ? <> Odbiór działa — ostatnia wiadomość: <b>{new Date(`${s.last_inbound.replace(' ', 'T')}Z`).toLocaleString('pl-PL', { dateStyle: 'medium', timeStyle: 'short' })}</b>.</>
+          ? <> Odbiór działa — ostatnia wiadomość: <b>{dmyTime(s.last_inbound)}</b>.</>
           : <> <b>Odbiór nie jest jeszcze włączony</b> — w Cloudflare ustaw reguły Email Routing tych adresów na Workera „kalendarz-poczta” (instrukcja w README kalendarza).</>}
       </p>
       <label>Adresy skrzynek

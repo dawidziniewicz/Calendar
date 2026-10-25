@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import webpush from 'web-push';
 import { allowedUnitIds, propertyIdsOf } from './auth.ts';
+import { dmy } from './dmy.ts';
 
 // Powiadomienia push (Web Push). Klucze VAPID generujemy przy pierwszym uruchomieniu i trzymamy w bazie.
 
@@ -65,7 +66,7 @@ export const warsawTime = (d = new Date()) => d.toLocaleTimeString('pl-PL', { ti
 
 export type PushMessage = { title: string; body: string; url?: string; tag?: string };
 
-const shortDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('pl-PL', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const shortDate = (iso: string) => dmy(iso);
 const nightsPl = (n: number) => (n === 1 ? '1 noc' : `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'noce' : 'nocy'}`);
 
 /** Osobne powiadomienie dla każdego dzisiejszego przyjazdu. */

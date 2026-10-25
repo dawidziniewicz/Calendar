@@ -4,6 +4,7 @@ import type { Offer, PaymentSettings } from '../types';
 import { addDays, formatShort, today } from '../dates';
 import NumInput from './NumInput';
 import { CURRENCIES, GUEST_LANGS, currencySymbol, fmt, guestLang, type GuestLang } from '../money';
+import DateInput from './DateInput';
 
 export type OfferTarget = {
   kind: 'request' | 'reservation';
@@ -171,7 +172,7 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
                 {withDeposit && (
                   <>
                     <label>Zaliczka ({currencySymbol(currency)})<NumInput value={deposit} onChange={(v) => { setDepositTouched(true); setDeposit(v); }} /></label>
-                    <label>Wpłata do<input type="date" value={depositDue} min={today()} onChange={(e) => setDepositDue(e.target.value)} /></label>
+                    <label>Wpłata do<DateInput value={depositDue} min={today()} onChange={(v) => setDepositDue(v)} /></label>
                     {price != null && price > 0 && (
                       <div className="full chips">
                         {[20, 30, 50].map((p) => (
@@ -185,7 +186,7 @@ export default function OfferSheet({ target, onClose, onSent }: { target: OfferT
               </fieldset>
               <fieldset>
                 <legend>Szczegóły</legend>
-                <label>Oferta ważna do<input type="date" value={validUntil} min={today()} max={target.checkIn} onChange={(e) => setValidUntil(e.target.value)} /></label>
+                <label>Oferta ważna do<DateInput value={validUntil} min={today()} max={target.checkIn} onChange={(v) => setValidUntil(v)} /></label>
                 <label>Język
                   <select value={lang} onChange={(e) => setLang(e.target.value as GuestLang)}>
                     {GUEST_LANGS.map(([k, label]) => <option key={k} value={k}>{label}</option>)}

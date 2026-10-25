@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type MailMessage, type MailSummary, type MailThread, type MailThreadDetail } from '../api';
 import type { Reservation } from '../types';
-import { formatShort } from '../dates';
+import { dmy, dmyTime, formatShort, toIso } from '../dates';
 import type { MailIntent } from './EmailLink';
 
 // Poczta: wiadomości do rezerwacje@ / kontakt@ / contact@ (odbiór przez Cloudflare Email Worker), rozmowy,
@@ -12,9 +12,9 @@ const whenShort = (s: string) => {
   const d = sqlDate(s);
   const now = new Date();
   if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString('pl-PL', { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) });
+  return dmy(toIso(d));
 };
-const whenLong = (s: string) => sqlDate(s).toLocaleString('pl-PL', { dateStyle: 'medium', timeStyle: 'short' });
+const whenLong = (s: string) => dmyTime(s);
 const local = (addr: string) => `${addr.split('@')[0]}@`;
 const kb = (n: number) => (n > 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1000))} kB`);
 

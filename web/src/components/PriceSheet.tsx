@@ -3,6 +3,7 @@ import { api, type RatePatch } from '../api';
 import type { Property } from '../types';
 import { diffDays, formatShort, nightsLabel } from '../dates';
 import { groupUnits } from '../pricing';
+import DateInput from './DateInput';
 
 type Props = {
   properties: Property[];
@@ -74,8 +75,8 @@ export default function PriceSheet({ properties, unitId, from: initialFrom, to: 
         <div className="sheet-body">
           <fieldset>
             <legend>Zakres</legend>
-            <label>Od nocy<input type="date" value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} /></label>
-            <label>Do nocy (włącznie)<input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} /></label>
+            <label>Od nocy<DateInput value={from} onChange={(v) => v && setFrom(v)} /></label>
+            <label>Do nocy (włącznie)<DateInput value={to} min={from} onChange={(v) => v && setTo(v)} /></label>
             <div className="field full">
               Tylko wybrane dni tygodnia {weekdays.length > 0 && <span className="muted">· pozostałe bez zmian</span>}
               <div className="chips weekday-chips">
