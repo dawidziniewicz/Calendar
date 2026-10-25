@@ -136,6 +136,8 @@ export const api = {
   // oferty cenowe
   requestOffer: (id: number, o: OfferInput) => request<{ offer: Offer; emailed: boolean }>('POST', `/requests/${id}/offers`, o),
   reservationOffer: (id: number, o: OfferInput) => request<{ offer: Offer; emailed: boolean }>('POST', `/reservations/${id}/offers`, o),
+  offerPreview: (kind: 'request' | 'reservation', id: number, o: OfferInput) =>
+    request<{ subject: string; html: string }>('POST', `/${kind === 'request' ? 'requests' : 'reservations'}/${id}/offers/preview`, o),
   withdrawOffer: (id: number) => request<Offer>('POST', `/offers/${id}/withdraw`),
   // wiadomości do gościa
   activity: (id: number) => request<Activity>('GET', `/reservations/${id}/activity`),

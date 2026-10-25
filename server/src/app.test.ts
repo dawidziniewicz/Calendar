@@ -888,6 +888,14 @@ test('oferta cenowa do zapytania: e-mail z linkiem, akceptacja gościa z obowią
   await flush();
   assert.equal((await call('POST', `/api/requests/${id}/offers`, { price: 0 })).status, 400);
   assert.equal((await call('POST', `/api/requests/${id}/offers`, { price: 1000, deposit: 2000 })).status, 400);
+  // podgląd e-maila z ofertą — nic nie wysyła
+  const sentBefore = sent.length;
+  const prev = await (await call('POST', `/api/requests/${id}/offers/preview`, { price: 1350, deposit: 400, deposit_due: inDays(5), message: 'Cena ze zniżką za 3 noce' })).json();
+  assert.match(prev.subject, /Oferta pobytu/);
+  assert.match(prev.html, /1350 zł/);
+  assert.match(prev.html, /Cena ze zniżką za 3 noce/);
+  assert.equal(sent.length, sentBefore);
+  assert.equal((await call('POST', `/api/requests/${id}/offers/preview`, { price: 0 })).status, 400);
   const made = await (await call('POST', `/api/requests/${id}/offers`, { price: 1350, deposit: 400, deposit_due: inDays(5), message: 'Cena ze zniżką za 3 noce' })).json();
   assert.equal(made.emailed, true);
   assert.match(made.offer.url, /\/oferta\/\?t=[a-f0-9]{48}$/);
