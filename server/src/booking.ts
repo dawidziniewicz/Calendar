@@ -149,15 +149,22 @@ export type Quote = { nights: number; total: number | null; min_nights: number; 
 const nightsEn = (n: number) => (n === 1 ? '1 night' : `${n} nights`);
 
 /** Wycena pobytu i sprawdzenie, czy termin można zarezerwować online. */
+/** Jak daleko do przodu strona pokazuje kalendarz i przyjmuje zapytania (ok. 15 miesięcy) */
+export const MAX_AHEAD_DAYS = 460;
+/** Noce z ceną tylko do „ceny na stronie do” (domek / typ / obiekt / ogólnie) — później termin jest wolny, ale bez ceny (na zapytanie) */
+export const pricedNights = (db: DatabaseSync, unit: UnitPricing, from: string, to: string) => {
+  const end = horizonEnd(db, unit.id);
+  return nights(db, unit, from, to).map((n) => (n.date >= end ? { ...n, price: null } : n));
+};
+
 export function quote(db: DatabaseSync, unit: UnitPricing, checkIn: string, checkOut: string, lang: Lang = 'pl'): Quote {
-  const list = nights(db, unit, checkIn, checkOut);
+  const list = pricedNights(db, unit, checkIn, checkOut);
   const min = list[0]?.min_nights ?? 1;
   const total = list.every((n) => n.price != null) ? list.reduce((s, n) => s + (n.price ?? 0), 0) : null;
   const base = { nights: list.length, total, min_nights: min };
   const en = lang === 'en';
-  const days = bookingHorizon(db);
-  if (checkOut > addDays(warsawToday(), days)) {
-    return { ...base, available: false, reason: en ? `Online booking is open up to ${days} days ahead — please call us about later dates` : `Rezerwacje online przyjmujemy do ${days} dni do przodu — w sprawie późniejszych terminów zadzwoń do nas` };
+  if (checkOut > addDays(warsawToday(), MAX_AHEAD_DAYS)) {
+    return { ...base, available: false, reason: en ? 'Online enquiries are open up to 15 months ahead — please call us about later dates' : 'Zapytania online przyjmujemy do 15 miesięcy do przodu — w sprawie późniejszych terminów zadzwoń do nas' };
   }
   if (list.some((n) => n.propertyClosed)) {
     return { ...base, available: false, reason: en ? 'The property is closed on these dates' : 'Obiekt jest zamknięty w wybranym terminie' };
