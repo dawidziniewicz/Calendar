@@ -209,7 +209,7 @@ html:has(.sheet-backdrop), html:has(.sheet-backdrop) body { overflow: hidden; }
 fieldset { border: 0; margin: 0 0 14px; padding: 12px; background: var(--surface); border-radius: var(--radius); display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
 legend { float: left; grid-column: 1 / -1; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 0; }
 fieldset .full { grid-column: 1 / -1; }
-label, .field { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); font-weight: 550; min-width: 0; }
+label, .field { display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem; color: var(--muted); font-weight: 550; min-width: 0; }
 /* Jedna wysokość dla wszystkich pól (tekst, data, lista, kolor, licznik) — Safari inaczej rysuje datę i listy rozwijane */
 :root { --field-h: 44px; }
 input:not([type=color]):not([type=checkbox]):not([type=radio]), select, textarea {
@@ -356,7 +356,8 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .tab-badges .conflict-mark { width: 18px; height: 18px; margin: 0; font-size: 0.72rem; }
 .tabs-mobile .tab-badges { position: absolute; top: 5px; left: calc(50% + 6px); margin: 0; }
 .count.danger { background: var(--danger); color: #fff; }
-.small { font-size: 0.85rem; margin: -4px 0 8px; }
+/* drobny tekst (nie przyciski „btn small”, które ta reguła wcześniej podciągała na napisy) */
+.small:not(.btn):not(.chip) { font-size: 0.85rem; margin: -4px 0 8px; }
 .guest-card.kind-cancel { border-left: 4px solid var(--danger); opacity: 0.95; }
 .cancel-box p { margin: 6px 0; }
 .cancel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -463,7 +464,7 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .nav-panel small { color: var(--muted); font-size: 0.82rem; }
 .nav-arrow { font-size: 1.6rem; color: var(--muted); line-height: 1; }
 @media (hover: hover) { .nav-panel:hover { border-color: var(--primary); } }
-.page-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.page-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .page-head h1 { margin: 0; font-size: 1.3rem; }
 .page-head .back { align-self: flex-start; padding-left: 0; font-size: 0.95rem; }
 .user-card { padding: 0; overflow: hidden; }
@@ -501,7 +502,7 @@ fieldset p { margin: 0; font-size: 0.85rem; }
 .install-steps li::marker { color: var(--primary); font-weight: 700; }
 .inline-icon { display: inline-block; vertical-align: -3px; color: var(--primary); }
 .inline-key { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; line-height: 1.3; }
-.small-note { font-size: 0.84rem; margin: 6px 0 0; }
+.small-note { font-size: 0.84rem; line-height: 1.45; margin: 6px 0 10px; }
 
 /* ---- Zapytania ze strony www ---- */
 .page-intro h1 { margin: 0 0 4px; font-size: 1.35rem; }
