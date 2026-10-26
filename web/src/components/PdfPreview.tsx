@@ -31,7 +31,8 @@ export default function PdfPreview({ blob, loading, error: outerError }: { blob:
     setRendering(true);
     (async () => {
       const lib = await loadPdfJs();
-      const doc = await lib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+      // bez eval (polityka CSP aplikacji)
+      const doc = await lib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false }).promise;
       const dpr = Math.min(window.devicePixelRatio || 1, 3);
       const pages: HTMLElement[] = [];
       for (let i = 1; i <= doc.numPages; i++) {

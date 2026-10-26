@@ -431,11 +431,16 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!b) bad('Nieprawidłowa wiadomość');
     const addrList = (v: unknown) => (Array.isArray(v) ? v : []).map((x) => (typeof x === 'string' ? x : String((x as { address?: string })?.address ?? ''))).filter(Boolean);
     const from = (b.from && typeof b.from === 'object' ? b.from : {}) as { address?: string; name?: string };
+    // Limit przeciw zalewowi spamu (zapełnienie dysku): 40 wiadomości / godz. od jednego nadawcy, 400 / godz. łącznie
+    const sender = addrOf(str(from.address, 300) || str(b.envelope_from, 300)) || 'unknown';
+    if (!allowHit(`mail-from:${sender}`, 40) || !allowHit('mail-total', 400)) return c.json({ error: 'Za dużo wiadomości — spróbuj później' }, 429);
     const mailbox = addrOf(str(b.envelope_to, 300) || addrList(b.to)[0] || mailboxes(db)[0]);
     const attachments = (Array.isArray(b.attachments) ? b.attachments : []).slice(0, 30).map((a) => {
       const x = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
       return { filename: str(x.filename, 200), content_type: str(x.mimeType ?? x.content_type, 100), content_id: str(x.contentId, 200), data: Buffer.from(String(x.content ?? ''), 'base64') };
-    }).filter((a) => a.data.length > 0 && a.data.length <= 15_000_000);
+    }).filter((a) => a.data.length > 0 && a.data.length <= 15_000_000)
+      // łącznie najwyżej 25 MB załączników na wiadomość
+      .filter((a, i, list) => list.slice(0, i + 1).reduce((sum, x) => sum + x.data.length, 0) <= 25_000_000);
     const stored = storeMessage(db, {
       mailbox, direction: 'in', message_id: str(b.message_id, 500), in_reply_to: str(b.in_reply_to, 500),
       refs: String(b.references ?? '').split(/\s+/).filter(Boolean).slice(0, 30),
@@ -486,6 +491,14 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // Klucz API dodaje proxy w Cloudflare Pages — bez niego serwer nie odpowiada nikomu.
   api.use('*', async (c, next) => {
     if (!safeEqual(c.req.header('x-api-key') ?? '', apiKey)) return c.json({ error: 'Brak autoryzacji serwera' }, 403);
+    // Ochrona przed podrobionymi żądaniami z innych stron (CSRF): zmiany tylko jako JSON albo z nagłówkiem aplikacji.
+    // Przeglądarka nie wyśle takiego żądania z obcej strony bez zgody serwera (CORS) — nawet z subdomeny odmorzadogor.pl.
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+      const json = (c.req.header('content-type') ?? '').toLowerCase().startsWith('application/json');
+      if (!json && c.req.header('x-requested-with') !== 'kalendarz') {
+        return c.json({ error: 'Odśwież aplikację — jest nowa wersja kalendarza' }, 403);
+      }
+    }
     await next();
   });
 

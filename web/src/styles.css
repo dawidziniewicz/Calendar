@@ -932,3 +932,4 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 .photo-dl:disabled { opacity: .5; cursor: default; }
 .listing-actions-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 520px) { .listing-actions-row { grid-template-columns: 1fr; } }
+.mail-images-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-size: 0.85rem; color: var(--muted); background: color-mix(in srgb, var(--sand) 12%, transparent); }
