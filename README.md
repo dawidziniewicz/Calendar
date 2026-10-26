@@ -310,6 +310,20 @@ Po zmianie `.env`: `docker compose up -d` (restart kontenera). Test: *Ustawienia
 
 ---
 
+## Bezpieczeństwo
+
+Co robi aplikacja: serwer bez otwartych portów (tunel), API za Cloudflare Access + kluczem API, hasła scrypt, blokada logowania
+(5 błędów z jednego adresu / 20 na jeden login → 15 min), ciasteczko sesji HttpOnly, zmiany przyjmowane tylko z aplikacji
+(JSON albo nagłówek `x-requested-with: kalendarz`), polityka CSP w `web/public/_headers`, obrazki z internetu w mailach
+ukryte do kliknięcia, limit odbieranej poczty (40 / godz. od nadawcy, 400 / godz. łącznie).
+
+Do zrobienia ręcznie (raz):
+- **DMARC** (Cloudflare → DNS): rekord TXT `_dmarc` = `v=DMARC1; p=quarantine; rua=mailto:kontakt@odmorzadogor.pl`
+  — utrudnia podszywanie się pod adresy @odmorzadogor.pl. Jeśli nie używasz Mailjet, usuń `include:spf.mailjet.com` z rekordu SPF.
+- **Kopia bazy poza domem**: katalog `~/kalendarz/data/backups/` co jakiś czas (albo automatycznie, np. `rclone`) na dysk w chmurze.
+- **Aktualizacje**: `docker compose pull && docker compose up -d` co kilka tygodni (nowe obrazy Node i cloudflared) oraz aktualizacje systemu serwera.
+- Sprawdzanie zależności: `npm audit` w `server/`, `web/`, `mail-worker/` (i w repozytorium strony).
+
 ## Praca lokalna (programowanie)
 
 Wymagany Node.js 24+.

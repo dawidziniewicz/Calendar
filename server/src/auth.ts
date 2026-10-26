@@ -82,9 +82,13 @@ export function setPassword(db: DatabaseSync, userId: number, password: string) 
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId); // wyloguj wszędzie
 }
 
-// ---- Ochrona przed zgadywaniem haseł: 5 błędów = blokada na 15 minut (osobno IP i login) ----
+// ---- Ochrona przed zgadywaniem haseł: blokada na 15 minut ----
+// Adres IP: 5 błędów. Login: 20 błędów z różnych adresów — trudniej komuś celowo zablokować Ci logowanie,
+// a zgadywanie hasła z wielu adresów naraz nadal jest zatrzymane.
 
 const MAX_FAILS = 5;
+const MAX_FAILS_USER = 20;
+const limitOf = (key: string) => (key.startsWith('user:') ? MAX_FAILS_USER : MAX_FAILS);
 const LOCK_MS = 15 * 60_000;
 const fails = new Map<string, { count: number; first: number }>();
 
@@ -95,7 +99,7 @@ export function lockedFor(keys: string[]): number {
     const f = fails.get(k);
     if (!f) continue;
     if (now - f.first > LOCK_MS) fails.delete(k);
-    else if (f.count >= MAX_FAILS) wait = Math.max(wait, f.first + LOCK_MS - now);
+    else if (f.count >= limitOf(k)) wait = Math.max(wait, f.first + LOCK_MS - now);
   }
   return wait;
 }

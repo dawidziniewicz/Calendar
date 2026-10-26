@@ -15,7 +15,8 @@ export async function forward({ request, env }: Ctx, withApiKey: boolean, opts: 
   const url = new URL(request.url);
   const target = new URL(url.pathname + url.search, env.API_ORIGIN);
   const headers = new Headers();
-  for (const name of ['content-type', 'accept']) {
+  // x-requested-with: nagłówek aplikacji kalendarza (serwer przyjmuje zmiany tylko z nim albo jako JSON)
+  for (const name of ['content-type', 'accept', 'x-requested-with']) {
     const v = request.headers.get(name);
     if (v) headers.set(name, v);
   }

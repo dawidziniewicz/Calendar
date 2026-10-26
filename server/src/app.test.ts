@@ -44,6 +44,21 @@ test('wymaga klucza API i zalogowania', async () => {
   assert.equal((await call('GET', '/api/properties')).status, 401);
 });
 
+test('zmiany tylko z aplikacji: żądanie z obcej strony (formularz / text/plain) jest odrzucane', async () => {
+  const { app } = setupWithMail();
+  const res = await app.request('/api/auth/login', { method: 'POST', headers: { 'x-api-key': KEY, 'content-type': 'application/json' }, body: JSON.stringify({ username: 'dawid', password: 'tajne-haslo-123' }) });
+  const cookie = res.headers.get('set-cookie')?.split(';')[0] ?? '';
+  assert.ok(cookie);
+  const forged = (headers: Record<string, string>) => app.request('/api/extras', {
+    method: 'POST', headers: { 'x-api-key': KEY, cookie, ...headers }, body: JSON.stringify({ name: 'Podrobiona', price: 1 }),
+  });
+  assert.equal((await forged({ 'content-type': 'text/plain' })).status, 403);
+  assert.equal((await forged({ 'content-type': 'application/x-www-form-urlencoded' })).status, 403);
+  // aplikacja: JSON albo nagłówek aplikacji (np. POST bez treści)
+  assert.equal((await app.request('/api/auth/logout', { method: 'POST', headers: { 'x-api-key': KEY } })).status, 403);
+  assert.equal((await app.request('/api/auth/logout', { method: 'POST', headers: { 'x-api-key': KEY, 'x-requested-with': 'kalendarz' } })).status, 401);
+});
+
 test('blokuje po 5 błędnych hasłach', async () => {
   const { app } = setup();
   const attempt = (password: string) => app.request('/api/auth/login', {

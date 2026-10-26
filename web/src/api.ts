@@ -17,7 +17,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   try {
     res = await fetch(`/api${path}`, {
       method,
-      headers: body ? { 'content-type': 'application/json' } : undefined,
+      // nagłówek aplikacji: serwer przyjmuje zmiany tylko z kalendarza (ochrona przed podrobionymi żądaniami)
+      headers: { 'x-requested-with': 'kalendarz', ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       credentials: 'same-origin',
     });
@@ -40,7 +41,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 async function pdf(method: string, path: string, body?: unknown): Promise<Blob> {
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
+    res = await fetch(`/api${path}`, { method, headers: { 'x-requested-with': 'kalendarz', ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
   } catch {
     throw new ApiError(0, { error: 'Brak połączenia z internetem' });
   }

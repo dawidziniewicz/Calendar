@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type MailMessage, type MailSummary, type MailThread, type MailThreadDetail } from '../api';
 import type { Reservation } from '../types';
 import { dmy, dmyTime, formatShort, toIso } from '../dates';
@@ -111,13 +111,41 @@ export default function Mail({ version, focusThread, intent, onOpenReservation, 
   );
 }
 
+/**
+ * Zdalne obrazki (np. piksele śledzące „przeczytano”) są domyślnie wyłączone — nadawca nie wie, że otworzyłeś wiadomość.
+ * Zwraca HTML bez adresów obrazków z internetu i liczbę zablokowanych.
+ */
+function blockRemoteImages(html: string): { html: string; blocked: number } {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let blocked = 0;
+  const remote = (v: string | null) => !!v && /^(https?:)?\/\//i.test(v.trim());
+  doc.querySelectorAll('img, image, input[type=image]').forEach((el) => {
+    for (const attr of ['src', 'srcset', 'href', 'xlink:href']) {
+      if (remote(el.getAttribute(attr)) || (attr === 'srcset' && el.getAttribute(attr))) { el.removeAttribute(attr); blocked++; }
+    }
+  });
+  doc.querySelectorAll('[background]').forEach((el) => { if (remote(el.getAttribute('background'))) { el.removeAttribute('background'); blocked++; } });
+  doc.querySelectorAll('[style]').forEach((el) => {
+    const st = el.getAttribute('style') ?? '';
+    if (/url\(\s*['"]?(https?:)?\/\//i.test(st)) { el.setAttribute('style', st.replace(/url\(\s*['"]?(https?:)?\/\/[^)]*\)/gi, 'none')); blocked++; }
+  });
+  doc.querySelectorAll('style').forEach((el) => {
+    if (/url\(\s*['"]?(https?:)?\/\//i.test(el.textContent ?? '')) { el.textContent = (el.textContent ?? '').replace(/url\(\s*['"]?(https?:)?\/\/[^)]*\)/gi, 'none'); blocked++; }
+  });
+  doc.querySelectorAll('link[rel~=stylesheet]').forEach((el) => { el.remove(); blocked++; });
+  return { html: doc.body.innerHTML, blocked };
+}
+
 // HTML wiadomości w bezpiecznej ramce (bez skryptów), wysokość dopasowana do treści, linki w nowej karcie
 function MailBody({ m }: { m: MailMessage }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [asText, setAsText] = useState(!m.html);
+  const [images, setImages] = useState(false);
+  const safe = useMemo(() => (m.html ? blockRemoteImages(m.html) : { html: '', blocked: 0 }), [m.html]);
+  const body = images ? m.html : safe.html;
   const doc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data: cid:; style-src 'unsafe-inline'; font-src https: data:">
-<style>body{margin:0;padding:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.5;color:#1f2a25;background:#fff;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}</style></head><body>${m.html}</body></html>`;
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${images ? 'https: ' : ''}data: cid:; style-src 'unsafe-inline'; font-src data:">
+<style>body{margin:0;padding:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:15px;line-height:1.5;color:#1f2a25;background:#fff;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}</style></head><body>${body}</body></html>`;
   const fit = () => {
     const d = frame.current?.contentDocument;
     if (d?.body && frame.current) frame.current.style.height = `${Math.min(4000, d.documentElement.scrollHeight + 4)}px`;
@@ -126,6 +154,12 @@ function MailBody({ m }: { m: MailMessage }) {
     <div className="mail-body">
       {asText ? <div className="mail-text">{m.text || '(pusta wiadomość)'}</div>
         : <iframe ref={frame} className="mail-frame" title={m.subject} srcDoc={doc} sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" onLoad={() => { fit(); setTimeout(fit, 400); }} />}
+      {!asText && safe.blocked > 0 && !images && (
+        <div className="mail-images-note">
+          <span>Obrazki z internetu są ukryte — nadawca nie dowie się, że otworzyłeś wiadomość.</span>
+          <button type="button" className="link" onClick={() => setImages(true)}>Pokaż obrazki</button>
+        </div>
+      )}
       {m.html && m.text && <button type="button" className="link mail-toggle" onClick={() => setAsText(!asText)}>{asText ? 'Pokaż oryginał' : 'Pokaż jako tekst'}</button>}
     </div>
   );
