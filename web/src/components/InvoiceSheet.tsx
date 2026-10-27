@@ -8,7 +8,9 @@ import NotePhrases from './NotePhrases';
 import { CURRENCIES, currencySymbol, fmt } from '../money';
 import { useWide } from './useWide';
 import { whatsappHref } from '../phone';
+import { useSaver } from '../useSaver';
 import DateInput from './DateInput';
+import AutoTextarea from './AutoTextarea';
 
 type Props = {
   reservationId?: number; // nowy rachunek do rezerwacji
@@ -36,6 +38,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [sendTo, setSendTo] = useState<string | null>(null);
+  const saver = useSaver();
   const wide = useWide();
   const body = useRef<HTMLDivElement>(null);
   // po zapisaniu / przejściu do edycji — od góry
@@ -145,6 +148,15 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
       else window.open(URL.createObjectURL(blob), '_blank');
     } catch { /* anulowane udostępnianie */ }
   };
+  // Pobierz PDF: iPhone — okno Udostępnij („Zapisz w Plikach”), komputer — pobranie pliku
+  const downloadPdf = async () => {
+    if (!saved) return;
+    setError('');
+    try {
+      const pdfBlob = blob ?? await api.invoicePdf(saved.id);
+      await saver.save([{ blob: pdfBlob, name: fileName }]);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  };
   // WhatsApp: czat z gościem (albo wybór kontaktu) z gotową wiadomością i linkiem do PDF
   const waText = saved ? ((saved.guest?.lang ?? 'pl') === 'pl'
     ? `Dzień dobry, przesyłamy rachunek nr ${saved.number} za pobyt. PDF: ${saved.share_url}\n\nPozdrawiamy,\nOd Morza do Gór`
@@ -205,7 +217,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                 <label>Numer<input value={inv.number} onChange={(e) => set('number', e.target.value)} placeholder="np. 1/2026" /></label>
                 <label>Miejsce wystawienia<input value={inv.place} onChange={(e) => set('place', e.target.value)} placeholder="np. Gdańsk" /></label>
                 <label>Data wystawienia<DateInput value={inv.issue_date} onChange={(v) => v && set('issue_date', v)} /></label>
-                <label>Data wykonania usługi (opcjonalnie)<DateInput clearable value={inv.sale_date} onChange={(v) => set('sale_date', v)} placeholder="brak — nie będzie na rachunku" /></label>
+                <label>Data wykonania usługi<DateInput clearable value={inv.sale_date} onChange={(v) => set('sale_date', v)} placeholder="brak" /></label>
               </fieldset>
 
               <fieldset>
@@ -220,7 +232,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                 <legend>Pozycje</legend>
                 {inv.items.map((it, i) => (
                   <div key={i} className="invoice-item full">
-                    <label className="item-name">Nazwa usługi<textarea rows={2} value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} /></label>
+                    <label className="item-name">Nazwa usługi<AutoTextarea rows={2} value={it.name} onChange={(e) => setItem(i, { name: e.target.value })} /></label>
                     <label>Ilość<NumInput value={it.qty} onChange={(v) => setItem(i, { qty: v ?? 0 })} /></label>
                     <label>J.m.<input value={it.unit} onChange={(e) => setItem(i, { unit: e.target.value })} placeholder="usł." /></label>
                     <label>Cena ({currencySymbol(inv.currency)})<NumInput value={it.price} onChange={(v) => setItem(i, { price: v ?? 0 })} /></label>
@@ -283,9 +295,9 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
 
               <fieldset>
                 <legend>Dopisek i stopka</legend>
-                <label className="full">Dopisek pod pozycjami<textarea rows={2} value={inv.note} onChange={(e) => set('note', e.target.value)} placeholder="np. informacja o zwolnieniu z VAT" /></label>
+                <label className="full">Dopisek pod pozycjami<AutoTextarea rows={2} value={inv.note} onChange={(e) => set('note', e.target.value)} placeholder="np. informacja o zwolnieniu z VAT" /></label>
                 <NotePhrases note={inv.note} onChange={(v) => set('note', v)} />
-                <label className="full">Stopka (dół strony)<textarea rows={2} value={inv.footer} onChange={(e) => set('footer', e.target.value)} placeholder="puste = bez stopki" /></label>
+                <label className="full">Stopka (dół strony)<AutoTextarea rows={2} value={inv.footer} onChange={(e) => set('footer', e.target.value)} placeholder="puste = bez stopki" /></label>
               </fieldset>
 
               <label className="check-row template-check">
@@ -302,6 +314,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
               {mode === 'view' && (
                 <div className="invoice-actions">
                   {info && <div className="banner info">{info}</div>}
+                  {saver.prompt}
                   {error && <div className="banner error">{error}</div>}
                   {saved && (
                     <div className="invoice-send">
@@ -330,7 +343,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                     </div>
                   )}
                   <div className="invoice-buttons">
-                    {saved && <a className="btn" href={api.invoicePdfUrl(saved.id, true)} download={fileName}>Pobierz PDF</a>}
+                    {saved && <button type="button" className="btn" onClick={downloadPdf}>Pobierz PDF</button>}
                     <button type="button" className="btn" disabled={!blob} onClick={share}>Udostępnij plik / drukuj</button>
                   </div>
                   {saved && (

@@ -874,7 +874,7 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 /* ---- Pole daty: zawsze DD/MM/RRRR (napis nasz, kalendarzyk systemowy pod spodem) ---- */
 .date-input { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; height: var(--field-h); min-height: var(--field-h); padding: 0 12px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 16px; font-weight: 400; cursor: pointer; }
-.date-input-text { flex: 1; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.date-input-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .date-input-text.is-empty { color: var(--muted); }
 .date-input-icon { flex: none; color: var(--muted); }
 .date-input input[type=date] { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
@@ -936,3 +936,11 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 /* Pole daty z ✕ (opcjonalne): przycisk nad niewidocznym polem systemowym */
 .date-input-clear { position: relative; z-index: 2; flex: none; width: 28px; height: 28px; margin-right: -4px; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--ink); font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
 .date-input-clear:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+/* „Plik gotowy — Zapisz plik”: zawsze widoczny dymek u dołu ekranu (drugie stuknięcie na iPhonie) */
+.save-pending { position: fixed; z-index: 90; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 84px); max-width: 520px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.save-pending-actions { display: inline-flex; align-items: center; gap: 12px; }
+
+.auto-textarea { resize: none; overflow: hidden; min-height: 0; line-height: 1.4; }
+/* Pola w siatce wyrównane do dołu — dłuższa etykieta (2 linie) nie przesuwa pola obok */
+.invoice-form fieldset { align-items: end; }
