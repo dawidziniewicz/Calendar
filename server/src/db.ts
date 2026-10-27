@@ -36,6 +36,17 @@ function migrate(db: DatabaseSync) {
   if (user_version < 19) migrateV19(db);
   if (user_version < 20) migrateV20(db);
   if (user_version < 21) migrateV21(db);
+  if (user_version < 22) migrateV22(db);
+}
+
+// Kod QR do zapłaty na rachunku — opcjonalny przy każdym rachunku (1 = pokaż, gdy jest konto i kwota do zapłaty)
+function migrateV22(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    ALTER TABLE invoices ADD COLUMN qr INTEGER NOT NULL DEFAULT 1;
+    PRAGMA user_version = 22;
+    COMMIT;
+  `);
 }
 
 // Co strona pokazuje po dacie „ceny do”: 'ask' — dni wolne bez ceny (gość pyta), 'closed' — dni niedostępne (jak zajęte).

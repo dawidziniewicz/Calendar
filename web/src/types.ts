@@ -118,6 +118,7 @@ export type InvoiceData = {
   seller: Party & { account: string; bank: string }; buyer: Party; items: InvoiceItem[];
   payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
   signatures: boolean; seller_signature: string; buyer_signature: string; // pola na podpisy; podpisy palcem (PNG)
+  qr?: boolean; // kod QR do zapłaty (domyślnie tak)
   currency: string;
   reservation_id?: number | null;
 };
@@ -132,4 +133,5 @@ export type InvoiceTemplate = Party & {
   numbering: 'yearly' | 'monthly'; show_account: boolean; auto_footer: string;
   signatures: boolean; seller_signature: string;
   sale_date: boolean; // data wykonania usługi na nowych rachunkach (dzień wyjazdu)
+  qr: boolean; // kod QR do zapłaty na nowych rachunkach
 };

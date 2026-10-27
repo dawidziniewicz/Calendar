@@ -17,6 +17,7 @@ export type InvoiceSettings = Party & {
   signatures: boolean; // pola na podpisy na rachunku
   seller_signature: string; // zapamiętany podpis wystawcy (PNG, data URL) — '' = brak
   sale_date: boolean; // czy wpisywać datę wykonania usługi (dzień wyjazdu) — opcjonalna na rachunku
+  qr: boolean; // kod QR do zapłaty na nowych rachunkach
 };
 export type InvoiceData = {
   number: string; issue_date: string; sale_date: string; place: string;
@@ -24,11 +25,12 @@ export type InvoiceData = {
   payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
   signatures: boolean; seller_signature: string; buyer_signature: string; // podpisy złożone palcem (PNG, data URL)
   currency: string; // PLN, EUR, GBP…
+  qr: boolean; // kod QR do zapłaty (gdy jest konto i kwota do zapłaty)
 };
 
 export const INVOICE_SETTINGS_KEY = 'invoice_settings';
 const EMPTY_PARTY: Party = { name: '', address: '', city: '', nip: '', phone: '', email: '' };
-export const DEFAULT_INVOICE_SETTINGS: InvoiceSettings = { ...EMPTY_PARTY, account: '', bank: '', place: '', note: '', footer: null, payment_method: 'przelew', payment_days: 7, numbering: 'yearly', show_account: true, signatures: true, seller_signature: '', sale_date: true };
+export const DEFAULT_INVOICE_SETTINGS: InvoiceSettings = { ...EMPTY_PARTY, account: '', bank: '', place: '', note: '', footer: null, payment_method: 'przelew', payment_days: 7, numbering: 'yearly', show_account: true, signatures: true, seller_signature: '', sale_date: true, qr: true };
 
 const s = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const num = (v: unknown) => {
@@ -49,7 +51,7 @@ export function readInvoiceSettings(v: unknown): InvoiceSettings {
     payment_method: s(o.payment_method, 60), payment_days: o.payment_days == null || o.payment_days === '' ? null : Math.min(365, Math.max(0, Math.trunc(num(o.payment_days)))),
     numbering: o.numbering === 'monthly' ? 'monthly' : 'yearly', show_account: o.show_account !== false,
     signatures: o.signatures !== false, seller_signature: readSignature(o.seller_signature),
-    sale_date: o.sale_date !== false,
+    sale_date: o.sale_date !== false, qr: o.qr !== false,
   };
 }
 
@@ -331,7 +333,7 @@ export const autoFooter = (p: Party) => [p.name, p.address && p.city ? `${p.addr
 export type InvoiceRow = {
   id: number; number: string; reservation_id: number | null; issue_date: string; sale_date: string; place: string;
   seller: string; buyer: string; items: string; total: number; payment_method: string; payment_due: string; paid: number | null; note: string; footer: string;
-  signatures: number; seller_signature: string; buyer_signature: string; currency: string;
+  signatures: number; seller_signature: string; buyer_signature: string; currency: string; qr?: number;
   created_by: string; created_at: string; updated_at: string;
 };
 const parse = <T>(raw: string, fallback: T): T => { try { return JSON.parse(raw) as T; } catch { return fallback; } };
@@ -341,7 +343,7 @@ export function invoiceData(row: InvoiceRow): InvoiceData {
     seller: { ...EMPTY_PARTY, account: '', bank: '', ...parse<Partial<Seller>>(row.seller, {}) }, buyer: { ...EMPTY_PARTY, ...parse<Partial<Party>>(row.buyer, {}) },
     items: readItems(parse(row.items, [])), payment_method: row.payment_method, payment_due: row.payment_due, paid: row.paid, note: row.note, footer: row.footer ?? '',
     signatures: row.signatures !== 0, seller_signature: row.seller_signature ?? '', buyer_signature: row.buyer_signature ?? '',
-    currency: row.currency || 'PLN',
+    currency: row.currency || 'PLN', qr: row.qr !== 0,
   };
 }
 export const invoiceFileName = (number: string) => `Rachunek-${(number || 'bez-numeru').replace(/[^\w-]+/g, '-')}.pdf`;

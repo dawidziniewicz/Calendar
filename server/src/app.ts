@@ -1604,7 +1604,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       number: str(b.number, 40), issue_date: DATE_RE.test(issue) ? issue : warsawToday(), sale_date: DATE_RE.test(sale) ? sale : '', place: str(b.place, 120),
       seller: { ...readParty(seller), account: str(seller.account, 60), bank: str(seller.bank, 120) }, buyer: readParty(b.buyer), items: readItems(b.items),
       payment_method: str(b.payment_method, 60), payment_due: DATE_RE.test(due) ? due : '', paid: money(b.paid), note: str(b.note, 1000), footer: str(b.footer, 300),
-      signatures: b.signatures !== false, seller_signature: readSignature(b.seller_signature), buyer_signature: readSignature(b.buyer_signature),
+      signatures: b.signatures !== false, seller_signature: readSignature(b.seller_signature), buyer_signature: readSignature(b.buyer_signature), qr: b.qr !== false,
       currency: readCurrency(b.currency),
     };
   };
@@ -1627,7 +1627,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const ps = paymentSettings(db);
     const due = Math.round((itemsTotal(inv.items) - (inv.paid ?? 0)) * 100) / 100;
     let qr: Buffer | undefined;
-    if (ps.show_qr && due > 0 && inv.seller.account && /przelew/i.test(inv.payment_method || 'przelew')) {
+    if (inv.qr !== false && ps.show_qr && due > 0 && inv.seller.account && /przelew/i.test(inv.payment_method || 'przelew')) {
       const title = `Rachunek ${inv.number}`.trim();
       const payload = inv.currency === 'PLN' ? plBankPayload({ account: inv.seller.account, amount: due, name: inv.seller.name, title })
         : inv.currency === 'EUR' ? epcPayload({ account: inv.seller.account, amount: due, name: inv.seller.name, text: title, bic: (inv.seller.bank.match(/BIC\/SWIFT (\S+)/) ?? [])[1] }) : null;
@@ -1643,7 +1643,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const { account, bank, ...party } = inv.seller;
     setSetting(INVOICE_SETTINGS_KEY, JSON.stringify(readInvoiceSettings({
       ...cur, ...party, account, bank, place: inv.place, note: inv.note, footer: inv.footer, payment_method: inv.payment_method,
-      signatures: inv.signatures, seller_signature: inv.seller_signature, sale_date: !!inv.sale_date,
+      signatures: inv.signatures, seller_signature: inv.seller_signature, sale_date: !!inv.sale_date, qr: inv.qr !== false,
       payment_days: days != null && days >= 0 ? days : cur.payment_days,
     })));
   };
@@ -1689,7 +1689,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       })() : [{ name: '', qty: 1, unit: 'usł.', price: 0 }],
       payment_method: t.payment_method, payment_due: t.payment_days != null ? plusDays(today, t.payment_days) : '', paid: r ? (r.paid as number | null) : null,
       note: t.note, footer: t.footer ?? t.auto_footer,
-      signatures: t.signatures, seller_signature: t.seller_signature, buyer_signature: '', currency,
+      signatures: t.signatures, seller_signature: t.seller_signature, buyer_signature: '', currency, qr: t.qr,
     };
     return c.json({ ...draft, reservation_id: r?.id ?? null });
   });
@@ -1710,15 +1710,15 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     if (!inv.number) inv.number = nextInvoiceNumber(db, inv.issue_date, invoiceSettings(db).numbering);
     if (get('SELECT 1 FROM invoices WHERE number = ? AND id != ?', inv.number, existing?.id ?? 0)) bad(`Rachunek nr ${inv.number} już istnieje — zmień numer`);
     const vals = [inv.number, inv.issue_date, inv.sale_date, inv.place, JSON.stringify(inv.seller), JSON.stringify(inv.buyer), JSON.stringify(inv.items),
-      itemsTotal(inv.items), inv.payment_method, inv.payment_due, inv.paid, inv.note, inv.footer, inv.signatures ? 1 : 0, inv.seller_signature, inv.buyer_signature, inv.currency];
+      itemsTotal(inv.items), inv.payment_method, inv.payment_due, inv.paid, inv.note, inv.footer, inv.signatures ? 1 : 0, inv.seller_signature, inv.buyer_signature, inv.currency, inv.qr === false ? 0 : 1];
     let id: number;
     if (existing) {
       run(`UPDATE invoices SET number = ?, issue_date = ?, sale_date = ?, place = ?, seller = ?, buyer = ?, items = ?, total = ?, payment_method = ?, payment_due = ?,
-        paid = ?, note = ?, footer = ?, signatures = ?, seller_signature = ?, buyer_signature = ?, currency = ?, updated_at = datetime('now') WHERE id = ?`, ...vals, existing.id);
+        paid = ?, note = ?, footer = ?, signatures = ?, seller_signature = ?, buyer_signature = ?, currency = ?, qr = ?, updated_at = datetime('now') WHERE id = ?`, ...vals, existing.id);
       id = existing.id;
     } else {
       id = Number(run(`INSERT INTO invoices (number, issue_date, sale_date, place, seller, buyer, items, total, payment_method, payment_due, paid, note, footer,
-        signatures, seller_signature, buyer_signature, currency, reservation_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...vals, resId, user.username).lastInsertRowid);
+        signatures, seller_signature, buyer_signature, currency, qr, reservation_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ...vals, resId, user.username).lastInsertRowid);
     }
     if (b.save_template !== false) saveInvoiceTemplate(inv);
     return invoiceOut(get('SELECT * FROM invoices WHERE id = ?', id) as InvoiceRow);

@@ -260,6 +260,11 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                 </label>
                 <label>Zapłacono ({currencySymbol(inv.currency)})<NumInput value={inv.paid} onChange={(v) => set('paid', v)} placeholder="puste = nie pokazuj" /></label>
                 {inv.paid !== total && <button type="button" className="chip paid-chip" onClick={() => set('paid', total)}>✓ Zapłacone w całości</button>}
+                <label className="check-row full">
+                  <input type="checkbox" checked={inv.qr !== false} onChange={(e) => set('qr', e.target.checked)} />
+                  Kod QR do zapłaty na rachunku
+                </label>
+                {inv.qr !== false && <p className="full muted small-note">Pojawia się przy przelewie, gdy jest numer konta i kwota do zapłaty.</p>}
               </fieldset>
 
               <fieldset>
