@@ -131,4 +131,5 @@ export type InvoiceTemplate = Party & {
   account: string; bank: string; place: string; note: string; footer: string | null; payment_method: string; payment_days: number | null;
   numbering: 'yearly' | 'monthly'; show_account: boolean; auto_footer: string;
   signatures: boolean; seller_signature: string;
+  sale_date: boolean; // data wykonania usługi na nowych rachunkach (dzień wyjazdu)
 };

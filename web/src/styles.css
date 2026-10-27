@@ -933,3 +933,6 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 .listing-actions-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 520px) { .listing-actions-row { grid-template-columns: 1fr; } }
 .mail-images-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-size: 0.85rem; color: var(--muted); background: color-mix(in srgb, var(--sand) 12%, transparent); }
+/* Pole daty z ✕ (opcjonalne): przycisk nad niewidocznym polem systemowym */
+.date-input-clear { position: relative; z-index: 2; flex: none; width: 28px; height: 28px; margin-right: -4px; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--ink); font-size: 13px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.date-input-clear:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }

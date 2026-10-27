@@ -16,6 +16,7 @@ export type InvoiceSettings = Party & {
   payment_method: string; payment_days: number | null; numbering: 'yearly' | 'monthly'; show_account: boolean;
   signatures: boolean; // pola na podpisy na rachunku
   seller_signature: string; // zapamiętany podpis wystawcy (PNG, data URL) — '' = brak
+  sale_date: boolean; // czy wpisywać datę wykonania usługi (dzień wyjazdu) — opcjonalna na rachunku
 };
 export type InvoiceData = {
   number: string; issue_date: string; sale_date: string; place: string;
@@ -27,7 +28,7 @@ export type InvoiceData = {
 
 export const INVOICE_SETTINGS_KEY = 'invoice_settings';
 const EMPTY_PARTY: Party = { name: '', address: '', city: '', nip: '', phone: '', email: '' };
-export const DEFAULT_INVOICE_SETTINGS: InvoiceSettings = { ...EMPTY_PARTY, account: '', bank: '', place: '', note: '', footer: null, payment_method: 'przelew', payment_days: 7, numbering: 'yearly', show_account: true, signatures: true, seller_signature: '' };
+export const DEFAULT_INVOICE_SETTINGS: InvoiceSettings = { ...EMPTY_PARTY, account: '', bank: '', place: '', note: '', footer: null, payment_method: 'przelew', payment_days: 7, numbering: 'yearly', show_account: true, signatures: true, seller_signature: '', sale_date: true };
 
 const s = (v: unknown, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const num = (v: unknown) => {
@@ -48,6 +49,7 @@ export function readInvoiceSettings(v: unknown): InvoiceSettings {
     payment_method: s(o.payment_method, 60), payment_days: o.payment_days == null || o.payment_days === '' ? null : Math.min(365, Math.max(0, Math.trunc(num(o.payment_days)))),
     numbering: o.numbering === 'monthly' ? 'monthly' : 'yearly', show_account: o.show_account !== false,
     signatures: o.signatures !== false, seller_signature: readSignature(o.seller_signature),
+    sale_date: o.sale_date !== false,
   };
 }
 

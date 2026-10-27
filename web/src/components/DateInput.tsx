@@ -6,13 +6,17 @@ import { dmy } from '../dates';
 type Props = {
   value: string; onChange: (iso: string) => void;
   min?: string; max?: string; disabled?: boolean; required?: boolean; placeholder?: string; 'aria-label'?: string;
+  clearable?: boolean; // przycisk ✕ — pole opcjonalne można wyczyścić
 };
 
-export default function DateInput({ value, onChange, min, max, disabled, required, placeholder = 'DD/MM/RRRR', ...rest }: Props) {
+export default function DateInput({ value, onChange, min, max, disabled, required, clearable, placeholder = 'DD/MM/RRRR', ...rest }: Props) {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <span className={`date-input ${disabled ? 'is-disabled' : ''}`}>
       <span className={`date-input-text ${value ? '' : 'is-empty'}`}>{value ? dmy(value) : placeholder}</span>
+      {clearable && value && !disabled && (
+        <button type="button" className="date-input-clear" aria-label="Usuń datę" title="Usuń datę" onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(''); }}>✕</button>
+      )}
       <svg className="date-input-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M4 6h16v14H4zM4 10h16M8 3v4m8-4v4" />
       </svg>
