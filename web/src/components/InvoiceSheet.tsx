@@ -205,7 +205,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                 <label>Numer<input value={inv.number} onChange={(e) => set('number', e.target.value)} placeholder="np. 1/2026" /></label>
                 <label>Miejsce wystawienia<input value={inv.place} onChange={(e) => set('place', e.target.value)} placeholder="np. Gdańsk" /></label>
                 <label>Data wystawienia<DateInput value={inv.issue_date} onChange={(v) => v && set('issue_date', v)} /></label>
-                <label>Data wykonania usługi<DateInput value={inv.sale_date} onChange={(v) => set('sale_date', v)} /></label>
+                <label>Data wykonania usługi (opcjonalnie)<DateInput clearable value={inv.sale_date} onChange={(v) => set('sale_date', v)} placeholder="brak — nie będzie na rachunku" /></label>
               </fieldset>
 
               <fieldset>
@@ -240,7 +240,7 @@ export default function InvoiceSheet({ reservationId, invoiceId, guestEmail, onC
                   <input list="pay-methods" value={inv.payment_method} onChange={(e) => set('payment_method', e.target.value)} />
                   <datalist id="pay-methods">{PAYMENT_METHODS.map((m) => <option key={m} value={m} />)}</datalist>
                 </label>
-                <label>Termin płatności<DateInput value={inv.payment_due} onChange={(v) => set('payment_due', v)} /></label>
+                <label>Termin płatności<DateInput clearable placeholder="brak" value={inv.payment_due} onChange={(v) => set('payment_due', v)} /></label>
                 <label>Waluta
                   <select value={inv.currency} onChange={(e) => changeCurrency(e.target.value)}>
                     {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}

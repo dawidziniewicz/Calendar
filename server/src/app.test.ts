@@ -1120,6 +1120,14 @@ test('rachunki: szablon z ostatnich danych, numeracja, PDF A4, wysyłka e-mailem
   assert.equal(next.footer, 'Moja stopka');
   assert.match(next.number, /^2\//);
   assert.equal((await call('POST', '/api/invoices', { ...next, number: inv.number, reservation_id: r.id })).status, 400, 'numer zajęty');
+  // data wykonania usługi opcjonalna: pusta na rachunku → kolejne rachunki też bez niej (szablon), aż do włączenia
+  const noSale = await (await call('POST', '/api/invoices', { ...next, number: '', sale_date: '', reservation_id: r.id })).json();
+  assert.equal(noSale.sale_date, '');
+  assert.equal((await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json()).sale_date, '');
+  assert.equal((await call('GET', `/api/invoices/${noSale.id}/pdf`)).status, 200);
+  await call('PUT', '/api/settings/invoice', { ...(await (await call('GET', '/api/settings/invoice')).json()), sale_date: true });
+  assert.equal((await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json()).sale_date, r.check_out);
+  await call('DELETE', `/api/invoices/${noSale.id}`);
   const file = await call('GET', `/api/invoices/${inv.id}/pdf`);
   assert.match(file.headers.get('content-disposition') ?? '', /Rachunek-1-\d{4}\.pdf/);
   // link do rachunku dla gościa (WhatsApp): bez logowania, tylko z poprawnym podpisem

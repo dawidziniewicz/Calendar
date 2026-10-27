@@ -1643,7 +1643,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const { account, bank, ...party } = inv.seller;
     setSetting(INVOICE_SETTINGS_KEY, JSON.stringify(readInvoiceSettings({
       ...cur, ...party, account, bank, place: inv.place, note: inv.note, footer: inv.footer, payment_method: inv.payment_method,
-      signatures: inv.signatures, seller_signature: inv.seller_signature,
+      signatures: inv.signatures, seller_signature: inv.seller_signature, sale_date: !!inv.sale_date,
       payment_days: days != null && days >= 0 ? days : cur.payment_days,
     })));
   };
@@ -1674,7 +1674,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
     const foreign = currency !== 'PLN' ? accountFor(paymentSettings(db), currency) : null;
     const account = currency === 'PLN' ? { account: t.account, bank: t.bank } : { account: foreign?.account_number ?? '', bank: [foreign?.bank_name, foreign?.bic && `BIC/SWIFT ${foreign.bic}`].filter(Boolean).join(', ') };
     const draft: InvoiceData = {
-      number: nextInvoiceNumber(db, today, t.numbering), issue_date: today, sale_date: r ? r.check_out : today, place: t.place,
+      number: nextInvoiceNumber(db, today, t.numbering), issue_date: today, sale_date: t.sale_date ? (r ? r.check_out as string : today) : '', place: t.place,
       seller: { name: t.name, address: t.address, city: t.city, nip: t.nip, phone: t.phone, email: t.email, account: t.show_account ? account.account : '', bank: t.show_account ? account.bank : '' },
       buyer: { name: r?.guest_name ?? '', address: '', city: '', nip: '', phone: '', email: '' },
       // opcje płatne (sprzątanie, parking…) jako osobne pozycje; nocleg = cena rezerwacji bez opcji
