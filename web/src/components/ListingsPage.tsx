@@ -3,7 +3,8 @@ import type { Property } from '../types';
 import { PORTALS, SITE_URL, domainOf, loadListingData, photoUrl, type Lang, type ListingData, type ListingObject, type PortalId } from '../listing/data';
 import { descriptions, posterHighlights, ratingShort, sleepsShort, titles } from '../listing/texts';
 import { drawPoster, loadPhoto, photoJpeg, posterJpeg, type PosterContent } from '../listing/render';
-import { buildZip, download, saveFile, type PackInput } from '../listing/pack';
+import { buildZip, type PackInput } from '../listing/pack';
+import { useSaver } from '../useSaver';
 
 // Ogłoszenia na portale: dla wybranego obiektu i portalu — zdjęcia w odpowiednim formacie, plakat z adresem strony
 // (co ma być na plakacie — do zaznaczenia), kilka propozycji opisu i tytułu, wszystko w paczce ZIP.
@@ -69,6 +70,7 @@ export default function ListingsPage({ properties, onBack }: { properties: Prope
   const [busy, setBusy] = useState('');
   const [copied, setCopied] = useState('');
   const preview = useRef<HTMLCanvasElement>(null);
+  const saver = useSaver(); // zapis plików: iPhone — okno Udostępnij, komputer — pobranie
   const [previewError, setPreviewError] = useState('');
 
   useEffect(() => {
@@ -161,7 +163,7 @@ export default function ListingsPage({ properties, onBack }: { properties: Prope
     try {
       setBusy('Przygotowywanie plakatu…');
       const photo = await loadPhoto(photoUrl(pc.photo));
-      await saveFile(await posterJpeg(portal.w, portal.h, { ...pc, photo }), `plakat-${fileBase}.jpg`);
+      await saver.save([{ blob: await posterJpeg(portal.w, portal.h, { ...pc, photo }), name: `plakat-${fileBase}.jpg` }]);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(''); }
   };
   const savePhoto = async (i: number, nr?: number) => {
@@ -171,20 +173,23 @@ export default function ListingsPage({ properties, onBack }: { properties: Prope
     try {
       setBusy('Przygotowywanie zdjęcia…');
       const img = await loadPhoto(photoUrl(ph));
-      await saveFile(await photoJpeg(img, portal.w, portal.h), `${nr ? `${String(nr).padStart(2, '0')}-` : ''}${ph.name}-${portal.file}.jpg`);
+      await saver.save([{ blob: await photoJpeg(img, portal.w, portal.h), name: `${nr ? `${String(nr).padStart(2, '0')}-` : ''}${ph.name}-${portal.file}.jpg` }]);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(''); }
   };
   const saveAllPhotos = async () => {
     const list = picks.slice(0, room);
-    for (const [n, i] of list.entries()) {
-      const ph = o?.photos[i];
-      if (!ph) continue;
-      setBusy(`Zdjęcie ${n + 1} z ${list.length}…`);
-      try { download(await photoJpeg(await loadPhoto(photoUrl(ph)), portal.w, portal.h), `${String(n + 1).padStart(2, '0')}-${ph.name}-${portal.file}.jpg`); }
-      catch (e) { setError(e instanceof Error ? e.message : String(e)); break; }
-      await new Promise((r) => setTimeout(r, 350)); // przeglądarka pobiera pliki po kolei
-    }
-    setBusy('');
+    const files: { blob: Blob; name: string }[] = [];
+    try {
+      for (const [n, i] of list.entries()) {
+        const ph = o?.photos[i];
+        if (!ph) continue;
+        setBusy(`Zdjęcie ${n + 1} z ${list.length}…`);
+        files.push({ blob: await photoJpeg(await loadPhoto(photoUrl(ph)), portal.w, portal.h), name: `${String(n + 1).padStart(2, '0')}-${ph.name}-${portal.file}.jpg` });
+      }
+      setBusy('');
+      // na telefonie jedno okno Udostępnij ze wszystkimi zdjęciami („Zapisz obrazy”), na komputerze pobieranie po kolei
+      await saver.save(files);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(''); }
   };
   const makeZip = async (all: boolean) => {
     const packs = (all ? PORTALS.map((p) => pack(p, true)) : [pack()]).filter((x): x is PackInput => !!x);
@@ -193,8 +198,8 @@ export default function ListingsPage({ properties, onBack }: { properties: Prope
     try {
       setBusy('Przygotowywanie…');
       const { blob, name } = await buildZip(packs, setBusy);
-      download(blob, name);
       setBusy('');
+      await saver.save([{ blob, name }]);
     } catch (e) {
       setBusy('');
       setError(e instanceof Error ? e.message : String(e));
@@ -349,6 +354,7 @@ export default function ListingsPage({ properties, onBack }: { properties: Prope
 
         <div className="listing-actions">
           {busy && <div className="banner info">{busy}</div>}
+          {saver.prompt}
           <button type="button" className="btn primary big" disabled={!!busy} onClick={() => makeZip(false)}>Pobierz paczkę ZIP — {portal.label}</button>
           <div className="listing-actions-row">
             <button type="button" className="btn" disabled={!!busy || !posterOn} onClick={savePoster}>Sam plakat (JPG)</button>

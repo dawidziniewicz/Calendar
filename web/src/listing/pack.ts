@@ -86,26 +86,5 @@ export async function buildZip(packs: PackInput[], progress: (msg: string) => vo
   return { blob: new Blob([zip as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), name };
 }
 
-/**
- * Zapis pojedynczego pliku: na telefonie okno „Udostępnij” (można zapisać do Zdjęć albo wysłać),
- * na komputerze zwykłe pobranie.
- */
-export async function saveFile(blob: Blob, name: string) {
-  const file = new File([blob], name, { type: blob.type });
-  const touch = window.matchMedia('(pointer: coarse)').matches;
-  if (touch && navigator.canShare?.({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if ((e as Error).name === 'AbortError') return; }
-  }
-  download(blob, name);
-}
-
-export function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
+// zapis pojedynczych plików — wspólny z resztą aplikacji
+export { download, saveFile, saveFiles } from '../files';

@@ -3,6 +3,8 @@ import { api, type MailMessage, type MailSummary, type MailThread, type MailThre
 import type { Reservation } from '../types';
 import { dmy, dmyTime, formatShort, toIso } from '../dates';
 import type { MailIntent } from './EmailLink';
+import { useSaver } from '../useSaver';
+import { fetchBlob } from '../files';
 
 // Poczta: wiadomości do rezerwacje@ / kontakt@ / contact@ (odbiór przez Cloudflare Email Worker), rozmowy,
 // odpowiedzi i nowe wiadomości z wybranego adresu, e-maile wysłane gościom z kalendarza.
@@ -168,6 +170,13 @@ function MailBody({ m }: { m: MailMessage }) {
 function ThreadSheet({ id, summary, onClose, onChanged, onOpenReservation }: {
   id: number; summary: MailSummary | null; onClose: () => void; onChanged: () => void; onOpenReservation: (r: Reservation) => void;
 }) {
+  // Załącznik: na komputerze nowa karta; na telefonie okno Udostępnij (w aplikacji z ekranu głównego iOS link nie działa)
+  const saver = useSaver();
+  const openAttachment = async (e: React.MouseEvent, a: { id: number; filename: string }) => {
+    if (!window.matchMedia('(pointer: coarse)').matches) return;
+    e.preventDefault();
+    try { await saver.save([{ blob: await fetchBlob(api.mailAttachmentUrl(a.id)), name: a.filename || 'zalacznik' }]); } catch { window.open(api.mailAttachmentUrl(a.id), '_blank'); }
+  };
   const [data, setData] = useState<MailThreadDetail | null>(null);
   const [error, setError] = useState('');
   const [from, setFrom] = useState('');
@@ -227,6 +236,7 @@ function ThreadSheet({ id, summary, onClose, onChanged, onOpenReservation }: {
           <span className="head-spacer" />
         </header>
         <div className="sheet-body">
+          {saver.prompt}
           {!data && !error && <p className="muted">Wczytywanie…</p>}
           {error && <div className="banner error">{error}</div>}
           {data && t && (
@@ -260,7 +270,7 @@ function ThreadSheet({ id, summary, onClose, onChanged, onOpenReservation }: {
                     {m.attachments.length > 0 && (
                       <div className="mail-atts">
                         {m.attachments.map((a) => (
-                          <a key={a.id} className="mail-att" href={api.mailAttachmentUrl(a.id)} target="_blank" rel="noopener noreferrer">
+                          <a key={a.id} className="mail-att" href={api.mailAttachmentUrl(a.id)} target="_blank" rel="noopener noreferrer" onClick={(e) => openAttachment(e, a)}>
                             📎 {a.filename} <small className="muted">{kb(a.size)}</small>
                           </a>
                         ))}
