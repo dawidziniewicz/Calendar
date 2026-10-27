@@ -136,6 +136,7 @@ export default function PaymentsPage({ onBack, canEdit }: { onBack: () => void; 
             <label className="check-row"><input type="checkbox" checked={tpl.show_account} onChange={(e) => t('show_account', e.target.checked)} /> Numer konta na rachunku</label>
             <label className="check-row"><input type="checkbox" checked={tpl.signatures} onChange={(e) => t('signatures', e.target.checked)} /> Pola na podpisy</label>
             <label className="check-row"><input type="checkbox" checked={tpl.sale_date !== false} onChange={(e) => t('sale_date', e.target.checked)} /> Data wykonania usługi (dzień wyjazdu) na nowych rachunkach</label>
+            <label className="check-row"><input type="checkbox" checked={tpl.qr !== false} onChange={(e) => t('qr', e.target.checked)} /> Kod QR do zapłaty na nowych rachunkach</label>
             {tpl.seller_signature && (
               <div className="sig-row full">
                 <div className="sig-row-head"><span>Zapamiętany podpis wystawcy</span></div>

@@ -1128,6 +1128,13 @@ test('rachunki: szablon z ostatnich danych, numeracja, PDF A4, wysyłka e-mailem
   await call('PUT', '/api/settings/invoice', { ...(await (await call('GET', '/api/settings/invoice')).json()), sale_date: true });
   assert.equal((await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json()).sale_date, r.check_out);
   await call('DELETE', `/api/invoices/${noSale.id}`);
+  // kod QR opcjonalny: zapis na rachunku i w szablonie
+  const noQr = await (await call('POST', '/api/invoices', { ...next, number: '', qr: false, reservation_id: r.id })).json();
+  assert.equal(noQr.qr, false);
+  assert.equal((await (await call('GET', `/api/invoices/draft?reservation_id=${r.id}`)).json()).qr, false);
+  assert.equal((await call('GET', `/api/invoices/${noQr.id}/pdf`)).status, 200);
+  await call('DELETE', `/api/invoices/${noQr.id}`);
+  await call('PUT', '/api/settings/invoice', { ...(await (await call('GET', '/api/settings/invoice')).json()), qr: true });
   const file = await call('GET', `/api/invoices/${inv.id}/pdf`);
   assert.match(file.headers.get('content-disposition') ?? '', /Rachunek-1-\d{4}\.pdf/);
   // link do rachunku dla gościa (WhatsApp): bez logowania, tylko z poprawnym podpisem
