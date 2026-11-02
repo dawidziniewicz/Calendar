@@ -29,6 +29,7 @@ import {
 import { dateRange } from './changes.ts';
 import { MAILBOXES_KEY, REPLY_TO_KEY, addrOf, fromHeader, lastInbound, mailboxes, replyHtml, storeMessage, withMailLog } from './mailbox.ts';
 import { dmyTime, todayDmy } from './dmy.ts';
+import { payView, readPayCode, smsData, templatesForUnit, type SmsTemplate } from './sms.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const STATUSES = ['confirmed', 'tentative', 'cancelled'];
@@ -420,6 +421,15 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
       replyTo: st.guest_email,
     }).catch(() => {});
     return c.json(offerView(get('SELECT * FROM offers WHERE id = ?', o.id) as OfferRow));
+  });
+
+  // ---- Strona płatności z linku w SMS-ie / WhatsAppie: /oferta/?p=KOD (zaliczka albo dopłata, podpisany link) ----
+  pub.get('/pay', (c) => {
+    const code = readPayCode(apiKey, str(c.req.query('p'), 40));
+    const r = code ? get('SELECT * FROM reservations WHERE id = ?', code.id) as (Stay & { id: number; status: string }) | undefined : undefined;
+    if (!code || !r) return c.json({ error: 'Nieprawidłowy lub nieaktualny link', code: 'not_found' }, 404);
+    c.header('Cache-Control', 'no-store');
+    return c.json(payView(db, r, code.kind));
   });
 
   app.route('/public', pub);
@@ -1568,6 +1578,97 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   });
 
   // ---- Ustawienia płatności (konto, zaliczka, warunki) ----
+  // ---- SMS / WhatsApp do gościa z szablonu (aplikacja otwiera Wiadomości / WhatsApp z gotowym tekstem) ----
+  const noViewer = (user: User) => { if (user.role === 'viewer') throw new HTTPException(403, { message: 'Brak uprawnień' }); };
+  // Szablon dla wszystkich obiektów zmienia tylko główny admin; konto z dostępem do obiektu — szablony tego obiektu i jego domków
+  const canEditTemplate = (user: User, t: { property_id: number | null; unit_id: number | null }) => isFullAdmin(user)
+    || (t.unit_id != null ? canSee(user, t.unit_id) : t.property_id != null && !!user.properties?.includes(t.property_id));
+  const readTemplate = (user: User, b: Record<string, unknown>) => {
+    const name = str(b.name, 80) || bad('Podaj nazwę szablonu');
+    const body = str(b.body, 2000);
+    const unit_id = b.unit_id ? int(b.unit_id) : null;
+    let property_id = b.property_id ? int(b.property_id) : null;
+    if (unit_id) property_id = (get('SELECT property_id FROM units WHERE id = ?', unit_id) as { property_id: number } | undefined)?.property_id ?? bad('Nie ma takiego domku');
+    else if (property_id && !get('SELECT id FROM properties WHERE id = ?', property_id)) bad('Nie ma takiego obiektu');
+    const t = { name, body, property_id, unit_id };
+    if (!canEditTemplate(user, t)) throw new HTTPException(403, { message: 'Szablon dla wszystkich obiektów może zmienić tylko główny administrator' });
+    return t;
+  };
+  const templateRow = (user: User, id: number) => {
+    const t = get('SELECT * FROM sms_templates WHERE id = ?', id) as SmsTemplate | undefined;
+    if (!t) throw new HTTPException(404, { message: 'Nie znaleziono szablonu' });
+    if (!canEditTemplate(user, t)) throw new HTTPException(403, { message: 'Brak dostępu do tego szablonu' });
+    return t;
+  };
+  api.get('/sms-templates', (c) => {
+    const user = c.get('user');
+    noViewer(user);
+    const list = all('SELECT * FROM sms_templates ORDER BY sort, id') as SmsTemplate[];
+    return c.json(list.filter((t) => (t.property_id == null && t.unit_id == null) || canEditTemplate(user, t))
+      .map((t) => ({ ...t, editable: canEditTemplate(user, t) })));
+  });
+  api.post('/sms-templates', async (c) => {
+    const t = readTemplate(c.get('user'), await c.req.json().catch(() => ({})));
+    const { m } = get('SELECT COALESCE(MAX(sort), 0) + 1 AS m FROM sms_templates') as { m: number };
+    const r = run('INSERT INTO sms_templates (name, body, property_id, unit_id, sort) VALUES (?, ?, ?, ?, ?)', t.name, t.body, t.property_id, t.unit_id, m);
+    return c.json(get('SELECT * FROM sms_templates WHERE id = ?', r.lastInsertRowid), 201);
+  });
+  api.put('/sms-templates/:id{[0-9]+}', async (c) => {
+    const user = c.get('user');
+    const id = templateRow(user, int(c.req.param('id'))).id;
+    const t = readTemplate(user, await c.req.json().catch(() => ({})));
+    run('UPDATE sms_templates SET name = ?, body = ?, property_id = ?, unit_id = ? WHERE id = ?', t.name, t.body, t.property_id, t.unit_id, id);
+    return c.json(get('SELECT * FROM sms_templates WHERE id = ?', id));
+  });
+  api.delete('/sms-templates/:id{[0-9]+}', (c) => {
+    run('DELETE FROM sms_templates WHERE id = ?', templateRow(c.get('user'), int(c.req.param('id'))).id);
+    return c.json({ ok: true });
+  });
+
+  /** Kwota i termin zaliczki z formularza (jeszcze niezapisane) — do podglądu strony płatności */
+  const depositInput = (amount: unknown, due: unknown) => {
+    const a = money(amount);
+    if (a != null && a < 0) bad('Kwota nie może być ujemna');
+    return { deposit: a, deposit_due: typeof due === 'string' && DATE_RE.test(due) ? due : null };
+  };
+  // Dane do SMS-a: szablony dla domku, dane rezerwacji, linki do płatności i podgląd tego, co gość zobaczy pod linkiem
+  api.get('/reservations/:id{[0-9]+}/sms', (c) => {
+    const user = c.get('user');
+    noViewer(user);
+    const r = visibleReservation(user, int(c.req.param('id')));
+    const amount = c.req.query('amount');
+    const override = amount === undefined ? undefined : depositInput(amount, c.req.query('due'));
+    return c.json({
+      data: smsData(db, apiKey, r),
+      templates: templatesForUnit(db, r.unit_id),
+      preview: { deposit: payView(db, r, 'deposit', override), balance: payView(db, r, 'balance') },
+    });
+  });
+  const saveDeposit = (id: number, d: { deposit: number | null; deposit_due: string | null }) =>
+    run(`UPDATE reservations SET deposit = ?, deposit_due = ?, updated_at = datetime('now') WHERE id = ?`, d.deposit, d.deposit_due, id);
+  // Zapis zaliczki przed otwarciem podglądu strony płatności (link pokazuje to, co jest w rezerwacji)
+  api.put('/reservations/:id{[0-9]+}/deposit', async (c) => {
+    const r = visibleReservation(c.get('user'), int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    saveDeposit(r.id, depositInput(b.amount, b.due));
+    return c.json(get('SELECT * FROM reservations WHERE id = ?', r.id));
+  });
+  // Wysłanie SMS-a / WhatsAppa: telefon wysyła sam, tu tylko zapis w historii rezerwacji (+ zaliczka, gdy w treści jest link do niej)
+  api.post('/reservations/:id{[0-9]+}/sms', async (c) => {
+    const user = c.get('user');
+    const r = visibleReservation(user, int(c.req.param('id')));
+    const b = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const body = str(b.body, 3000) || bad('Wpisz treść wiadomości');
+    const channel = b.channel === 'whatsapp' ? 'whatsapp' : 'sms';
+    if (b.deposit && typeof b.deposit === 'object') {
+      const d = b.deposit as Record<string, unknown>;
+      saveDeposit(r.id, depositInput(d.amount, d.due));
+    }
+    run('INSERT INTO guest_messages (reservation_id, kind, to_email, subject, body, sent_by) VALUES (?, ?, ?, ?, ?, ?)',
+      r.id, channel, str((r as Record<string, unknown>).guest_phone, 40), str(b.name, 80) || (channel === 'whatsapp' ? 'WhatsApp' : 'SMS'), body, user.username);
+    return c.json({ ok: true, reservation: get('SELECT * FROM reservations WHERE id = ?', r.id) });
+  });
+
   api.get('/settings/payments', (c) => c.json(paymentSettings(db)));
   api.put('/settings/payments', async (c) => {
     requireFullAdmin(c.get('user'));

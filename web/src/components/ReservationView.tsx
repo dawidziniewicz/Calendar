@@ -7,6 +7,7 @@ import type { Activity, MessageKind, Property, Reservation } from '../types';
 import OfferSheet from './OfferSheet';
 import MessageSheet, { MESSAGE_LABELS } from './MessageSheet';
 import InvoiceSheet from './InvoiceSheet';
+import SmsSheet from './SmsSheet';
 import { SOURCES, STATUS_LABELS } from '../types';
 import { diffDays, dmyTime, formatLong, formatShort, nightsLabel } from '../dates';
 
@@ -17,6 +18,7 @@ type Props = {
   readOnly: boolean;
   onEdit: () => void;
   onChanged: (updated: Reservation) => void;
+  onOpenSmsTemplates?: () => void;
 };
 type Conflict = { id: number; check_in: string; check_out: string; guest_name: string; source: string };
 
@@ -25,7 +27,7 @@ const telHref = (phone: string) => `tel:${phone.replace(/[^\d+]/g, '')}`;
 
 /** Link do czatu WhatsApp. Numer bez kierunkowego (9 cyfr) traktujemy jako polski (+48). */
 
-export default function ReservationView({ reservation: r, properties, readOnly, onClose, onEdit, onChanged }: Props) {
+export default function ReservationView({ reservation: r, properties, readOnly, onClose, onEdit, onChanged, onOpenSmsTemplates }: Props) {
   const [busy, setBusy] = useState(false);
   const money = (v: number, c = r.currency) => fmt(v, c);
   const [error, setError] = useState('');
@@ -35,7 +37,8 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
   const [offerOpen, setOfferOpen] = useState(false);
   const [messageKind, setMessageKind] = useState<MessageKind | null>(null);
   const [invoice, setInvoice] = useState<{ id?: number } | null>(null);
-  const childOpen = offerOpen || messageKind != null || invoice != null;
+  const [smsOpen, setSmsOpen] = useState(false);
+  const childOpen = offerOpen || messageKind != null || invoice != null || smsOpen;
   useEffect(() => {
     if (readOnly) return;
     api.activity(r.id).then(setActivity).catch(() => {});
@@ -190,10 +193,17 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
                     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" /></svg>
                     <span><small>Zadzwoń</small>{r.guest_phone}</span>
                   </a>
-                  <a className="contact" href={`sms:${r.guest_phone.replace(/[^\d+]/g, '')}`}>
-                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 5h16v11H9l-5 4z" /></svg>
-                    <span><small>SMS</small></span>
-                  </a>
+                  {readOnly ? (
+                    <a className="contact" href={`sms:${r.guest_phone.replace(/[^\d+]/g, '')}`}>
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 5h16v11H9l-5 4z" /></svg>
+                      <span><small>SMS</small></span>
+                    </a>
+                  ) : (
+                    <button type="button" className="contact" onClick={() => setSmsOpen(true)}>
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 5h16v11H9l-5 4z" /></svg>
+                      <span><small>SMS</small></span>
+                    </button>
+                  )}
                   {whatsappHref(r.guest_phone) && (
                     <a className="contact whatsapp" href={whatsappHref(r.guest_phone)!} target="_blank" rel="noopener noreferrer">
                       <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden>
@@ -264,7 +274,8 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
               {activity && !activity.email_configured && <p className="muted small-note">Wysyłka e-maili nie jest skonfigurowana na serwerze.</p>}
               <div className="comms-grid">
                 <button type="button" className="comms-btn" onClick={() => setOfferOpen(true)}><b>Oferta do akceptacji</b><small>cena z obowiązkiem zapłaty, link „Akceptuję”</small></button>
-                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('deposit')}><b>Poproś o zaliczkę</b><small>kwota, termin, numer konta</small></button>
+                <button type="button" className="comms-btn sms" onClick={() => setSmsOpen(true)}><b>SMS / WhatsApp</b><small>z szablonu, link do zapłaty zaliczki</small></button>
+                <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('deposit')}><b>Poproś o zaliczkę</b><small>e-mail: kwota, termin, numer konta</small></button>
                 <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('balance')}><b>Poproś o dopłatę</b><small>pozostała kwota</small></button>
                 <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('received')}><b>Potwierdź wpłatę</b><small>podziękowanie za przelew</small></button>
                 <button type="button" className="comms-btn" disabled={!r.guest_email} onClick={() => setMessageKind('confirmation')}><b>Potwierdzenie rezerwacji</b><small>szczegóły pobytu</small></button>
@@ -340,6 +351,12 @@ export default function ReservationView({ reservation: r, properties, readOnly, 
       {messageKind && (
         <div onClick={(e) => e.stopPropagation()}>
           <MessageSheet reservation={r} initialKind={messageKind} onClose={() => setMessageKind(null)} onSent={(u) => { onChanged(u); refreshActivity(); }} />
+        </div>
+      )}
+      {smsOpen && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <SmsSheet reservation={r} onClose={() => setSmsOpen(false)} onChanged={(u) => { onChanged(u); refreshActivity(); }}
+            onOpenTemplates={onOpenSmsTemplates ? () => { setSmsOpen(false); onOpenSmsTemplates(); } : undefined} />
         </div>
       )}
       {invoice && (
