@@ -10,10 +10,10 @@ import { dmyTime } from '../dates';
 
 type Props = {
   user: string; readOnly: boolean; scope: string[] | null; canManageUsers: boolean;
-  onOpenUsers: () => void; onOpenPricing: () => void; onOpenPayments: () => void; onOpenListings: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
+  onOpenUsers: () => void; onOpenPricing: () => void; onOpenPayments: () => void; onOpenListings: () => void; onOpenSms: () => void; onLogout: () => void; properties: Property[]; reload: () => void;
 };
 
-export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onOpenPricing, onOpenPayments, onOpenListings, onLogout, properties, reload }: Props) {
+export default function Settings({ user, readOnly, scope, canManageUsers, onOpenUsers, onOpenPricing, onOpenPayments, onOpenListings, onOpenSms, onLogout, properties, reload }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult[] | null>(null);
   const [error, setError] = useState('');
@@ -72,6 +72,13 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
             </span>
             <span className="nav-arrow">›</span>
           </button>
+          <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenSms}>
+            <span>
+              <b>Szablony SMS</b>
+              <small>Gotowe wiadomości SMS / WhatsApp: prośba o zaliczkę z linkiem do płatności, dane do przyjazdu (adres, kody, Wi-Fi) dla domku</small>
+            </span>
+            <span className="nav-arrow">›</span>
+          </button>
         </>)}
         <div className="panel access-info">
           {scope && <p>Dostęp do obiektów: <b>{scope.join(', ')}</b></p>}
@@ -109,6 +116,13 @@ export default function Settings({ user, readOnly, scope, canManageUsers, onOpen
         <span>
           <b>Ogłoszenia na portale</b>
           <small>Zdjęcia, plakat z adresem strony i opisy na OLX, Facebooka, Instagram, Booking.com, Airbnb — paczka ZIP</small>
+        </span>
+        <span className="nav-arrow">›</span>
+      </button>
+      <button type="button" className="panel nav-panel pricing-nav" onClick={onOpenSms}>
+        <span>
+          <b>Szablony SMS</b>
+          <small>Gotowe wiadomości SMS / WhatsApp: prośba o zaliczkę z linkiem do płatności, dane do przyjazdu (adres, kody, Wi-Fi) dla domku</small>
         </span>
         <span className="nav-arrow">›</span>
       </button>

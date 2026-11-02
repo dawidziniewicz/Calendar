@@ -11,6 +11,7 @@ import ReservationView from './components/ReservationView';
 import UsersPage from './components/UsersPage';
 import PricingPage from './components/PricingPage';
 import PaymentsPage from './components/PaymentsPage';
+import SmsTemplatesPage from './components/SmsTemplatesPage';
 import Mail from './components/Mail';
 import { MailLinkContext, type MailIntent } from './components/EmailLink';
 import ConflictMark from './components/ConflictMark';
@@ -74,7 +75,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
   const readOnly = user.role === 'viewer';
   const limited = user.properties !== null;
   // Podstrona „Użytkownicy i uprawnienia” (z obsługą przycisku Wstecz / gestu cofania na iPhonie)
-  type Page = 'main' | 'users' | 'pricing' | 'payments' | 'listings';
+  type Page = 'main' | 'users' | 'pricing' | 'payments' | 'listings' | 'sms';
   const [page, setPage] = useState<Page>('main');
   useEffect(() => {
     const onPop = () => setPage(['users', 'pricing', 'payments', 'listings'].includes(history.state?.page) ? history.state.page : 'main');
@@ -222,9 +223,10 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
         {page === 'main' && tab === 'agenda' && <Agenda properties={properties} version={version} cancellations={cancellations} onSelect={openExisting} />}
         {page === 'users' && <UsersPage properties={properties} onBack={closeUsers} />}
         {page === 'payments' && <PaymentsPage canEdit={user.canManageUsers} onBack={closeUsers} />}
+        {page === 'sms' && <SmsTemplatesPage properties={properties} onBack={closeUsers} />}
         {page === 'listings' && <Suspense fallback={<p className="muted">Wczytywanie…</p>}><ListingsPage properties={properties} onBack={closeUsers} /></Suspense>}
         {page === 'pricing' && <PricingPage properties={properties} canEditHorizon={user.canManageUsers} onBack={closeUsers} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
-        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onOpenPayments={() => openPage('payments')} onOpenListings={() => openPage('listings')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
+        {page === 'main' && tab === 'settings' && <Settings user={user.username} readOnly={readOnly} scope={user.properties} canManageUsers={user.canManageUsers} onOpenUsers={openUsers} onOpenPricing={() => openPage('pricing')} onOpenPayments={() => openPage('payments')} onOpenListings={() => openPage('listings')} onOpenSms={() => openPage('sms')} onLogout={onLogout} properties={properties} reload={() => { loadProperties(); setVersion((v) => v + 1); }} />}
       </main>
 
       <nav className="tabs-mobile">
@@ -248,6 +250,7 @@ function Main({ user, onLogout }: { user: Session; onLogout: () => void }) {
           readOnly={readOnly}
           onEdit={() => setEditing({ ...viewing })}
           onChanged={(updated) => { setViewing(updated); setVersion((v) => v + 1); }}
+          onOpenSmsTemplates={() => { setViewing(null); openPage('sms'); }}
         />
       )}
 

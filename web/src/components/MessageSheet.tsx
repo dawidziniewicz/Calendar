@@ -16,6 +16,8 @@ export const MESSAGE_LABELS: Record<MessageKind, string> = {
   offer: 'Oferta do akceptacji',
   offer_accepted: 'Potwierdzenie po akceptacji oferty',
   unpaid_cancel: 'Anulacja — brak zaliczki',
+  sms: 'SMS',
+  whatsapp: 'WhatsApp',
 };
 const COMPOSE_KINDS: MessageKind[] = ['deposit', 'balance', 'received', 'confirmation', 'custom'];
 

@@ -37,6 +37,28 @@ function migrate(db: DatabaseSync) {
   if (user_version < 20) migrateV20(db);
   if (user_version < 21) migrateV21(db);
   if (user_version < 22) migrateV22(db);
+if (user_version < 23) migrateV23(db);
+}
+
+// Szablony SMS / WhatsApp do gościa: dla wszystkich, dla obiektu albo dla jednego domku (np. kody do skrzynki, Wi-Fi).
+// W treści pola w nawiasach klamrowych: {imie}, {przyjazd}, {link_zaliczki}… — aplikacja podstawia dane rezerwacji.
+function migrateV23(db: DatabaseSync) {
+  db.exec(`
+    BEGIN;
+    CREATE TABLE sms_templates (
+      id INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      property_id INTEGER REFERENCES properties(id) ON DELETE CASCADE,
+      unit_id INTEGER REFERENCES units(id) ON DELETE CASCADE,
+      sort INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO sms_templates (name, body, sort) VALUES
+      ('Prośba o zaliczkę', 'Dzień dobry {imie}, dziękujemy za rezerwację: {obiekt}, {przyjazd}–{wyjazd}. Prosimy o wpłatę zaliczki {zaliczka} do {termin_zaliczki}. Dane do przelewu i kod QR: {link_zaliczki}' || char(10) || 'Pozdrawiamy', 1),
+      ('Prośba o dopłatę', 'Dzień dobry {imie}, przypominamy o dopłacie {do_zaplaty} za pobyt {przyjazd}–{wyjazd} ({obiekt}). Dane do płatności: {link_doplaty}' || char(10) || 'Pozdrawiamy', 2);
+    PRAGMA user_version = 23;
+    COMMIT;
+  `);
 }
 
 // Kod QR do zapłaty na rachunku — opcjonalny przy każdym rachunku (1 = pokaż, gdy jest konto i kwota do zapłaty)

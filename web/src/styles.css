@@ -944,3 +944,40 @@ input.search:not([type=color]):not([type=checkbox]):not([type=radio]) { margin-b
 .auto-textarea { resize: none; overflow: hidden; min-height: 0; line-height: 1.4; }
 /* Pola w siatce wyrównane do dołu — dłuższa etykieta (2 linie) nie przesuwa pola obok */
 .invoice-form fieldset { align-items: end; }
+
+/* ---- SMS / WhatsApp z szablonu ---- */
+button.contact { font: inherit; cursor: pointer; text-align: left; }
+.sms-sheet .sms-to { margin: 0 0 10px; }
+.sms-sheet .small-link { font-size: 0.86rem; margin: -2px 0 12px; display: inline-block; }
+.sms-sheet .chip small { opacity: 0.75; font-weight: 500; }
+.sms-text { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 0.9rem; }
+.sms-text textarea { font: inherit; font-weight: 400; font-size: 1rem; line-height: 1.45; }
+.sms-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; font-size: 0.84rem; margin: 6px 0 10px; }
+.sms-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.sms-actions .btn { flex: 1 1 140px; text-align: center; text-decoration: none; }
+a.btn.disabled { opacity: 0.45; pointer-events: none; }
+.btn.whatsapp-btn { background: #1fa855; border-color: #1fa855; color: #fff; }
+.pay-preview { margin-top: 14px; display: grid; gap: 10px; }
+.pay-preview h3 { margin: 0; font-size: 0.95rem; }
+.pay-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--bg); display: grid; gap: 8px; justify-items: start; }
+.pay-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; width: 100%; }
+.pay-amount { font-weight: 700; font-size: 1.05rem; }
+.pay-amount small { font-weight: 500; color: var(--muted); }
+.pay-card p { margin: 0; }
+.pay-card-list { margin: 0; display: grid; gap: 4px; width: 100%; font-size: 0.88rem; }
+.pay-card-list div { display: grid; grid-template-columns: 76px 1fr; gap: 8px; }
+.pay-card-list dt { color: var(--muted); }
+.pay-card-list dd { margin: 0; overflow-wrap: anywhere; }
+.pay-card-qr { display: flex; gap: 12px; }
+.pay-card-qr figure { margin: 0; text-align: center; font-size: 0.75rem; color: var(--muted); }
+.pay-card-qr img { display: block; background: #fff; border-radius: 6px; padding: 4px; }
+.sms-fields { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sms-fields .chip { font-size: 0.8rem; padding: 4px 10px; }
+.sms-example { background: var(--bg); border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
+.sms-example p, .sms-template-body { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.92rem; line-height: 1.45; }
+.sms-template-list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 10px; }
+.sms-template-list li { margin: 0; }
+.sms-template-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; align-items: baseline; }
+.tag-scope { font-size: 0.78rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
+.sms-editor .row-actions, .sms-template-list .row-actions { display: flex; gap: 14px; margin-top: 10px; }
+.pay-card .paid { color: var(--paid); }

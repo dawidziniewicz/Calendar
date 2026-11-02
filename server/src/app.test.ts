@@ -1375,3 +1375,54 @@ test('Poczta: odbiór z Email Workera, rozmowy, odpowiedź z wybranego adresu, e
   assert.equal((await call('GET', '/api/mail/threads')).status, 403);
   assert.equal((await (await call('GET', '/api/mail/summary')).json()).allowed, false);
 });
+
+test('SMS z szablonu: szablony dla domku, link do płatności zaliczki z podglądem, zapis w historii', async () => {
+  const { call, login } = setup();
+  await login();
+  await call('PUT', '/api/settings/payments', { account_number: '12 3456 7890', account_name: 'Jan Kowalski', revolut: 'jankowalski', deposit_percent: 30, deposit_days: 3 });
+  const unit = (await (await call('GET', '/api/properties')).json())[0].units[0];
+  const other = (await (await call('GET', '/api/properties')).json())[1].units[0];
+  // domyślne szablony (zaliczka, dopłata) + własny dla jednego domku z kodami
+  const list = await (await call('GET', '/api/sms-templates')).json();
+  assert.ok(list.some((t: { name: string }) => t.name === 'Prośba o zaliczkę'));
+  assert.equal((await call('POST', '/api/sms-templates', { name: '', body: 'x' })).status, 400);
+  const codes = await (await call('POST', '/api/sms-templates', { name: 'Przyjazd', body: 'Kod do skrzynki 1972, Wi-Fi {imie}', unit_id: unit.id })).json();
+  assert.equal(codes.property_id, unit.property_id);
+  const r = await (await call('POST', '/api/reservations', { unit_id: unit.id, check_in: inDays(30), check_out: inDays(33), guest_name: 'Anna Kowal', guest_phone: '+48 600 100 200', price: 1000 })).json();
+  const o = await (await call('POST', '/api/reservations', { unit_id: other.id, check_in: inDays(30), check_out: inDays(33), guest_name: 'Inny Gość', price: 500 })).json();
+  const ctx = await (await call('GET', `/api/reservations/${r.id}/sms`)).json();
+  assert.ok(ctx.templates.some((t: { id: number }) => t.id === codes.id), 'szablon domku');
+  assert.ok(!(await (await call('GET', `/api/reservations/${o.id}/sms`)).json()).templates.some((t: { id: number }) => t.id === codes.id), 'nie dla innego domku');
+  assert.equal(ctx.data.first_name, 'Anna');
+  assert.equal(ctx.data.deposit, 300, '30% ceny');
+  assert.match(ctx.data.links.deposit, /\/oferta\/\?p=\d+\.z\.[\w-]{16}$/);
+  // podgląd z kwotą jeszcze niezapisaną
+  const prev = await (await call('GET', `/api/reservations/${r.id}/sms?amount=250&due=${inDays(5)}`)).json();
+  assert.equal(prev.preview.deposit.amount, 250);
+  assert.equal(prev.preview.deposit.payment.account_number, '12 3456 7890');
+  assert.match(prev.preview.deposit.payment.title, /^Zaliczka – Anna Kowal/);
+  assert.equal(prev.preview.balance.amount, 1000);
+  // strona gościa: bez logowania, tylko z poprawnym podpisem; pokazuje to, co zapisane w rezerwacji
+  const code = new URL(ctx.data.links.deposit).searchParams.get('p')!;
+  assert.equal((await call('GET', `/public/pay?p=${code.slice(0, -1)}x`)).status, 404);
+  assert.equal((await call('GET', `/public/pay?p=${o.id}${code.slice(String(r.id).length)}`)).status, 404, 'podpis innej rezerwacji');
+  assert.equal((await (await call('GET', `/public/pay?p=${code}`)).json()).amount, null, 'zaliczka jeszcze nieustalona');
+  // wysłanie: zaliczka zapisana w rezerwacji, wpis w historii
+  const res = await (await call('POST', `/api/reservations/${r.id}/sms`, { body: 'Proszę o zaliczkę', name: 'Prośba o zaliczkę', channel: 'sms', deposit: { amount: 250, due: inDays(5) } })).json();
+  assert.equal(res.reservation.deposit, 250);
+  const page = await (await call('GET', `/public/pay?p=${code}`)).json();
+  assert.equal(page.state, 'pay');
+  assert.equal(page.amount, 250);
+  assert.equal(page.guest, 'Anna');
+  assert.ok(page.payment.qr.some((q: { kind: string }) => q.kind === 'revolut'));
+  const act = await (await call('GET', `/api/reservations/${r.id}/activity`)).json();
+  assert.equal(act.messages[0].kind, 'sms');
+  assert.equal(act.messages[0].to_email, '+48 600 100 200');
+  // po wpłacie strona pokazuje „opłacone”
+  await call('PUT', `/api/reservations/${r.id}`, { ...res.reservation, paid: 250 });
+  assert.equal((await (await call('GET', `/public/pay?p=${code}`)).json()).state, 'paid');
+  // edycja i usunięcie szablonu
+  assert.equal((await call('PUT', `/api/sms-templates/${codes.id}`, { name: 'Przyjazd 36/2', body: 'Nowy kod', unit_id: unit.id })).status, 200);
+  assert.equal((await call('DELETE', `/api/sms-templates/${codes.id}`)).status, 200);
+  assert.equal((await call('GET', `/api/sms-templates`)).status, 200);
+});

@@ -1,5 +1,5 @@
 import type {
-  Activity, BookingRequest, Draft, Extra, Invoice, InvoiceData, InvoiceListItem, InvoiceTemplate, MessageKind, Offer, PaymentSettings, Property, Rate, Reservation, UnitExtra,
+  Activity, BookingRequest, Draft, Extra, Invoice, InvoiceData, InvoiceListItem, InvoiceTemplate, MessageKind, Offer, PaymentSettings, Property, Rate, Reservation, SmsContext, SmsTemplate, UnitExtra,
 } from './types';
 
 export class ApiError extends Error {
@@ -136,6 +136,15 @@ export const api = {
   saveExtra: (e: ExtraInput, id?: number) => (id ? request<Extra>('PUT', `/extras/${id}`, e) : request<Extra>('POST', '/extras', e)),
   deleteExtra: (id: number) => request('DELETE', `/extras/${id}`),
   unitExtras: (unitId: number) => request<UnitExtra[]>('GET', `/units/${unitId}/extras`),
+  smsTemplates: () => request<SmsTemplate[]>('GET', '/sms-templates'),
+  createSmsTemplate: (t: Omit<SmsTemplate, 'id' | 'sort'>) => request<SmsTemplate>('POST', '/sms-templates', t),
+  updateSmsTemplate: (id: number, t: Omit<SmsTemplate, 'id' | 'sort'>) => request<SmsTemplate>('PUT', `/sms-templates/${id}`, t),
+  deleteSmsTemplate: (id: number) => request('DELETE', `/sms-templates/${id}`),
+  smsContext: (id: number, deposit?: { amount: number | null; due: string }) =>
+    request<SmsContext>('GET', `/reservations/${id}/sms${deposit ? `?${new URLSearchParams({ amount: deposit.amount == null ? '' : String(deposit.amount), due: deposit.due })}` : ''}`),
+  saveDeposit: (id: number, d: { amount: number | null; due: string }) => request<Reservation>('PUT', `/reservations/${id}/deposit`, d),
+  smsSent: (id: number, b: { body: string; name: string; channel: 'sms' | 'whatsapp'; deposit?: { amount: number | null; due: string } }) =>
+    request<{ ok: true; reservation: Reservation }>('POST', `/reservations/${id}/sms`, b),
   setHorizon: (b: { property_id?: number; unit_ids?: number[]; until?: string | null; after?: HorizonAfter | null }) => request<{ ok: boolean }>('PUT', '/settings/horizon', b),
   bookingSettings: () => request<BookingSettings>('GET', '/settings/booking'),
   saveBookingSettings: (patch: Partial<Pick<BookingSettings, 'horizon_days' | 'horizon_until' | 'assign_mode' | 'horizon_after'>>) => request<BookingSettings>('PUT', '/settings/booking', patch),

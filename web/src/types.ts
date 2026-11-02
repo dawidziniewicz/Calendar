@@ -98,7 +98,7 @@ export type Offer = {
   valid_until: string | null; message: string; lang: string; created_by: string; created_at: string; decided_at: string | null; decline_reason: string;
   request_id: number | null; reservation_id: number | null; url: string; expired: boolean; currency: string;
 };
-export type MessageKind = 'confirmation' | 'deposit' | 'balance' | 'received' | 'custom' | 'invoice' | 'offer' | 'offer_accepted' | 'unpaid_cancel';
+export type MessageKind = 'confirmation' | 'deposit' | 'balance' | 'received' | 'custom' | 'invoice' | 'offer' | 'offer_accepted' | 'unpaid_cancel' | 'sms' | 'whatsapp';
 export type GuestMessage = { id: number; kind: MessageKind; to_email: string; subject: string; body: string; sent_by: string; sent_at: string };
 export type Activity = { offers: Offer[]; messages: GuestMessage[]; invoices: { id: number; number: string; issue_date: string; total: number; currency: string }[]; email_configured: boolean };
 
@@ -134,4 +134,23 @@ export type InvoiceTemplate = Party & {
   signatures: boolean; seller_signature: string;
   sale_date: boolean; // data wykonania usługi na nowych rachunkach (dzień wyjazdu)
   qr: boolean; // kod QR do zapłaty na nowych rachunkach
+};
+
+/** Szablon SMS / WhatsApp: dla wszystkich (bez obiektu i domku), dla obiektu albo dla jednego domku */
+export type SmsTemplate = { id: number; name: string; body: string; property_id: number | null; unit_id: number | null; sort: number; editable?: boolean };
+/** To, co gość widzi pod linkiem do płatności (strona na odmorzadogor.pl) */
+export type PayView = {
+  state: 'pay' | 'paid' | 'withdrawn'; kind: 'deposit' | 'balance'; guest: string; property: string; unit: string;
+  check_in: string; check_out: string; price: number | null; paid: number; amount: number | null; due: string | null; currency: string;
+  payment: { account_number: string; account_name: string; bank_name: string; bic: string; title: string; revolut: string; qr: { kind: 'bank' | 'revolut'; path: string }[] } | null;
+};
+export type SmsContext = {
+  data: {
+    guest: string; first_name: string; phone: string; property: string; unit: string; unit_type: string; address: string;
+    check_in: string; check_out: string; price: number | null; paid: number; currency: string;
+    deposit: number | null; deposit_due: string | null; deposit_saved: boolean; account: string;
+    links: { deposit: string; balance: string };
+  };
+  templates: SmsTemplate[];
+  preview: { deposit: PayView; balance: PayView };
 };
