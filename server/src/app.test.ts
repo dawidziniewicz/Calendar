@@ -911,7 +911,7 @@ test('obiekt zamknięty: w terminie (dni zajęte) i do odwołania (komunikat, br
   assert.equal((await ask(inDays(50), inDays(52), '6.6.6.4')).status, 201);
 });
 
-test('zapytanie z minioną datą przyjazdu trafia do archiwum', async () => {
+test('zapytanie bez decyzji z minioną datą przyjazdu jest usuwane (z ofertą)', async () => {
   const { call, login, db } = setupWithMail();
   await login();
   const ok = await (await call('POST', '/public/requests', { unit_id: 1, check_in: inDays(5), check_out: inDays(7), name: 'Stary Termin', phone: '600 100 200', email: 's@example.com', adults: 2, consent: true }, { 'x-client-ip': '7.7.7.1' })).json();
@@ -919,10 +919,27 @@ test('zapytanie z minioną datą przyjazdu trafia do archiwum', async () => {
   // data przyjazdu minęła (symulacja: przesuwamy zapytanie w przeszłość)
   db.prepare('UPDATE booking_requests SET check_in = ?, check_out = ? WHERE id = ?').run(inDays(-3), inDays(-1), ok.id);
   assert.equal((await (await call('GET', '/api/requests?status=pending')).json()).length, 0);
-  const archived = await (await call('GET', '/api/requests?status=decided')).json();
-  assert.equal(archived.length, 1);
-  assert.ok(archived[0].expired_at);
-  assert.equal((await call('POST', `/api/requests/${ok.id}/accept`, {})).status, 400);
+  assert.equal((await (await call('GET', '/api/requests?status=decided')).json()).length, 0, 'nie ma też w archiwum');
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM booking_requests').get() as { n: number }).n, 0);
+  assert.equal((await call('POST', `/api/requests/${ok.id}/accept`, {})).status, 404);
+});
+
+test('odwołania z minionym terminem znikają z Aktualności i z próśb o anulację', async () => {
+  const { call, login, db } = setupWithMail();
+  await login();
+  const add = (uid: string, from: number, to: number) => db.prepare(`INSERT INTO reservations (unit_id, check_in, check_out, guest_name, source, status, external_uid, cancelled_at)
+    VALUES (1, ?, ?, 'Booking', 'booking', 'cancelled', ?, datetime('now'))`).run(inDays(from), inDays(to), uid);
+  add('old@booking', -10, -7);
+  add('new@booking', 20, 23);
+  const list = await (await call('GET', '/api/booking-cancellations')).json();
+  assert.deepEqual(list.map((r: { external_uid: string }) => r.external_uid), ['new@booking']);
+  // prośby gości o anulację: termin minął / przed nami
+  const req = db.prepare(`INSERT INTO booking_requests (unit_id, check_in, check_out, guest_name, guest_email, status, cancel_status, cancel_requested_at)
+    VALUES (1, ?, ?, ?, 'g@example.com', 'accepted', 'requested', datetime('now'))`);
+  req.run(inDays(-5), inDays(-2), 'Gość 1');
+  req.run(inDays(5), inDays(8), 'Gość 2');
+  const cancels = await (await call('GET', '/api/cancellations')).json();
+  assert.deepEqual(cancels.map((r: { guest_name: string }) => r.guest_name), ['Gość 2']);
 });
 
 test('prośba o anulację: link w e-mailu, prośba gościa, potwierdzenie lub odrzucenie przez admina', async () => {

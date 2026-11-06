@@ -900,9 +900,15 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   });
 
   // ---- Odwołane na Bookingu: do przejrzenia / zamiany na prywatną ----
-  api.get('/booking-cancellations', (c) => c.json(all(`SELECT * FROM reservations
-    WHERE external_uid IS NOT NULL AND status = 'cancelled' AND cancelled_at IS NOT NULL AND cancel_reviewed = 0
-    ${unitScope(c.get('user'))} ORDER BY check_in`)));
+  // Odwołania z Bookingu do przejrzenia (Aktualności). Gdy termin przyjazdu minął, odwołanie jest nieaktualne —
+  // oznaczamy je jako przejrzane i znika samo.
+  api.get('/booking-cancellations', (c) => {
+    run(`UPDATE reservations SET cancel_reviewed = 1
+      WHERE external_uid IS NOT NULL AND status = 'cancelled' AND cancel_reviewed = 0 AND check_in < ?`, warsawToday());
+    return c.json(all(`SELECT * FROM reservations
+      WHERE external_uid IS NOT NULL AND status = 'cancelled' AND cancelled_at IS NOT NULL AND cancel_reviewed = 0
+      ${unitScope(c.get('user'))} ORDER BY check_in`));
+  });
 
   const cancelledImport = (user: User, id: number) => {
     const row = get('SELECT * FROM reservations WHERE id = ?', id) as Record<string, unknown> | undefined;
@@ -1204,9 +1210,9 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   const requestRow = (id: number) => get(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
     JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id WHERE r.id = ?`, id) as (RequestRow & Record<string, unknown>) | undefined;
 
-  // Nierozpatrzone zapytania z minioną datą przyjazdu → archiwum („wygasłe”)
-  const expireRequests = () => run(`UPDATE booking_requests SET expired_at = datetime('now')
-    WHERE status = 'pending' AND expired_at IS NULL AND check_in < ?`, warsawToday());
+  // Sprzątanie: nierozpatrzone zapytania z minioną datą przyjazdu są usuwane (razem z ofertami i e-mailami do nich) —
+  // nie wiszą ani wśród nowych, ani w archiwum. Zaakceptowane i odrzucone zostają w archiwum.
+  const expireRequests = () => run(`DELETE FROM booking_requests WHERE status = 'pending' AND reservation_id IS NULL AND check_in < ?`, warsawToday());
 
   api.get('/requests', (c) => {
     expireRequests();
@@ -1329,7 +1335,7 @@ export function createApp(db: DatabaseSync, apiKey: string, pushSender?: Sender,
   // ---- Prośby o anulację od gości ----
   api.get('/cancellations', (c) => c.json(all(`SELECT r.*, u.name AS unit_name, p.name AS property_name FROM booking_requests r
     JOIN units u ON u.id = r.unit_id JOIN properties p ON p.id = u.property_id
-    WHERE r.cancel_status = 'requested' ${unitScope(c.get('user')).replace('unit_id', 'r.unit_id')} ORDER BY r.cancel_requested_at`)));
+    WHERE r.cancel_status = 'requested' AND r.check_in >= ? ${unitScope(c.get('user')).replace('unit_id', 'r.unit_id')} ORDER BY r.cancel_requested_at`, warsawToday())));
 
   const cancelRequested = (user: User, id: number) => {
     const r = requestRow(id);
