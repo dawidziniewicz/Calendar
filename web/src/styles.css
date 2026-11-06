@@ -981,3 +981,4 @@ a.btn.disabled { opacity: 0.45; pointer-events: none; }
 .tag-scope { font-size: 0.78rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; }
 .sms-editor .row-actions, .sms-template-list .row-actions { display: flex; gap: 14px; margin-top: 10px; }
 .pay-card .paid { color: var(--paid); }
+.btn.wa-btn { color: #1fa855; border-color: color-mix(in srgb, #1fa855 55%, var(--line)); }

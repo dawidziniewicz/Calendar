@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import EmailLink from './EmailLink';
+import { whatsappHref } from '../phone';
 import { api, ApiError } from '../api';
 import type { BookingRequest, ChosenExtra, Reservation } from '../types';
 import { SOURCES } from '../types';
@@ -105,6 +106,7 @@ function CancelCard({ r, readOnly, focused, onDone }: { r: BookingRequest; readO
       {r.cancel_reason ? <p className="request-message">„{r.cancel_reason}”</p> : <p className="muted small-note">Gość nie podał powodu.</p>}
       <div className="request-contact">
         {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
+        {r.guest_phone && whatsappHref(r.guest_phone) && <a className="btn small wa-btn" href={whatsappHref(r.guest_phone)!} target="_blank" rel="noopener noreferrer">WhatsApp</a>}
         <EmailLink className="btn small" email={r.guest_email}>{r.guest_email}</EmailLink>
       </div>
       {!readOnly && mode === 'idle' && (
@@ -230,6 +232,7 @@ function RequestCard({ r, readOnly, focused, onDone, onOpenReservation }: { r: B
 
       <div className="request-contact">
         {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
+        {r.guest_phone && whatsappHref(r.guest_phone) && <a className="btn small wa-btn" href={whatsappHref(r.guest_phone)!} target="_blank" rel="noopener noreferrer">WhatsApp</a>}
         <EmailLink className="btn small" email={r.guest_email}>{r.guest_email}</EmailLink>
       </div>
 
@@ -365,6 +368,7 @@ function DecidedCard({ r, focused, onOpenReservation }: { r: BookingRequest; foc
           {r.cancel_reason && <p className="request-note"><span className="muted">Powód anulacji od gościa:</span> „{r.cancel_reason}”</p>}
           <div className="request-contact">
             {r.guest_phone && <a className="btn small" href={`tel:${r.guest_phone.replace(/\s/g, '')}`}>Zadzwoń · {r.guest_phone}</a>}
+            {r.guest_phone && whatsappHref(r.guest_phone) && <a className="btn small wa-btn" href={whatsappHref(r.guest_phone)!} target="_blank" rel="noopener noreferrer">WhatsApp</a>}
             <EmailLink className="btn small" email={r.guest_email}>{r.guest_email}</EmailLink>
           </div>
           {r.reservation_id && (
